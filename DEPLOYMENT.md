@@ -33,6 +33,7 @@ Edit `.env` and fill in:
 - `GUILD_ID`
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
+- `API_SPORTS_KEY` (required for player lookup and cache sync)
 - `OPENAI_API_KEY`
 - `OPENAI_VISION_MODEL`
 - `OPENAI_VISION_MODELS`
@@ -41,6 +42,11 @@ Edit `.env` and fill in:
 - `OFFICIAL_CHANNEL_ID`
 - `IMAGE_INPUT_CHANNEL_ID`
 - `TEAM_STATS_CHANNEL_ID`
+
+After applying `src/database/schema.sql` and starting the bot, use `/syncplayers`
+once for each league that should have player autocomplete. Select the sport and
+league by name. `/playerstats` then suggests cached players and events by name;
+season or game statistics are fetched on first lookup and cached in Supabase.
 
 ## 4. Validate the Python app
 

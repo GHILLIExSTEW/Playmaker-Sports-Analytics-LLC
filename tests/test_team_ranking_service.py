@@ -32,3 +32,35 @@ def test_team_rankings_include_untracked_team_name():
     ranking = TeamRankingService().build_rankings(rows)
     assert ranking[0]["team_name"] == "Other College"
     assert ranking[0]["net_units"] == 2.0
+
+
+def test_fetch_rankings_filters_by_sport(monkeypatch):
+    calls = []
+
+    class Response:
+        data = ROWS[:3]
+
+    def select(table, columns, filters):
+        calls.append((table, columns, filters))
+        return Response()
+
+    monkeypatch.setattr("src.services.team_ranking_service.supabase_service.select", select)
+
+    rankings = TeamRankingService.fetch_rankings_from_supabase(7)
+
+    assert rankings[0]["team_id"] == 1
+    assert calls == [("plays", "team_id, team_name, status, units", {"sport_id": 7})]
+
+
+def test_fetch_active_sports_excludes_internal_official_bucket(monkeypatch):
+    class Response:
+        data = [
+            {"id": 1, "api_slug": "official", "name": "Official"},
+            {"id": 2, "api_slug": "baseball", "name": "Baseball"},
+        ]
+
+    monkeypatch.setattr("src.services.team_ranking_service.supabase_service.select", lambda *args: Response())
+
+    assert TeamRankingService.fetch_active_sports() == [
+        {"id": 2, "api_slug": "baseball", "name": "Baseball"},
+    ]

@@ -48,9 +48,29 @@ class TeamRankingService:
         return result
 
     @staticmethod
-    def fetch_rankings_from_supabase() -> list[dict]:
+    def fetch_active_sports() -> list[dict]:
         try:
-            response = supabase_service.select("plays", "team_id, team_name, status, units")
+            response = supabase_service.select(
+                "sports",
+                "id,api_slug,name",
+                {"is_active": True},
+            )
+        except RuntimeError:
+            return []
+        sports = [
+            sport for sport in response.data or []
+            if sport.get("api_slug") != "official"
+        ]
+        return sorted(sports, key=lambda sport: sport["name"].casefold())
+
+    @staticmethod
+    def fetch_rankings_from_supabase(sport_id: int) -> list[dict]:
+        try:
+            response = supabase_service.select(
+                "plays",
+                "team_id, team_name, status, units",
+                {"sport_id": sport_id},
+            )
         except RuntimeError:
             return []
 

@@ -7,12 +7,14 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import discord
+import requests
 from discord.ext import commands, tasks
 
 from src.config import APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, GUILD_ID, IMAGE_INPUT_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VOID_REACTION, WIN_REACTION
 from src.services.official_play_service import OfficialPlayService
 from src.services.supabase_service import supabase_service
 from src.services.team_ranking_service import TeamRankingService
+from src.services.api_sports_player_service import api_sports_player_service
 from src.services.play_service import PlayService
 from src.services.image_play_service import image_play_service
 from src.services.diagnostic_service import diagnostic_service
@@ -1199,24 +1201,32 @@ async def regrade_command(interaction: discord.Interaction, play_id: str, legs_l
 
 
 @bot.tree.command(name="rankings", description="Show the current team ranking summary")
-async def rankings_command(interaction: discord.Interaction):
+@discord.app_commands.describe(sport="Sport to rank")
+async def rankings_command(interaction: discord.Interaction, sport: str):
     if TEAM_STATS_CHANNEL_ID and interaction.channel_id != TEAM_STATS_CHANNEL_ID:
         await interaction.response.send_message(f"Use this command in <#{TEAM_STATS_CHANNEL_ID}>", ephemeral=True)
         return
 
     try:
-        rankings = team_ranking_service.fetch_rankings_from_supabase()
+        sport_id = int(sport)
+    except (TypeError, ValueError):
+        await interaction.response.send_message("Choose a sport from the suggestions.", ephemeral=True)
+        return
+
+    try:
+        sports = await asyncio.to_thread(team_ranking_service.fetch_active_sports)
+        selected_sport = next((item for item in sports if int(item["id"]) == sport_id), None)
+        if selected_sport is None:
+            await interaction.response.send_message("That sport is no longer active.", ephemeral=True)
+            return
+        rankings = await asyncio.to_thread(team_ranking_service.fetch_rankings_from_supabase, sport_id)
     except RuntimeError:
-        rankings = []
+        await interaction.response.send_message("Could not load rankings from Supabase.", ephemeral=True)
+        return
 
+    embed = discord.Embed(title=f"{selected_sport['name']} Team Rankings", color=discord.Color.gold())
     if not rankings:
-        rankings = [
-            {"team_id": 1, "wins": 0, "losses": 0, "voids": 0, "partials": 0, "net_units": 0.0},
-        ]
-
-    embed = discord.Embed(title="Team Rankings", color=discord.Color.gold())
-    if not rankings or all(item.get("net_units") == 0 and item.get("wins") == 0 and item.get("losses") == 0 and item.get("voids") == 0 and item.get("partials") == 0 for item in rankings):
-        embed.description = "No settled results yet."
+        embed.description = f"No settled results for {selected_sport['name']} yet."
     else:
         lines = []
         for index, item in enumerate(rankings[:10], start=1):
@@ -1225,6 +1235,220 @@ async def rankings_command(interaction: discord.Interaction):
         embed.description = "\n".join(lines)
 
     await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+@rankings_command.autocomplete("sport")
+async def rankings_sport_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sports = await asyncio.to_thread(team_ranking_service.fetch_active_sports)
+    matches = [sport for sport in sports if current.casefold() in sport["name"].casefold()]
+    return [
+        discord.app_commands.Choice(name=sport["name"][:100], value=str(sport["id"]))
+        for sport in matches[:25]
+    ]
+
+
+def flatten_stat_values(value, prefix: str = "") -> list[str]:
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            if key in {"player", "team", "league", "country", "season"}:
+                continue
+            lines.extend(flatten_stat_values(item, f"{prefix}{key} / "))
+        return lines
+    if isinstance(value, list):
+        return [f"{prefix.rstrip(' /')}: {', '.join(map(str, value))}"] if value else []
+    return [f"{prefix.rstrip(' /')}: {value}"]
+
+
+def selected_league_name(sport_slug: str, league_value: str) -> str:
+    league_id, season = api_sports_player_service.parse_league_value(league_value)
+    matches = api_sports_player_service.list_leagues(sport_slug)
+    row = next((item for item in matches if str(item["league_id"]) == league_id and str(item["current_season"]) == season), None)
+    return f"{row['name']} ({season})" if row else f"League {league_id} ({season})"
+
+
+@bot.tree.command(name="syncplayers", description="Cache player suggestions for a league")
+@discord.app_commands.describe(sport="Sport", league="League and current season")
+async def syncplayers_command(interaction: discord.Interaction, sport: str, league: str):
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    is_operator = any(role.id in OPERATOR_ROLE_IDS for role in getattr(interaction.user, "roles", []))
+    can_manage = bool(member and member.guild_permissions.manage_guild)
+    if not (is_operator or can_manage):
+        await interaction.response.send_message("Only operators or server managers can sync player data.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        count = await asyncio.to_thread(api_sports_player_service.sync_player_directory, sport, league)
+        league_name = selected_league_name(sport, league)
+        await interaction.followup.send(f"Cached {count} player(s) for **{league_name}**.", ephemeral=True)
+    except (RuntimeError, ValueError, requests.RequestException) as exc:
+        await interaction.followup.send(f"Player sync failed: {exc}", ephemeral=True)
+    except Exception:
+        logger.exception("player_directory_sync_failed sport=%s", sport)
+        await interaction.followup.send("Player sync failed. Check the bot logs for details.", ephemeral=True)
+
+
+@syncplayers_command.autocomplete("sport")
+async def syncplayers_sport_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sports = await asyncio.to_thread(api_sports_player_service.list_sports, current)
+    return [discord.app_commands.Choice(name=item["name"][:100], value=item["slug"]) for item in sports]
+
+
+@syncplayers_command.autocomplete("league")
+async def syncplayers_league_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sport_slug = getattr(interaction.namespace, "sport", "")
+    leagues = await asyncio.to_thread(api_sports_player_service.list_leagues, sport_slug, current)
+    return [
+        discord.app_commands.Choice(
+            name=f"{item['name']} ({item['current_season']})"[:100],
+            value=f"{item['league_id']}|{item['current_season']}",
+        )
+        for item in leagues
+    ]
+
+
+@bot.tree.command(name="playerstats", description="Look up cached player season or game stats")
+@discord.app_commands.describe(
+    sport="Sport",
+    league="League and season",
+    player="Player name",
+    game="Optional event; choose by matchup and date",
+)
+async def playerstats_command(
+    interaction: discord.Interaction,
+    sport: str,
+    league: str,
+    player: str,
+    game: str | None = None,
+):
+    await interaction.response.defer()
+    try:
+        player_info, records = await asyncio.to_thread(
+            api_sports_player_service.fetch_player_stats,
+            sport,
+            league,
+            player,
+            game,
+        )
+    except (RuntimeError, ValueError, requests.RequestException) as exc:
+        await interaction.followup.send(f"Player stats unavailable: {exc}", ephemeral=True)
+        return
+    except Exception:
+        logger.exception("player_stats_lookup_failed sport=%s player=%s", sport, player)
+        await interaction.followup.send("Player stats lookup failed. Check the bot logs for details.", ephemeral=True)
+        return
+
+    if not records:
+        await interaction.followup.send("No stats are available for that player and selection yet.", ephemeral=True)
+        return
+
+    lines = []
+    for record in records:
+        lines.extend(flatten_stat_values(record))
+    description = "\n".join(lines)[:4000] or "No statistics were returned."
+    embed = discord.Embed(
+        title=f"{player_info['name']} | Player Stats",
+        description=description,
+        color=discord.Color.blue(),
+    )
+    if player_info.get("team_name"):
+        embed.set_author(name=player_info["team_name"])
+    league_id, _season = api_sports_player_service.parse_league_value(league)
+    selection = await asyncio.to_thread(
+        api_sports_player_service.get_game_label,
+        sport,
+        league_id,
+        game,
+    ) if game else f"{selected_league_name(sport, league)} season"
+    embed.set_footer(text=f"{selection} | Cached via API-Sports")
+    await interaction.followup.send(embed=embed, ephemeral=False)
+
+
+@playerstats_command.autocomplete("sport")
+async def playerstats_sport_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sports = await asyncio.to_thread(api_sports_player_service.list_sports, current)
+    return [discord.app_commands.Choice(name=item["name"][:100], value=item["slug"]) for item in sports]
+
+
+@playerstats_command.autocomplete("league")
+async def playerstats_league_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sport_slug = getattr(interaction.namespace, "sport", "")
+    leagues = await asyncio.to_thread(api_sports_player_service.list_leagues, sport_slug, current)
+    return [
+        discord.app_commands.Choice(
+            name=f"{item['name']} ({item['current_season']})"[:100],
+            value=f"{item['league_id']}|{item['current_season']}",
+        )
+        for item in leagues
+    ]
+
+
+@playerstats_command.autocomplete("player")
+async def playerstats_player_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sport_slug = getattr(interaction.namespace, "sport", "")
+    league_value = getattr(interaction.namespace, "league", "")
+    try:
+        league_id, _season = api_sports_player_service.parse_league_value(league_value)
+        players = await asyncio.to_thread(
+            api_sports_player_service.search_players,
+            sport_slug,
+            league_value,
+            current,
+        )
+    except ValueError:
+        return []
+    return [
+        discord.app_commands.Choice(
+            name=f"{item['name']} · {item.get('team_name') or 'Free agent'}"[:100],
+            value=str(item["player_id"]),
+        )
+        for item in players[:25]
+    ]
+
+
+@playerstats_command.autocomplete("game")
+async def playerstats_game_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    sport_slug = getattr(interaction.namespace, "sport", "")
+    league_value = getattr(interaction.namespace, "league", "")
+    try:
+        league_id, _season = api_sports_player_service.parse_league_value(league_value)
+        games = await asyncio.to_thread(
+            api_sports_player_service.search_cached_games,
+            sport_slug,
+            league_id,
+            current,
+        )
+    except ValueError:
+        return []
+    return [
+        discord.app_commands.Choice(
+            name=f"{item['event_name']} · {item['start_at'][:10]}"[:100],
+            value=str(item["event_id"]),
+        )
+        for item in games
+    ]
 
 
 @bot.tree.command(name="summary", description="Build the current daily team summary")
