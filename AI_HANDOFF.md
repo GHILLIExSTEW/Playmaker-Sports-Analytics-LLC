@@ -41,7 +41,35 @@ Use this document to onboard a new AI assistant to the product, repository, deci
 - Visitors should see a daily slate overview and a designated free play. Live selections must be protected server-side; never send locked paid selection text to the browser and merely blur or hide it with CSS.
 - First-time visitors care about three actions: verified results, free Discord/community access, and membership plans. Evidence should lead visually while the other actions remain easy to find.
 
-### Proposed Memberships (Not Final Until Approved)
+### Current Membership Decision (October 5, 2026)
+
+Owner adopted Robin's setup: verified free members get ROOKIE; eligible
+first-time seven-day trials and paid members get HIGHROLLER. Single paid
+HIGHROLLER pass is still $19.99 USD for exactly 30 days, one-time and
+non-auto-renewing. No automatic trial charge/conversion. Retire ALL-STAR
+and historical longer-duration offers from new sales; preserve historical
+purchases and their paid verification IDs. Trials now include all available
+member features, including stats and vault, with the same quota/feature flags.
+Free chat and Winning slips show free discussion and settled premium results;
+aim for one staff-selected free play daily when suitable, without a guarantee.
+No automated free-play selection/publication or open premium disclosure was added.
+Migration `20261005000000_full_membership_trials.sql` creates separate trial
+snapshots/audit and persistent one-trial claims per seller/buyer/Discord identity,
+pins original dates, and rejects prior recorded paid customers. Trials stay
+outside payment snapshots. `WHOP_TRIAL_PLAN_IDS` is separate from paid IDs.
+IP-only tracking was not implemented; it cannot prove first-time identity.
+No IP collection/storage was added. Multi-account evasion remains possible.
+Refresh flags remain off until existing budget/licensing/live-test gates pass.
+The owner lifetime grant remains intact under its historical database tier.
+Website/policy drafts and code are updated, not deployed; Whop still needs
+new hidden HIGHROLLER paid and full-trial plans, historical-offer retirement,
+allowlist updates, migration, and live role/access/repeat-signup tests.
+Owner reports Discord roles are adjusted; the assistant did not administer them.
+Whop owns the HIGHROLLER role; do not also enable bot role sync for it or for
+ROOKIE. Do not claim provider settings changed or checkout opened.
+See `LAUNCH_PLAN.md` and `DEPLOYMENT.md` for current offers and rollout.
+
+### Historical Membership and Stats Decisions (Superseded Where Inconsistent)
 
 Season-stat update supersedes the game-ID requirement: `/playerstats` now takes
 sport, league and player, with cached league/player autocomplete filtered by both

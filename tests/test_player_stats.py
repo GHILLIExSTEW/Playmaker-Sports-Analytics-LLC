@@ -167,14 +167,13 @@ def test_oversized_group_disclosed_and_discord_limit_preserved():
     assert "Rushing" in report
 
 
-@pytest.mark.parametrize("paid,highroller,refresh,expected_reads", [
-    (False, False, False, 0), (True, False, False, 1),
-    (True, False, True, 0), (True, True, True, 2),
+@pytest.mark.parametrize("paid,refresh,expected_reads", [
+    (False, False, 0), (False, True, 0),
+    (True, False, 1), (True, True, 2),
 ])
-def test_player_command_reuses_tier_gate(paid, highroller, refresh, expected_reads):
+def test_player_command_reuses_paid_gate(paid, refresh, expected_reads):
     membership, cache = Mock(), Mock()
-    membership.has_paid_access.return_value = paid
-    membership.has_highroller_access.return_value = highroller
+    membership.has_stats_access.return_value = paid
     cache.report.return_value = ("Player stats", "cached")
     cache.refresh.return_value = "one game refreshed"
     with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True), patch(
@@ -184,7 +183,7 @@ def test_player_command_reuses_tier_gate(paid, highroller, refresh, expected_rea
             interaction(), "gamestats", "nfl", refresh=refresh, game_id=21561, player="609",
         ))
     assert cache.report.call_count == expected_reads
-    assert cache.refresh.call_count == int(highroller and refresh)
+    assert cache.refresh.call_count == int(paid and refresh)
 
 
 def test_empty_provider_response_is_persisted_without_fabricating_records():

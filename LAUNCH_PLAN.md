@@ -59,33 +59,53 @@ Discord access until every Gate B item is complete.
 
 The current release uses five-minute Whop API polling, not webhooks. Signed
 webhooks and website billing/account linking remain follow-up work. Whop owns
-tier roles; the bot independently checks private payment evidence for vault
+tier roles; the bot independently checks private payment or eligible trial evidence for vault
 submissions. Successful empty production sync has been observed, but a positive
 production paid-member test remains outstanding.
 
 ## 3. Initial Product
 
-The owner selected these tiers, superseding earlier Starter/All Access pricing
-and auto-renewing trial proposals:
+On October 5, 2026, the owner approved Robin's free/paid role structure and
+full-access trial. This supersedes the October 4 ALL-STAR naming and restricted
+trial, the earlier two-tier offers, and recurring-subscription proposals:
 
 | Plan | Base price (USD) | Duration |
 | --- | ---: | --- |
-| ALL-STAR trial option | $0 | Free seven-day ALL-STAR access; no automatic charge; no vault submissions |
-| ALL-STAR | $9.99 | One-time 30-day paid pass |
-| HIGHROLLER | $29.99 | One-time 30-day paid pass; no trial |
+| ROOKIE free community | $0 | Verified Discord members; free chat, staff-selected free plays, and published settled premium results |
+| HIGHROLLER trial | $0 | First-time seven-day HIGHROLLER pass; same available member features, analytics and vault as paid access; no automatic charge or paid conversion |
+| HIGHROLLER | $19.99 | One-time pass for exactly 30 days; premium analysis, private Discord community, analytics and vault with disclosed limits |
 
-| Offer label | Exact days | Discount | ALL-STAR total (USD) | HIGHROLLER total (USD) |
-| --- | ---: | ---: | ---: | ---: |
-| 1 month | 30 | 0% | 9.99 | 29.99 |
-| 3 months | 90 | 5% | 28.47 | 85.47 |
-| 6 months | 180 | 10% | 53.95 | 161.95 |
-| 12 months | 365 | 15% | 101.90 | 305.90 |
+Paid passes expire without automatic renewal; another purchase is required to
+continue access. There is no new ALL-STAR offer and no new 90-, 180-, or
+365-day offer. Existing paid passes retain their purchased period and benefits.
+Keep historical paid plan IDs in the verification allowlist; retiring an offer
+from sale must not revoke a purchase. Never include the free trial in that list.
+The operational target is one staff-selected free play daily when suitable;
+no daily play count or profit is guaranteed. Publish only explicitly designated
+free selections and settled premium results, never open premium selections.
+The bot does not automatically select or post the daily free play.
 
-Paid passes expire without automatic renewal. Labels refer to fixed-day access,
-not calendar months. Discounts use multiples of the 30-day base price with one
-final rounding to cents. Exact benefits and channels for each tier must be
-confirmed before sale. No daily play count or profit is guaranteed. Trial-abuse
-prevention is not yet implemented or verified.
+Trial-abuse controls use a permanent server-only claim ledger keyed by seller,
+verified Whop buyer and Discord identity. Only a configured, verified one-time
+seven-day plan qualifies. Dates are pinned to the original seven-day window;
+repeat memberships or identity/window changes cannot extend it. Prior recorded
+paid membership before the trial disqualifies that identity. Arbitrary free
+access is not a trial, and trial snapshots are never marked paid. New accounts
+can still evade identity checks. IP tracking alone is neither reliable identity
+verification nor implemented here; provider-side anti-abuse and role controls
+must be verified before launch.
+
+Code and website drafts reflect this decision, but Whop configuration is a
+separate rollout. Create a new hidden, zero-stock HIGHROLLER $19.99 one-time
+30-day plan rather than editing terms attached to historical purchases.
+Create a matching free seven-day HIGHROLLER plan under the HIGHROLLER product;
+do not silently remap the old ALL-STAR trial. Retire all eight historical paid
+offers from new sales, add the new paid plan ID to local and production
+`WHOP_PAID_PLAN_IDS`, and add only approved full-access trial IDs to the separate
+`WHOP_TRIAL_PLAN_IDS`. Apply `20261005000000_full_membership_trials.sql` before
+enabling trial sync. Verify Discord mappings and trial-to-paid overlap.
+Do not publish checkout until Gate A and the positive production access test
+pass. See `DEPLOYMENT.md` for the rollout checklist.
 
 Customer policy drafts are available at `/terms`, `/privacy`, and `/refunds`,
 linked from the footer and membership page. Owner decisions: minimum age 21
@@ -99,27 +119,31 @@ the production access test pass.
 
 ## 4. Access and Discord Roles
 
-The later tier split supersedes the original HIGHROLLER-only cache proposal:
-paid ALL-STAR and HIGHROLLER can use cached reports; HIGHROLLER and approved
-moderator roles can request today's data refresh with limits. Refresh remains
-disabled pending budget migration, quota-reset confirmation, licensing, and
-live validation. Five refreshes per person/day share twenty per API product/day,
-with five-minute shared cooldown; eighty requests are allocated separately to
-bot operations. Other dates remain cached. Trial access is still excluded.
+All approved verified paid plans and eligible HIGHROLLER trials share the same
+stats permissions, including historical ALL-STAR and HIGHROLLER paid passes.
+The paid RPC retains its name and meaning; the new migration adds separate
+trial snapshots, claims, audit history and eligibility RPCs.
+Explicit owner grants and configured-guild approved moderator roles retain
+their existing access. Verified eligible trials now qualify for stats and vault;
+ROOKIE and arbitrary free/complimentary Whop access do not.
 
-HIGHROLLER's first implemented tool bundle was private cached `/matchup`,
-`/teamstats` (recent form, not season standings), `/schedule`, and `/results`
-commands. ALL-STAR and trials do not qualify. Tools require the new
-HIGHROLLER-access migration and server deployment; they have not yet passed a
-live paid production test. No direct API access or member-triggered live refresh
-is offered. Public cache data is not claimed exclusive. Confirm data-display
-licensing and deployment before advertising these tools as available.
+Private tools are `/matchup`, `/teamstats` (recent form, not season standings),
+`/schedule`, `/results`, `/playerstats`, and `/gamestats`. Deployment and a live
+paid production authorization test remain required. Public cache data is not
+claimed exclusive; confirm data-display licensing before advertising availability.
+
+Refresh remains disabled pending budget migration, quota-reset confirmation,
+licensing, and live validation. Once activated, all verified paid/trial members and
+authorized owner/moderator grants may request refresh. Five API requests per
+person/day share twenty per API product/day, with five-minute shared cooldown;
+eighty requests are allocated separately to bot operations. Other dates remain
+cached. There is no direct API access or real-time guarantee.
 
 The later player-stat bundle adds private `/playerstats` current/previous-season
 reports with sport/league-filtered cached name suggestions, plus optional
 `/gamestats` game/session reports
-for NFL/NCAA, basketball, soccer and Formula 1, with cached paid ALL-STAR access
-and one-request limited HIGHROLLER/owner/moderator refresh. Apply the player-cache
+for NFL/NCAA, basketball, soccer and Formula 1, with verified paid/trial access
+and limited member/owner/moderator refresh. Apply the player-cache
 migration and verify live authorization before advertising availability. Provider
 coverage is incomplete: baseball, hockey, rugby, handball and volleyball need a
 different individual-stat source; MMA schema verification is pending, and
@@ -133,17 +157,23 @@ authorization before enabling it.
 Current tier roles:
 
 - `Visitor`: joined Discord but has no website entitlement.
-- `Free Member`: accepted server rules and linked an account.
-- `ALL-STAR`: seven-day trial or current paid ALL-STAR access.
-- `HIGHROLLER`: current paid HIGHROLLER access; no free trial.
-- `ROOKIE`: retired from membership setup; do not grant it for new trials.
+- `ROOKIE`: verified free community member; retained after a trial/pass expires.
+- `HIGHROLLER`: current paid pass or eligible seven-day full-access trial.
+- `ALL-STAR`: legacy access only; preserve purchased benefits and expiry.
 
-The trial and paid ALL-STAR offers share product `prod_0Bi4ERPCfSWz1`.
-Trial variant `plan_ejj9LwTfrJp5z` is free, one-time, expires after seven days,
-and is excluded from the paid vault allowlist. The old separate trial offer
-remains hidden/zero-stock. Whop's existing ALL-STAR product-to-role mapping must
-be verified for the new trial; do not create a second role owner. Trial-to-paid
-overlap and expiration need live verification.
+ROOKIE channels: How to join, Bankroll management, Announcements, Merchandise,
+Parlays / Promo plays, Free chat, and Winning slips. Owner reports Discord role
+permissions are adjusted; application-side mapping/expiry still needs a live
+test. No Discord administration was performed by this repository change.
+Whop should own HIGHROLLER role assignment/expiration; leave the optional bot
+`PAID_MEMBER_ROLE_ID` sync unset for that same role to avoid two role owners.
+If a dedicated bot-owned role is used instead, it now includes verified trials.
+Never point that setting at ROOKIE. Trial and paid membership overlap must not
+remove HIGHROLLER while another qualifying membership remains active.
+
+Historical ALL-STAR trial `plan_ejj9LwTfrJp5z` remains outside both allowlists
+until explicitly reviewed; the new HIGHROLLER trial needs a verified plan ID.
+Do not delete historical products or purchases to simplify names.
 - `Founding Member`: time-limited complimentary entitlement for qualifying
   existing members.
 - `Promotional Access`: time-limited prize or administrative grant.
@@ -159,15 +189,16 @@ customer's paid subscription.
 
 1. A visitor inspects pricing, transparent results, policies, and the Discord
    community link. Checkout remains closed until the launch gates pass.
-2. The visitor purchases a one-time pass through approved Whop hosted checkout,
+2. The visitor claims a first-time trial or purchases a one-time pass through approved Whop hosted checkout,
    connects their own Discord account, and uses Claim Access.
 3. Whop's Discord app assigns the configured tier role.
-4. The bot polls Whop every five minutes and records verified payment, period,
-   and Discord identity in a private audited ledger.
-5. `/membership_status` reports private vault eligibility. Verified paying
-   members may submit; trials and complimentary access do not qualify.
+4. The bot polls Whop every five minutes and records verified payment or separate
+   trial entitlement, dates, and Discord identity in private audited ledgers.
+5. `/membership_status` reports private vault eligibility. Verified paid or
+   eligible trial members and explicit owner grants may submit.
 6. Expiry or refund denies new vault submissions. Snapshots older than 15
-   minutes fail closed. Whop independently manages tier-role expiration.
+   minutes fail closed. Whop independently manages HIGHROLLER expiration;
+   ROOKIE access remains.
 7. Already-confirmed vault tickets can settle after access expires. A new
    purchase is required for renewed prepaid access.
 
@@ -178,7 +209,7 @@ Build the usable service first, not a marketing-only landing page.
 ### Public
 
 - Home dashboard with current verified performance and recent settled results.
-- Plans and feature comparison.
+- Single paid offer, trial details, and feature breakdown.
 - Full verified results with clear filters and methodology.
 - How membership and Discord access work.
 - Responsible-play statement and age requirements.

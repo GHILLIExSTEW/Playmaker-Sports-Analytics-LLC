@@ -1172,20 +1172,20 @@ async def play_command(interaction: discord.Interaction):
     await interaction.response.send_modal(PlayModal())
 
 
-@bot.tree.command(name="membership_status", description="Privately check paid Member Vault eligibility")
+@bot.tree.command(name="membership_status", description="Privately check paid or trial Member Vault eligibility")
 async def membership_status_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     if not WHOP_MEMBERSHIP_SYNC_ENABLED:
         await interaction.followup.send("Whop membership verification is not enabled yet. Checkout remains closed.", ephemeral=True)
         return
     try:
-        eligible = await asyncio.to_thread(MembershipService().has_paid_access, interaction.user.id)
+        eligible = await asyncio.to_thread(MembershipService().has_vault_access, interaction.user.id)
         await interaction.followup.send(
-            "Your Member Vault access is verified through a current paid membership or an explicit owner grant. You can submit tickets."
+            "Your Member Vault access is verified through a current paid membership, an eligible seven-day trial, or an explicit owner grant. You can submit tickets."
             if eligible else
-            "No current verified paid membership or owner grant was found for this Discord account. "
+            "No current eligible membership or owner grant was found for this Discord account. "
             "Connect this account in Whop and allow up to five minutes for synchronization. "
-            "Free/trial access does not qualify. Contact support if you have paid.",
+            "ROOKIE community access alone does not qualify. Contact support if your paid pass or first-time trial is missing.",
             ephemeral=True,
         )
     except Exception:

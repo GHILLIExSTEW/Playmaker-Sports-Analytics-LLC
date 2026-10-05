@@ -20,7 +20,7 @@ from src.services.member_bet_service import (
 @pytest.fixture(autouse=True)
 def paid_membership_default(monkeypatch):
     membership = Mock()
-    membership.has_paid_access.return_value = True
+    membership.has_vault_access.return_value = True
     monkeypatch.setattr("src.member_bet_vault.MembershipService", lambda: membership)
     return membership
 
@@ -610,19 +610,19 @@ def test_settled_long_ticket_reveals_complete_text_without_api_metadata():
 
 
 def test_nonpaying_member_photo_is_deleted_without_processing(paid_membership_default):
-    paid_membership_default.has_paid_access.return_value = False
+    paid_membership_default.has_vault_access.return_value = False
     service = Mock()
     attachment = photo_attachment()
     msg = message([attachment])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
     msg.delete.assert_awaited_once()
-    assert "current paid access" in msg.author.send.call_args.args[0]
+    assert "current verified paid access" in msg.author.send.call_args.args[0]
     attachment.read.assert_not_awaited()
     service.save_submission.assert_not_called()
 
 
 def test_membership_lookup_failure_fails_closed(paid_membership_default, caplog):
-    paid_membership_default.has_paid_access.side_effect = RuntimeError("Database unavailable")
+    paid_membership_default.has_vault_access.side_effect = RuntimeError("Database unavailable")
     service = Mock()
     msg = message([photo_attachment()])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
@@ -633,7 +633,7 @@ def test_membership_lookup_failure_fails_closed(paid_membership_default, caplog)
 
 
 def test_membership_expiring_while_queued_is_rechecked(paid_membership_default):
-    paid_membership_default.has_paid_access.side_effect = [True, False]
+    paid_membership_default.has_vault_access.side_effect = [True, False]
     service = Mock()
     msg = message([photo_attachment()])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))

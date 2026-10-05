@@ -6,7 +6,7 @@ import re
 
 import requests
 
-from src.config import WHOP_API_KEY, WHOP_ACCOUNT_ID, WHOP_PAID_PLAN_IDS
+from src.config import WHOP_API_KEY, WHOP_ACCOUNT_ID, WHOP_PAID_PLAN_IDS, WHOP_TRIAL_PLAN_IDS
 from src.datetime_utils import parse_iso_datetime
 from src.services.supabase_service import supabase_service
 
@@ -71,18 +71,23 @@ def paid_payment(payment: dict, membership: dict, start: datetime, end: datetime
 
 
 class WhopService:
-    def __init__(self, database=None, get=None, api_key=None, account_id=None, plan_ids=None, clock=None):
+    def __init__(self, database=None, get=None, api_key=None, account_id=None, plan_ids=None, clock=None, trial_plan_ids=None):
         self.db = database or supabase_service
         self.get = get or requests.get
         self.api_key = api_key if api_key is not None else WHOP_API_KEY
         self.account_id = account_id if account_id is not None else WHOP_ACCOUNT_ID
         self.plan_ids = plan_ids if plan_ids is not None else WHOP_PAID_PLAN_IDS
+        self.trial_plan_ids = trial_plan_ids if trial_plan_ids is not None else WHOP_TRIAL_PLAN_IDS
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def ready(self) -> None:
         if not self.api_key or not self.account_id or not self.plan_ids:
             raise RuntimeError("Configure WHOP_API_KEY, WHOP_ACCOUNT_ID, and WHOP_PAID_PLAN_IDS.")
+        if self.plan_ids & self.trial_plan_ids:
+            raise RuntimeError("Whop paid and trial plan allowlists must not overlap.")
         self.db._ensure_client().table("whop_memberships").select("membership_id").limit(1).execute()
+        if self.trial_plan_ids:
+            self.db._ensure_client().table("whop_trial_memberships").select("membership_id").limit(1).execute()
 
     def request(self, path: str, params=None) -> dict:
         response = self.get(
@@ -115,8 +120,10 @@ class WhopService:
     def snapshot(self, membership: dict, user: dict | None, payments: list[dict], plan: dict | None = None) -> dict:
         if membership.get("account", {}).get("id") != self.account_id:
             raise ValueError("Whop membership belongs to a different seller.")
-        if membership.get("plan_id") not in self.plan_ids:
-            raise ValueError("Whop membership plan is not approved for paid access.")
+        if membership.get("plan_id") not in self.plan_ids | self.trial_plan_ids:
+            raise ValueError("Whop membership plan is not approved for member access.")
+        if self.plan_ids & self.trial_plan_ids:
+            raise RuntimeError("Whop paid and trial plan allowlists must not overlap.")
         now = self.clock()
         start = timestamp(membership["current_period_start"]) if membership.get("current_period_start") else None
         end = timestamp(membership["current_period_end"]) if membership.get("current_period_end") else None
@@ -131,13 +138,19 @@ class WhopService:
             plan is not None and plan.get("id") == membership["plan_id"]
             and plan.get("account", {}).get("id") == self.account_id
             and plan.get("plan_type") == "one_time"
-            and isinstance(plan.get("expiration_days"), (int, float))
+            and type(plan.get("expiration_days")) in (int, float)
             and plan["expiration_days"] > 0
+        )
+        is_trial_plan = membership["plan_id"] in self.trial_plan_ids
+        trial_verified = bool(
+            is_trial_plan and prepaid and plan is not None and plan["expiration_days"] == 7
+            and identity and start and end and start <= now
+            and end - start == timedelta(days=7)
         )
         eligible_status = membership.get("status") == "active" or (
             membership.get("status") == "completed" and prepaid
         )
-        if eligible_status and identity and start and end and start <= now < end:
+        if not is_trial_plan and eligible_status and identity and start and end and start <= now < end:
             payment = next((item for item in payments if paid_payment(item, membership, start, end)), None)
         paid = payment is not None
         return {
@@ -146,12 +159,20 @@ class WhopService:
             "status": membership["status"], "paid_from": start.isoformat() if start else None,
             "paid_through": end.isoformat() if end else None, "payment_id": payment["id"] if payment else None,
             "paid": paid, "cancel_at_period_end": membership["cancel_at_period_end"],
+            "trial_verified": trial_verified,
             "source_updated_at": updated.isoformat(), "verified_at": now.isoformat(),
-            "verification_reason": "Current-period payment and verified Discord identity" if paid else "No verified current paid access",
+            "verification_reason": (
+                "Verified seven-day trial plan and Discord identity; claim ledger determines eligibility"
+                if trial_verified else
+                "No verified seven-day trial" if is_trial_plan else
+                "Current-period payment and verified Discord identity" if paid else
+                "No verified current paid access"
+            ),
         }
 
     def save(self, snapshot: dict) -> None:
-        result = self.db._ensure_client().rpc("record_whop_membership", {"p_snapshot": snapshot}).execute().data
+        rpc = "record_whop_trial_membership" if snapshot["plan_id"] in self.trial_plan_ids else "record_whop_membership"
+        result = self.db._ensure_client().rpc(rpc, {"p_snapshot": snapshot}).execute().data
         if not isinstance(result, bool):
             raise RuntimeError("Whop membership ledger returned an invalid result.")
 
@@ -160,16 +181,25 @@ class WhopService:
         count = 0
         users = {}
         plans = {}
-        for membership in self.pages("memberships", {"account_id": self.account_id}):
-            if membership.get("plan_id") not in self.plan_ids:
-                continue
+        memberships = [
+            membership for membership in self.pages("memberships", {"account_id": self.account_id})
+            if membership.get("plan_id") in self.plan_ids | self.trial_plan_ids
+        ]
+        # Process historical trials first so later signups cannot claim an earlier window.
+        memberships.sort(key=lambda membership: (
+            timestamp(membership["current_period_start"]) if membership.get("current_period_start")
+            else datetime.max.replace(tzinfo=timezone.utc),
+            membership["id"],
+        ))
+        for membership in memberships:
             user_id = membership.get("user_id")
             if user_id and not re.fullmatch(r"user_[A-Za-z0-9]+", user_id):
                 raise ValueError("Whop returned an invalid buyer ID.")
             if user_id and user_id not in users:
                 users[user_id] = self.request(f"users/{user_id}")
             plan = None
-            if membership.get("status") == "completed":
+            is_trial_plan = membership["plan_id"] in self.trial_plan_ids
+            if membership.get("status") == "completed" or is_trial_plan:
                 plan_id = membership["plan_id"]
                 if not re.fullmatch(r"plan_[A-Za-z0-9]+", plan_id):
                     raise ValueError("Whop returned an invalid plan ID.")
@@ -179,7 +209,7 @@ class WhopService:
             payments = list(self.pages("payments", {
                 "account_id": self.account_id, "membership_id": membership["id"],
                 "created_after": (timestamp(membership["current_period_start"]) - timedelta(minutes=5)).isoformat(),
-            })) if membership.get("status") in {"active", "completed"} and membership.get("current_period_start") else []
+            })) if not is_trial_plan and membership.get("status") in {"active", "completed"} and membership.get("current_period_start") else []
             self.save(self.snapshot(membership, users.get(user_id), payments, plan))
             count += 1
         return count

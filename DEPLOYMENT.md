@@ -1,5 +1,90 @@
 # Proxmox deployment guide
 
+## Removing leftover trial test data
+
+Use `supabase/maintenance/cleanup_trial_test_data.sql` as the database owner in
+SQL Editor. It targets only exact synthetic test identities under
+`biz_trial_test`, not live seller records. Missing trial tables are explicitly
+reported and skipped. It is one self-contained `DO` statement with no temporary
+tables or cross-query session dependency. The default `apply_cleanup := false`
+counts matches without deleting anything; inspect the SQL Editor NOTICE output.
+To persist a reviewed cleanup, change `apply_cleanup` to `true` and rerun the
+entire statement. Confirm a current backup before persistent deletion.
+Run on a test copy first if the database contains manually altered test fixtures.
+
+The regression tests normally roll back, so zero matching rows is expected.
+No production schema objects have been confirmed unused; this script drops no
+application tables, functions, products, storage, or real audit records.
+Historical paid memberships, owner grants, and real expired trial claims remain
+necessary. Removing real trial claims would allow repeat-trial abuse.
+
+## Single paid membership and full trial rollout (October 5, 2026)
+
+Current new-sale offer: HIGHROLLER, $19.99 USD for a one-time pass lasting exactly
+30 days. Verified free community members receive ROOKIE. First-time eligible
+members receive a free seven-day HIGHROLLER pass with all available features,
+including analytics and Member Vault, subject to identical limits. It expires
+without a charge or automatic conversion. ALL-STAR and historical longer-duration
+offers are retired from new sales, not revoked for existing purchasers.
+
+The repository update does not change Whop, production configuration, or
+Discord mappings. Complete these steps before enrollment:
+
+1. In Whop, create a **new** HIGHROLLER plan under `prod_6Hh9VAzQnzNiE`:
+   USD 19.99, `one_time`, exactly 30-day expiration, hidden, zero stock, and
+   unlimited stock disabled. Read back the seller, product, price, billing type,
+   and expiration. Do not mutate historical purchases or delete old plans.
+2. Create a new $0 one-time seven-day HIGHROLLER trial under the same product,
+   hidden/zero-stock, with no automatic conversion. Read back its seller,
+   product, billing type and expiration. Keep the historical ALL-STAR trial
+   `plan_ejj9LwTfrJp5z` hidden; do not silently expand or remap historical trials.
+3. Ensure all eight historical paid offers below remain hidden/zero-stock with
+   unlimited stock disabled. Preserve memberships, dates, and historical roles.
+4. Add the new paid plan ID to `WHOP_PAID_PLAN_IDS` locally and on Proxmox
+   **alongside all historical paid IDs**. Never include free/trial IDs.
+   Add only the new verified full-access trial ID to `WHOP_TRIAL_PLAN_IDS`;
+   paid and trial lists must be disjoint. An empty trial list disables trial access.
+   `WHOP_HIGHROLLER_PLAN_IDS` is retired and no longer read by the code.
+5. Verify HIGHROLLER product-to-role mapping for both new variants. Preserve
+   historical ALL-STAR and HIGHROLLER purchased access. ROOKIE grants How to
+   join, Bankroll management, Announcements, Merchandise, Parlays / Promo plays,
+   Free chat and Winning slips. Keep ROOKIE after HIGHROLLER expires.
+   Staff select a daily free play when suitable; do not publish unsettled premium
+   selections in ROOKIE channels. No free-play automation was added.
+   Shared trial/paid roles are not
+   evidence of payment. Keep one role owner; do not make the bot and Whop compete.
+   Leave `PAID_MEMBER_ROLE_ID` unset for Whop-owned HIGHROLLER; never target
+   ROOKIE. Optional dedicated bot-owned role sync now includes verified trials.
+6. Apply `supabase/migrations/20261005000000_full_membership_trials.sql`,
+   then deploy/restart the bot and deploy the website. The existing seller/plan RPC
+   (`20261003030000_highroller_stats_access.sql`) and owner-grant migration
+   remain prerequisites. The new tables are private and service-role-only.
+   Trials are stored separately, never marked paid; ordinary complimentary
+   grants remain ineligible. Claims persist after expiry/cancellation and pin
+   seller, buyer, Discord identity, membership and original seven-day dates.
+   A prior recorded paid membership before the trial disqualifies that identity.
+   Use a complete historical membership/payment sync before opening trials;
+   missing/deleted provider history cannot prove first-time signup.
+   The owner's
+   historical `highroller` grant remains valid without fabricating payment.
+7. Test a real new paid pass, historical paid pass, trial, expiry, refund, stale
+   snapshot, repeated trial, changed Discord/Whop identity and trial-to-paid
+   overlap/role expiry. Paid members and eligible trials have identical tool
+   and vault access. Whop can still grant a role independently of bot eligibility:
+   verify provider repeat-signup controls so denied trials do not see premium
+   channels. IP alone is not reliable (shared households/mobile networks/VPNs);
+   no IP tracking was added. Multi-account evasion remains possible.
+   Refresh stays disabled until its separate
+   budget/license/quota-reset/live-validation gates pass; quotas are unchanged.
+8. Keep checkout closed until provider/business approval and positive production
+   authorization tests pass. Only then publish the new paid offer and trial.
+
+### Historical implementation notes
+
+Earlier tier-specific descriptions below are retained where they explain
+historical provider records or migration names. The current single-membership
+decision above supersedes their access/pricing restrictions.
+
 ## Current and previous season player statistics
 
 The primary command is now `/playerstats sport league player refresh`.
@@ -8,8 +93,8 @@ League suggestions are sport-scoped; player suggestions are scoped to both sport
 and league and use stable provider IDs behind the selected names.
 Autocomplete makes database reads only, never API calls while typing.
 Suggestions grow as players are cached; an empty directory does not imply no
-players exist. HIGHROLLER/owner/moderator refresh can discover a full typed name.
-Ordinary cached reports remain paid-only; trials cannot read or refresh stats.
+players exist. Verified paid/trial member/owner/moderator refresh can discover a full typed name.
+Ordinary cached reports require verified paid or eligible trial access.
 
 Apply `20261003070000_player_seasons.sql` after the existing budget and player-game
 cache migrations. It seeds leagues and name suggestions from existing caches,
@@ -61,7 +146,7 @@ For optional F1 game reports, use `/results sport:formula-1` or `/schedule sport
 session ID; practice/qualifying results are explicitly distinguished from races.
 F1 schedule/results refresh is disabled; `/gamestats` driver-result refresh is game-specific.
 
-Paid ALL-STAR reads shared cached snapshots. HIGHROLLER, the owner grant, and
+All verified paid and eligible trial members read shared cached snapshots. Those members, the owner grant, and
 approved moderators can populate/refresh a game's snapshot when
 `MEMBER_STATS_REFRESH_ENABLED` and `API_SPORTS_BUDGET_ENABLED` are enabled.
 Each uncached refresh makes exactly one request to the applicable product,
@@ -202,7 +287,8 @@ Before enabling this feature:
    enabled with no member/public access policies, and `member-bet-vault` is a
    private storage bucket. Never make this bucket public.
    Also apply `supabase/migrations/20261003010000_whop_membership_access.sql`
-   and configure the Whop sync below. Without verified paid membership, no new
+   and configure the Whop sync below, including the full-trial migration.
+   Without verified paid membership, an eligible trial, or an explicit owner grant, no new
    submission is accepted.
 2. Set `MEMBER_BET_CHANNEL_ID` to a dedicated submission-only channel. It must
    differ from the official, image-input, confirmation, test, result, and
@@ -274,14 +360,15 @@ and the `member_vault_*` / `member_*` error logs. Original photos and audit reco
 remain in private storage until an administrator removes them under the business's
 retention policy; there is no automatic retention cleanup in this release.
 
-## 10. Whop paid-membership verification
+## 10. Whop paid and trial membership verification
 
-### HIGHROLLER cached stats tools
+### Membership stats tools
 
-#### Cached ALL-STAR and limited HIGHROLLER/moderator refresh
+#### Cached reports and limited member/moderator refresh
 
-The later tier change enables cached commands for both verified paying tiers,
-not trials. HIGHROLLER and configured-guild members holding moderator roles
+The single-membership change enables the same cached and refresh permissions
+for all approved verified paid plans and eligible full-access trials. Those members
+and configured-guild members holding moderator roles
 `1328120848992960543`, `1347741218158678097`, or `1328149760766640190`
 may request `refresh: true`. Role grants apply only while held and only to
 stats, never vault or billing/admin access. Existing owner grants also qualify.
@@ -337,13 +424,14 @@ for this narrow owner exception.
 Apply `supabase/migrations/20261003030000_highroller_stats_access.sql` after
 the prepaid migration, then deploy/restart the bot. This adds a service-role-only
 seller/plan-scoped lookup; missing schema fails closed without preventing the
-rest of the bot from starting. `WHOP_HIGHROLLER_PLAN_IDS` defaults to the four
-existing HIGHROLLER prepaid IDs in `.env.example`; it must be a nonempty subset
-of `WHOP_PAID_PLAN_IDS`. For other Whop products, explicitly override these IDs.
+rest of the bot from starting. Paid stats use all `WHOP_PAID_PLAN_IDS`, including
+historical paid offers and the new $19.99 pass, scoped to `WHOP_ACCOUNT_ID`.
+Eligible trials use the separate seller/plan-scoped RPC and claim ledger.
 Sync must be enabled. No Discord-role or operator bypass grants these tools.
 
 Commands `/matchup`, `/teamstats`, `/schedule`, and `/results` are private,
-guild-only, and require current paid HIGHROLLER access. ALL-STAR, free trials,
+guild-only, and require approved verified paid/trial access or authorized owner/moderator
+grants. Ineligible/repeated trials, ROOKIE-only access,
 refunds, expiry, and stale snapshots deny access. Supported sports: NFL, college
 football, basketball, soccer, hockey, and baseball. Use full team names.
 Unique shortened/expanded team names resolve against cached names (for example,
@@ -352,13 +440,13 @@ produce suggestions, never merged records. No name matching triggers API calls.
 Schedule/matchup reads cover the next seven days; results/recent-form reads
 cover the past 30 days. Up to ten events are displayed from bounded cached
 queries; recent form is not complete season standings. Reports disclose cache
-age, missing scores, and incomplete data. There are no member-triggered live
-provider calls, refreshes, new API keys, or extra provider quota usage.
-Existing bot refresh jobs own freshness. These caches are also used by public
-website features; this tier sells convenience, not exclusive underlying data.
+age, missing scores, and incomplete data. Without refresh activation these
+commands make no member-triggered provider calls. Existing bot refresh jobs own
+freshness until activation. These caches are also used by public website
+features; membership sells convenience, not exclusive underlying data.
 Confirm API-Sports display rights before advertising/launching.
 
-### Prepaid offers (current)
+### Historical prepaid offers (retired from new sales)
 
 The owner replaced automatic renewal with one-time prepaid terms. All eight
 offers were created under the existing ALL-STAR/HIGHROLLER products (formerly
@@ -374,8 +462,9 @@ stock, and disabled unlimited stock. No automatic renewal applies.
 | 12 months | 365 days | 15% | 101.90 | `plan_jfOCNP5Ow8Q8g` | 305.90 | `plan_XU4sWniXTjODJ` |
 
 Discounts apply to base price times the term length, rounded once to cents.
-These are fixed-day passes, not calendar-month expiration. Only these eight
-plan IDs belong in the current paid allowlist. The earlier recurring plans
+These are fixed-day passes, not calendar-month expiration. Keep these eight
+plan IDs in the paid allowlist alongside the new $19.99 plan to preserve
+historical purchases. The earlier recurring plans
 below remain hidden/zero-stock and are no longer allowlisted; do not publish
 them.
 
@@ -439,7 +528,11 @@ Configure these server-only settings (never put them in Vite/browser variables):
 - `WHOP_ACCOUNT_ID`: your `biz_...` seller account ID.
 - `WHOP_PAID_PLAN_IDS`: comma-separated approved `plan_...` paid plans. Do not
   include free plans.
-- `PAID_MEMBER_ROLE_ID`: optional dedicated paid role. Configure `GUILD_ID`,
+- `WHOP_TRIAL_PLAN_IDS`: separate approved free one-time seven-day full-access
+  trial IDs. Empty disables trial access; never overlap with paid IDs.
+- `PAID_MEMBER_ROLE_ID`: optional dedicated bot-owned membership role (paid,
+  eligible trial, or owner grant). Leave unset for Whop-owned HIGHROLLER and
+  never point at ROOKIE. Configure `GUILD_ID`,
   enable Members Intent, give the bot Manage Roles, and place its role above
   this role. Do not reuse operator/official/administrator roles.
 
@@ -468,6 +561,21 @@ One-time indefinite purchases are not supported; expiring prepaid purchases
 are supported by the prepaid-access migration described above.
 
 This first integration uses **API polling, not a public webhook receiver**.
+Full trial entitlement is separate from paid eligibility above. Approved trial
+plans must verify as one-time with seven-day expiration and a verified buyer/
+Discord identity. The original 168-hour window is fixed in the claim ledger,
+not reset by polling, an extension, or a repeated membership. Access requires
+active/completed status, original dates, and a snapshot fresher than 15 minutes.
+Unknown free plans do not qualify. The application does not collect IP addresses.
+
+For local SQL regression tests, apply the membership migrations to a disposable
+PostgreSQL database with Supabase roles, then execute
+`supabase/tests/full_membership_trials.sql` with stop-on-error enabled.
+The fixture transaction rolls back. Checks cover first/repeat claims, identity
+changes, fixed dates, cancellation, exact expiry/staleness boundaries, former
+paid customers, denied payment fabrication, role identities, audit and permissions.
+Embedded PostgreSQL validation is not a production concurrency or role-mapping test.
+
 Changes normally propagate on the next five-minute pass. Snapshots older than
 15 minutes cannot authorize new tickets. If synchronization fails, it logs
 `whop_membership_reconciliation_failed` and does not run mass role removal.

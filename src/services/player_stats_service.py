@@ -178,7 +178,7 @@ class PlayerStatsService:
         title = f"{PLAYER_SPORTS[sport]} " + ("driver results" if sport == "formula-1" else "player statistics")
         snapshot = self.snapshot(sport, game_id)
         if snapshot is None:
-            return title, "Player data has not been fetched for this game. HIGHROLLER or authorized moderators can request refresh; ALL-STAR reads the shared cache."
+            return title, "Player data has not been fetched for this game. Verified paid members, eligible trial members, or authorized owner/moderator grants can request refresh when enabled."
         records = athlete_records(sport, snapshot["payload"], game_id, game)
         escape = discord.utils.escape_markdown
         updated = int(parse_iso_datetime(snapshot["synced_at"]).timestamp())

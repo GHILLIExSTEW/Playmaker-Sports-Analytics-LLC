@@ -34,13 +34,9 @@ class MemberStats(commands.Cog):
                 and isinstance(interaction.user, discord.Member)
                 and any(role.id in LIVE_STATS_MOD_ROLE_IDS for role in interaction.user.roles)
             )
-            allowed = moderator or await asyncio.to_thread(self.membership.has_highroller_access, interaction.user.id)
-            cached_access = allowed or await asyncio.to_thread(self.membership.has_paid_access, interaction.user.id)
-            if refresh and not allowed:
-                await interaction.followup.send("On-demand refresh requires HIGHROLLER or an approved moderator role. ALL-STAR can use cached reports.", ephemeral=True)
-                return
-            if not cached_access:
-                await interaction.followup.send("Cached tools require verified paid ALL-STAR/HIGHROLLER access or an explicit owner/moderator grant. Trials do not qualify.", ephemeral=True)
+            allowed = moderator or await asyncio.to_thread(self.membership.has_stats_access, interaction.user.id)
+            if not allowed:
+                await interaction.followup.send("Stats tools require a verified paid membership, an eligible seven-day trial, or an explicit owner/moderator grant.", ephemeral=True)
                 return
             # Validate the report before spending a provider request.
             if mode == "playerstats":
@@ -74,10 +70,10 @@ class MemberStats(commands.Cog):
         except (ValueError, ApiBudgetDenied) as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
-            logger.exception("highroller_stats_failed mode=%s user=%s", mode, interaction.user.id)
+            logger.exception("member_stats_failed mode=%s user=%s", mode, interaction.user.id)
             await interaction.followup.send("Stats or membership verification is temporarily unavailable. Please retry later or contact support.", ephemeral=True)
 
-    @app_commands.command(name="matchup", description="Paid stats: upcoming matchup; HIGHROLLER/mods may refresh today's data")
+    @app_commands.command(name="matchup", description="Paid stats: upcoming matchup; optional limited refresh of today's data")
     @app_commands.guild_only()
     @app_commands.choices(sport=SPORT_CHOICES)
     async def matchup(self, interaction: discord.Interaction, sport: str, team: str, opponent: str, refresh: bool = False):
@@ -95,7 +91,7 @@ class MemberStats(commands.Cog):
     async def schedule(self, interaction: discord.Interaction, sport: str, team: str | None = None, refresh: bool = False):
         await self.respond(interaction, "schedule", sport, team, refresh=refresh)
 
-    @app_commands.command(name="results", description="Paid stats: recent final scores; HIGHROLLER/mods may refresh today's data")
+    @app_commands.command(name="results", description="Paid stats: recent final scores; optional limited refresh of today's data")
     @app_commands.guild_only()
     @app_commands.choices(sport=SPORT_CHOICES)
     async def results(self, interaction: discord.Interaction, sport: str, team: str | None = None, refresh: bool = False):

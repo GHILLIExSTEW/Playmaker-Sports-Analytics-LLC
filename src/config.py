@@ -54,13 +54,10 @@ WHOP_ACCOUNT_ID = get_str("WHOP_ACCOUNT_ID")
 WHOP_PAID_PLAN_IDS = {
     value.strip() for value in os.getenv("WHOP_PAID_PLAN_IDS", "").split(",") if value.strip()
 }
-WHOP_MEMBERSHIP_SYNC_ENABLED = get_bool("WHOP_MEMBERSHIP_SYNC_ENABLED", False)
-WHOP_HIGHROLLER_PLAN_IDS = {
-    value.strip() for value in os.getenv(
-        "WHOP_HIGHROLLER_PLAN_IDS",
-        "plan_10PuOcOt9rHNL,plan_8nWXoogPnIovE,plan_IFDLF4SdPxcQh,plan_XU4sWniXTjODJ",
-    ).split(",") if value.strip()
+WHOP_TRIAL_PLAN_IDS = {
+    value.strip() for value in os.getenv("WHOP_TRIAL_PLAN_IDS", "").split(",") if value.strip()
 }
+WHOP_MEMBERSHIP_SYNC_ENABLED = get_bool("WHOP_MEMBERSHIP_SYNC_ENABLED", False)
 CONFIRMATION_CHANNEL_ID = get_int("CONFIRMATION_CHANNEL_ID")
 TEST_CHANNEL_ID = get_int("TEST_CHANNEL_ID")
 TESTING = get_bool("TESTING", False)

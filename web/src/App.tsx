@@ -439,8 +439,8 @@ function Website() {
         </section>
 
         <section className="membership-promo scroll-reveal" id="membership">
-          <div><p className="eyebrow">Membership</p><h2>Find your seat.</h2><p>See the proposed plans, feature breakdown, and what’s coming before enrollment opens.</p></div>
-          <Link className="button membership-promo-link" to="/membership">Compare plans &amp; features <ArrowRight size={17} /></Link>
+          <div><p className="eyebrow">Membership</p><h2>One membership. Your seat.</h2><p>Join the free ROOKIE community or try seven days of full HIGHROLLER access. Continue for $19.99 per 30-day pass. No automatic charges. Enrollment remains closed pending launch review.</p></div>
+          <Link className="button membership-promo-link" to="/membership">See membership &amp; trial <ArrowRight size={17} /></Link>
         </section>
 
         <section className="method-section scroll-reveal" id="method">

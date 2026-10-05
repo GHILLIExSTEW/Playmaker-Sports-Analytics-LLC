@@ -131,8 +131,8 @@ class ConfirmTicketModal(discord.ui.Modal, title="Confirm member ticket"):
         try:
             validate_ticket(self.units.value, self.odds.value)
             async with self.vault.lock:
-                if not await asyncio.to_thread(self.vault.membership.has_paid_access, interaction.user.id):
-                    raise ValueError("A current paid membership is required to confirm a new ticket.")
+                if not await asyncio.to_thread(self.vault.membership.has_vault_access, interaction.user.id):
+                    raise ValueError("A current verified paid membership, eligible trial, or owner grant is required to confirm a new ticket.")
                 row = await asyncio.to_thread(self.vault.service.get, self.bet_id)
                 if row["owner_id"] != str(interaction.user.id) or row["status"] != "draft":
                     raise ValueError("Only the uploader can confirm an awaiting-confirmation ticket.")
@@ -323,15 +323,15 @@ class MemberBetVault:
         if message.author.bot or message.webhook_id or not message.guild or message.channel.id != self.channel_id:
             return
         try:
-            eligible = await asyncio.to_thread(self.membership.has_paid_access, message.author.id)
+            eligible = await asyncio.to_thread(self.membership.has_vault_access, message.author.id)
         except Exception:
             logger.exception("member_vault_membership_lookup_failed user=%s", message.author.id)
             await self.delete(message)
-            await self.dm(message.author, "I could not verify your paid membership. Your submission was not accepted. Please try again later or contact support.")
+            await self.dm(message.author, "I could not verify your membership access. Your submission was not accepted. Please try again later or contact support.")
             return
         if not eligible:
             await self.delete(message)
-            await self.dm(message.author, "Only members with current paid access can submit bets in the Member Vault. Your submission was not accepted. Link your Discord account and contact support if you have already paid.")
+            await self.dm(message.author, "Member Vault submissions require current verified paid access, an eligible seven-day trial, or an explicit owner grant. Your submission was not accepted. Link your Discord account in Whop and contact support if access is missing.")
             return
         photos = [attachment for attachment in message.attachments if accepted_photo(attachment)]
         if len(photos) != 1:
@@ -355,9 +355,9 @@ class MemberBetVault:
                 return
             try:
                 async with self.lock:
-                    if not await asyncio.to_thread(self.membership.has_paid_access, message.author.id):
+                    if not await asyncio.to_thread(self.membership.has_vault_access, message.author.id):
                         await self.delete(message)
-                        await self.dm(message.author, "Your paid access expired before the submission completed. This ticket was not accepted.")
+                        await self.dm(message.author, "Your membership access expired before the submission completed. This ticket was not accepted.")
                         return
                     row = await asyncio.to_thread(self.service.save_submission, message, photo)
                     if not await self.delete(message):

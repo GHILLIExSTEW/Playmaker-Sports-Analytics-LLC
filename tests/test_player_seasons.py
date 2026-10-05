@@ -208,14 +208,13 @@ def test_autocomplete_uses_selected_sport_and_league_and_returns_stable_ids():
     assert leagues[0].value == "1"
 
 
-@pytest.mark.parametrize("paid,highroller,refresh,reads", [
-    (False, False, False, 0), (True, False, False, 1),
-    (True, False, True, 0), (True, True, True, 2),
+@pytest.mark.parametrize("paid,refresh,reads", [
+    (False, False, 0), (False, True, 0),
+    (True, False, 1), (True, True, 2),
 ])
-def test_season_command_preserves_access_gate(paid, highroller, refresh, reads):
+def test_season_command_preserves_access_gate(paid, refresh, reads):
     membership, cache = Mock(), Mock()
-    membership.has_paid_access.return_value = paid
-    membership.has_highroller_access.return_value = highroller
+    membership.has_stats_access.return_value = paid
     cache.report.return_value = ("Season stats", "cached")
     cache.refresh.return_value = "season refresh"
     with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True), patch(
@@ -225,7 +224,7 @@ def test_season_command_preserves_access_gate(paid, highroller, refresh, reads):
             interaction(), "playerstats", "nfl", league="1", player="Watson", refresh=refresh,
         ))
     assert cache.report.call_count == reads
-    assert cache.refresh.call_count == int(highroller and refresh)
+    assert cache.refresh.call_count == int(paid and refresh)
 
 
 def test_primary_command_has_no_game_id_and_has_autocomplete():

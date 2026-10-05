@@ -133,10 +133,9 @@ def interaction():
 
 
 @pytest.mark.parametrize("allowed", [True, False])
-def test_tier_gate_before_cache_reads(allowed):
+def test_paid_gate_before_cache_reads(allowed):
     member = Mock()
-    member.has_highroller_access.return_value = allowed
-    member.has_paid_access.return_value = allowed
+    member.has_stats_access.return_value = allowed
     cache = Mock()
     cache.report.return_value = ("Results", "cached")
     target = interaction()
@@ -144,12 +143,12 @@ def test_tier_gate_before_cache_reads(allowed):
         asyncio.run(MemberStats(member, cache).respond(target, "results", "nfl"))
     assert cache.report.call_count == int(allowed)
     if not allowed:
-        assert "HIGHROLLER" in target.followup.send.call_args.args[0]
+        assert "verified paid membership" in target.followup.send.call_args.args[0]
 
 
 def test_lookup_failure_does_not_authorize():
     member = Mock()
-    member.has_highroller_access.side_effect = RuntimeError("migration missing")
+    member.has_stats_access.side_effect = RuntimeError("migration missing")
     cache = Mock()
     target = interaction()
     with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True):
@@ -162,31 +161,43 @@ def test_disabled_sync_does_not_read_membership_or_cache():
     member, cache = Mock(), Mock()
     with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", False):
         asyncio.run(MemberStats(member, cache).respond(interaction(), "results", "nfl"))
-    member.has_highroller_access.assert_not_called()
+    member.has_stats_access.assert_not_called()
     cache.report.assert_not_called()
 
 
-def test_highroller_rpc_is_seller_and_plan_scoped():
+def test_stats_rpc_includes_new_and_historical_paid_plans():
     database = Mock()
     database._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
     with patch("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test"), patch(
-        "src.services.membership_service.WHOP_HIGHROLLER_PLAN_IDS", {"plan_high"},
-    ), patch("src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_high", "plan_all"}):
-        assert MembershipService(database).has_highroller_access(123)
+        "src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_high", "plan_all", "plan_new"},
+    ):
+        assert MembershipService(database).has_stats_access(123)
     database._ensure_client.return_value.rpc.assert_called_once_with(
         "discord_has_paid_plan_access", {
-            "p_discord_user_id": "123", "p_account_id": "biz_test", "p_plan_ids": ["plan_high"],
+            "p_discord_user_id": "123", "p_account_id": "biz_test",
+            "p_plan_ids": ["plan_all", "plan_high", "plan_new"],
         },
     )
 
 
-def test_unapproved_highroller_configuration_denies():
+@pytest.mark.parametrize("account,plans", [("", {"plan_paid"}), ("biz_test", set())])
+def test_missing_stats_configuration_denies(account, plans):
     database = Mock()
-    with patch("src.services.membership_service.WHOP_HIGHROLLER_PLAN_IDS", {"plan_trial"}), patch(
-        "src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_high"},
+    with patch("src.services.membership_service.WHOP_ACCOUNT_ID", account), patch(
+        "src.services.membership_service.WHOP_PAID_PLAN_IDS", plans,
     ), pytest.raises(RuntimeError, match="approved"):
-        MembershipService(database).has_highroller_access(123)
+        MembershipService(database).has_stats_access(123)
     database._ensure_client.assert_not_called()
+
+
+@pytest.mark.parametrize("response", [None, [], {}, "true", 1])
+def test_stats_lookup_rejects_invalid_responses(response):
+    database = Mock()
+    database._ensure_client.return_value.rpc.return_value.execute.return_value.data = response
+    with patch("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test"), patch(
+        "src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_paid"},
+    ), pytest.raises(RuntimeError, match="invalid access response"):
+        MembershipService(database).has_stats_access(123)
 
 
 def test_six_guild_only_stats_commands_registered():
@@ -198,7 +209,7 @@ def test_six_guild_only_stats_commands_registered():
 
 def test_oversized_report_is_explicit_error_not_silently_truncated():
     member, cache = Mock(), Mock()
-    member.has_highroller_access.return_value = True
+    member.has_stats_access.return_value = True
     cache.report.return_value = ("Results", "x" * 4097)
     target = interaction()
     with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True):
@@ -206,23 +217,24 @@ def test_oversized_report_is_explicit_error_not_silently_truncated():
     assert "temporarily unavailable" in target.followup.send.call_args.args[0]
 
 
-def test_allstar_can_read_cache_but_not_refresh():
+def test_paid_member_can_read_cache_while_refresh_remains_disabled():
     member, cache = Mock(), Mock()
-    member.has_highroller_access.return_value = False
-    member.has_paid_access.return_value = True
+    member.has_stats_access.return_value = True
     cache.report.return_value = ("Results", "cached")
-    with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True):
+    with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True), patch(
+        "src.member_stats.MEMBER_STATS_REFRESH_ENABLED", False,
+    ):
         asyncio.run(MemberStats(member, cache).respond(interaction(), "results", "nfl"))
         target = interaction()
         asyncio.run(MemberStats(member, cache).respond(target, "results", "nfl", refresh=True))
-    cache.report.assert_called_once()
+    assert cache.report.call_count == 2
     cache.refresh.assert_not_called()
-    assert "On-demand refresh requires" in target.followup.send.call_args.args[0]
+    assert "On-demand refresh is not enabled yet" in target.followup.send.call_args.args[0]
 
 
-def test_highroller_refreshes_and_rereads_cache():
+def test_paid_member_refreshes_and_rereads_cache():
     member, cache = Mock(), Mock()
-    member.has_highroller_access.return_value = True
+    member.has_stats_access.return_value = True
     cache.report.return_value = ("Results", "cached")
     cache.refresh.return_value = "Refreshed today only"
     target = interaction()
@@ -249,15 +261,14 @@ def test_configured_guild_moderator_role_grants_stats_only(role_id):
         "src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True,
     ), patch("src.member_stats.MEMBER_STATS_REFRESH_ENABLED", True):
         asyncio.run(MemberStats(member, cache).respond(target, "results", "nfl", refresh=True))
-    member.has_highroller_access.assert_not_called()
+    member.has_stats_access.assert_not_called()
     member.has_paid_access.assert_not_called()
     cache.refresh.assert_called_once_with("nfl", 123)
 
 
 def test_moderator_role_from_other_guild_does_not_grant_access():
     member, cache = Mock(), Mock()
-    member.has_highroller_access.return_value = False
-    member.has_paid_access.return_value = False
+    member.has_stats_access.return_value = False
     target = interaction()
     target.guild_id = 9999
     target.user = Mock(spec=discord.Member)
@@ -269,3 +280,25 @@ def test_moderator_role_from_other_guild_does_not_grant_access():
         asyncio.run(MemberStats(member, cache).respond(target, "results", "nfl", refresh=True))
     cache.refresh.assert_not_called()
     cache.report.assert_not_called()
+
+
+@pytest.mark.parametrize("refresh,reads", [(False, 1), (True, 2)])
+def test_eligible_trial_uses_same_reports_and_refresh_limits_as_paid(refresh, reads):
+    database, cache = Mock(), Mock()
+    database._ensure_client.return_value.rpc.return_value.execute.return_value.data = False
+    membership = MembershipService(database)
+    membership.has_trial_access = Mock(return_value=True)
+    cache.report.return_value = ("Results", "cached")
+    cache.refresh.return_value = "Refreshed today only"
+    target = interaction()
+    with patch("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test"), patch(
+        "src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_paid"},
+    ), patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True), patch(
+        "src.member_stats.MEMBER_STATS_REFRESH_ENABLED", True,
+    ):
+        asyncio.run(MemberStats(membership, cache).respond(target, "results", "nfl", refresh=refresh))
+    membership.has_trial_access.assert_called_once_with(123)
+    assert cache.report.call_count == reads
+    assert cache.refresh.call_count == int(refresh)
+    if refresh:
+        cache.refresh.assert_called_once_with("nfl", 123)

@@ -196,7 +196,7 @@ class PlayerSeasonService:
         league, value, person = self.validate(sport, league_id, player)
         title = f"{PLAYER_SPORTS[sport]} - current and previous season"
         if person is None:
-            return title, "No matching player in this sport/league directory yet. HIGHROLLER or authorized moderators can refresh by full name to discover the player; suggestions use cached names only."
+            return title, "No matching player in this sport/league directory yet. Verified paid members, eligible trial members, or authorized owner/moderator grants can refresh by full name when enabled to discover the player; suggestions use cached names only."
         escape = discord.utils.escape_markdown
         current = league["current_season"]
         lines = [f"**{escape(person['name'])}** - {escape(league['name'])}"]
