@@ -95,15 +95,16 @@ can still evade identity checks. IP tracking alone is neither reliable identity
 verification nor implemented here; provider-side anti-abuse and role controls
 must be verified before launch.
 
-Code and website drafts reflect this decision, but Whop configuration is a
-separate rollout. Create a new hidden, zero-stock HIGHROLLER $19.99 one-time
-30-day plan rather than editing terms attached to historical purchases.
-Create a matching free seven-day HIGHROLLER plan under the HIGHROLLER product;
-do not silently remap the old ALL-STAR trial. Retire all eight historical paid
-offers from new sales, add the new paid plan ID to local and production
-`WHOP_PAID_PLAN_IDS`, and add only approved full-access trial IDs to the separate
-`WHOP_TRIAL_PLAN_IDS`. Apply `20261005000000_full_membership_trials.sql` before
-enabling trial sync. Verify Discord mappings and trial-to-paid overlap.
+Whop draft setup is complete: paid `plan_cdPyKCHjSQeG2` is $19.99, one-time,
+30 days; trial `plan_R7H8Sx7MEKzh0` is $0, one-time, seven days. API readback
+verified seller/product, prices/expiry, hidden visibility, zero stock and disabled
+unlimited stock. Twelve obsolete checkout links were deleted with owner approval
+after confirming zero memberships and payments. Products/Discord apps remain.
+Local allowlists are updated and sync stays off; production settings were not
+changed. Add the new paid/trial IDs on Proxmox and apply
+`20261005000000_full_membership_trials.sql` before enabling trial sync.
+Verify Discord mappings and trial-to-paid overlap. Whop requests updated business
+information and currently pauses payouts; the owner must complete that review.
 Do not publish checkout until Gate A and the positive production access test
 pass. See `DEPLOYMENT.md` for the rollout checklist.
 
@@ -171,9 +172,10 @@ If a dedicated bot-owned role is used instead, it now includes verified trials.
 Never point that setting at ROOKIE. Trial and paid membership overlap must not
 remove HIGHROLLER while another qualifying membership remains active.
 
-Historical ALL-STAR trial `plan_ejj9LwTfrJp5z` remains outside both allowlists
-until explicitly reviewed; the new HIGHROLLER trial needs a verified plan ID.
-Do not delete historical products or purchases to simplify names.
+Historical ALL-STAR trial `plan_ejj9LwTfrJp5z` was deleted after zero-usage
+verification and remains outside both allowlists. New HIGHROLLER trial
+`plan_R7H8Sx7MEKzh0` was API-verified. Do not delete products or purchases to
+simplify names.
 - `Founding Member`: time-limited complimentary entitlement for qualifying
   existing members.
 - `Promotional Access`: time-limited prize or administrative grant.

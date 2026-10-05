@@ -27,19 +27,46 @@ including analytics and Member Vault, subject to identical limits. It expires
 without a charge or automatic conversion. ALL-STAR and historical longer-duration
 offers are retired from new sales, not revoked for existing purchasers.
 
-The repository update does not change Whop, production configuration, or
-Discord mappings. Complete these steps before enrollment:
+### Whop draft setup completed October 5
+
+Both variants were created under `prod_6Hh9VAzQnzNiE` and read back through
+the Whop API for seller `biz_rCNwfXRlnl0bFU`:
+
+| Offer | Plan ID | Billing | Price USD | Exact expiry |
+| --- | --- | --- | ---: | ---: |
+| HIGHROLLER paid | `plan_cdPyKCHjSQeG2` | `one_time` | 19.99 | 30 days |
+| HIGHROLLER full trial | `plan_R7H8Sx7MEKzh0` | `one_time` | 0.00 | 7 days |
+
+Both have zero renewal price, hidden visibility, zero stock, and unlimited stock
+disabled. Sales remain closed. The dashboard showed all memberships = 0,
+inactive memberships = 0, and all payments = 0. With owner authorization, twelve
+obsolete checkout links were deleted: the eight historical prepaid variants,
+two recurring variants, old ALL-STAR trial, and retired ROOKIE trial.
+Products and Discord experiences were not deleted or remapped.
+The historical plan table below is reference only, not a list of live offers.
+
+Local `.env` has the new paid/trial IDs, retains historical paid IDs, and leaves
+sync disabled. Production configuration was not changed. On Proxmox, add the
+paid ID to `WHOP_PAID_PLAN_IDS` and set
+`WHOP_TRIAL_PLAN_IDS=plan_R7H8Sx7MEKzh0` only after applying the trial migration.
+Whop also displayed a business-information request with payouts temporarily
+paused; the owner must complete that review. No payout settings were changed.
+
+The creation steps below are now a configuration reference; do not create
+duplicate variants. Production deployment, Discord mapping, trial-abuse and
+overlap/expiry verification remain required before enrollment:
 
 1. In Whop, create a **new** HIGHROLLER plan under `prod_6Hh9VAzQnzNiE`:
    USD 19.99, `one_time`, exactly 30-day expiration, hidden, zero stock, and
    unlimited stock disabled. Read back the seller, product, price, billing type,
-   and expiration. Do not mutate historical purchases or delete old plans.
+   and expiration. Do not mutate historical purchases. Delete an obsolete offer
+   only with owner approval and verified absence of payments/memberships.
 2. Create a new $0 one-time seven-day HIGHROLLER trial under the same product,
    hidden/zero-stock, with no automatic conversion. Read back its seller,
-   product, billing type and expiration. Keep the historical ALL-STAR trial
-   `plan_ejj9LwTfrJp5z` hidden; do not silently expand or remap historical trials.
-3. Ensure all eight historical paid offers below remain hidden/zero-stock with
-   unlimited stock disabled. Preserve memberships, dates, and historical roles.
+   product, billing type and expiration. The old ALL-STAR trial was deleted
+   after verifying no memberships/payments; do not silently remap historical trials.
+3. Obsolete zero-usage offers have been deleted with owner approval.
+   Preserve any future memberships, dates, and historical roles.
 4. Add the new paid plan ID to `WHOP_PAID_PLAN_IDS` locally and on Proxmox
    **alongside all historical paid IDs**. Never include free/trial IDs.
    Add only the new verified full-access trial ID to `WHOP_TRIAL_PLAN_IDS`;

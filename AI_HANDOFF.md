@@ -61,12 +61,18 @@ IP-only tracking was not implemented; it cannot prove first-time identity.
 No IP collection/storage was added. Multi-account evasion remains possible.
 Refresh flags remain off until existing budget/licensing/live-test gates pass.
 The owner lifetime grant remains intact under its historical database tier.
-Website/policy drafts and code are updated, not deployed; Whop still needs
-new hidden HIGHROLLER paid and full-trial plans, historical-offer retirement,
-allowlist updates, migration, and live role/access/repeat-signup tests.
+Whop drafts created and API-verified October 5: `plan_cdPyKCHjSQeG2`
+($19.99 one-time, 30 days) and `plan_R7H8Sx7MEKzh0` ($0 one-time,
+seven days), both on HIGHROLLER product, hidden/zero-stock/unlimited-stock off.
+Owner authorized deletion of twelve obsolete checkout links after dashboard
+verification of zero memberships (all statuses) and payments. Products and
+Discord experiences were retained. Local allowlists updated; local sync stays off.
+Production allowlists, migration/deployment and live role/expiry/anti-abuse tests
+remain pending. Whop displayed updated-business-information request and payout
+pause; owner must address it. Do not claim checkout opened or production deployed.
 Owner reports Discord roles are adjusted; the assistant did not administer them.
 Whop owns the HIGHROLLER role; do not also enable bot role sync for it or for
-ROOKIE. Do not claim provider settings changed or checkout opened.
+ROOKIE. Provider offers changed as described above; Discord mappings did not.
 See `LAUNCH_PLAN.md` and `DEPLOYMENT.md` for current offers and rollout.
 
 ### Historical Membership and Stats Decisions (Superseded Where Inconsistent)
