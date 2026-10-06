@@ -266,6 +266,20 @@ def test_configured_guild_moderator_role_grants_stats_only(role_id):
     cache.refresh.assert_called_once_with("nfl", 123)
 
 
+def test_moderator_can_use_stats_while_whop_sync_disabled():
+    member, cache = Mock(), Mock()
+    cache.report.return_value = ("Results", "cached")
+    target = interaction()
+    target.guild_id = 1234
+    target.user = Mock(spec=discord.Member)
+    target.user.id = 123
+    target.user.roles = [SimpleNamespace(id=1328120848992960543)]
+    with patch("src.member_stats.GUILD_ID", 1234), patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", False):
+        asyncio.run(MemberStats(member, cache).respond(target, "results", "nfl"))
+    member.has_stats_access.assert_not_called()
+    cache.report.assert_called_once()
+
+
 def test_moderator_role_from_other_guild_does_not_grant_access():
     member, cache = Mock(), Mock()
     member.has_stats_access.return_value = False

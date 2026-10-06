@@ -1,7 +1,16 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
+import src.bot
 from src.bot import build_official_tracker_embed
+
+
+@pytest.fixture(autouse=True)
+def no_env_tracker_cutoff(monkeypatch):
+    # TRACKER_START_DATE from a local .env must not filter the fixed test dates.
+    monkeypatch.setattr(src.bot, "tracker_start_date", None)
 
 
 def test_tracker_uses_only_official_plays_and_settlement_time():

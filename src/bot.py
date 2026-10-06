@@ -17,6 +17,14 @@ from src.membership_access import MembershipRoleSync, WhopMembershipSync
 from src.member_stats import MemberStats
 from src.services.membership_service import MembershipService
 from src.services.official_play_service import OfficialPlayService
+from src.services.play_features_service import (
+    build_recap,
+    format_record,
+    play_features_service,
+    previous_month,
+    previous_week,
+    vault_leaderboard,
+)
 from src.services.supabase_service import supabase_service
 from src.services.team_ranking_service import TeamRankingService
 from src.services.play_service import PlayService
@@ -88,6 +96,8 @@ REACTION_RESULTS = {
     VOID_REACTION: "void",
     PARTIAL_REACTION: "partial",
 }
+# Regraded plays are still live and can be settled like open ones.
+SETTLEABLE_STATUSES = {"open", "regraded"}
 
 
 def build_play_embed(payload: dict) -> discord.Embed:
@@ -213,7 +223,7 @@ async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], ch
     settled_count = 0
 
     for play in plays:
-        if play.get("status") != "open" or not play.get("message_id"):
+        if play.get("status") not in SETTLEABLE_STATUSES or not play.get("message_id"):
             continue
         owner_id = discord_user_ids.get(str(play["user_id"]))
         if not owner_id or owner_id == "None":
@@ -232,7 +242,7 @@ async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], ch
         result = None
         for reaction in message.reactions:
             reaction_result = REACTION_RESULTS.get(str(reaction.emoji))
-            if reaction_result is None or reaction_result == "partial":
+            if reaction_result is None:
                 continue
             async for reaction_user in reaction.users():
                 if user_can_settle(reaction_user, owner_id, message.guild):
@@ -305,14 +315,16 @@ def build_official_tracker_embed(
         if not in_period(play, month_start):
             continue
         user_id = str(play["user_id"])
-        bucket = by_user.setdefault(user_id, {"wins": 0.0, "losses": 0.0, "win_count": 0, "loss_count": 0})
+        bucket = by_user.setdefault(user_id, {"wins": 0.0, "losses": 0.0, "win_count": 0, "loss_count": 0, "risked": 0.0})
         units = float(play["units"])
         if play.get("status") == "win":
             bucket["wins"] += signed(play)
             bucket["win_count"] += 1
+            bucket["risked"] += units
         elif play.get("status") == "loss":
             bucket["losses"] += units
             bucket["loss_count"] += 1
+            bucket["risked"] += units
     ranked = sorted(
         (item for item in by_user.items() if item[1]["win_count"] + item[1]["loss_count"]),
         key=lambda item: item[1]["wins"] - item[1]["losses"],
@@ -326,7 +338,8 @@ def build_official_tracker_embed(
         name = names.get(user_id, user_id)
         rate = data["win_count"] / total * 100 if total else 0
         net_units = data["wins"] - data["losses"]
-        breakdown.append(f"**{name}** · {data['win_count']}-{data['loss_count']}")
+        roi = net_units / data["risked"] * 100 if data["risked"] else 0
+        breakdown.append(f"**{name}** · {data['win_count']}-{data['loss_count']} · {net_units:+.2f}u · {roi:+.0f}% ROI")
         if index < 3:
             top_lines.append(f"{medals[index]} **{name}** — **{net_units:+g} units**\n{data['win_count']}-{data['loss_count']} record | {rate:.0f}% win rate")
 
@@ -436,8 +449,9 @@ async def hourly_tracker_update() -> None:
     try:
         reconciled = await refresh_tracker_embeds()
         logger.info("hourly_tracker_update_complete reconciled=%s", reconciled)
-    except Exception:
+    except Exception as exc:
         logger.exception("hourly_tracker_update_failed")
+        await send_staff_alert("tracker_update", f"Hourly tracker update failed: `{str(exc)[:1500]}`")
 
 
 @hourly_tracker_update.before_loop
@@ -534,6 +548,10 @@ async def on_ready():
         member_bet_vault.reconcile.start()
     if not hourly_tracker_update.is_running():
         hourly_tracker_update.start()
+    if not auto_settle_suggestions.is_running():
+        auto_settle_suggestions.start()
+    if not scheduled_recaps.is_running():
+        scheduled_recaps.start()
     if API_SPORTS_KEY:
         if not daily_nfl_data_sync.is_running():
             daily_nfl_data_sync.start()
@@ -566,9 +584,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         play = await asyncio.to_thread(official_play_service.get_play_for_message, payload.message_id)
         if not play:
             return
-        if play.get("status") != "open":
-            return
-        if result == "partial":
+        if play.get("status") not in SETTLEABLE_STATUSES:
             return
 
         channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
@@ -627,6 +643,10 @@ async def on_message(message: discord.Message):
     except Exception as exc:
         logger.exception("automatic_image_extract_failed message=%s", message.id)
         await message.channel.send(f"{message.author.mention}, I could not read that betting image: {exc}", delete_after=30)
+        await send_staff_alert(
+            "image_extract",
+            f"Image reading failed for {message.author.mention}'s post {message.jump_url}\n`{str(exc)[:1500]}`",
+        )
     await bot.process_commands(message)
 
 
@@ -674,6 +694,7 @@ async def record_modal_play(
     logger.info("play_webhook_complete interaction=%s message_id=%s", interaction.id, message.id)
     await asyncio.to_thread(official_play_service.attach_message_id, payload["play_id"], message.id)
     await send_confirmation_message(interaction, payload)
+    await announce_new_play(payload, interaction.user.display_name, message, message)
     logger.info("play_complete interaction=%s play_id=%s", interaction.id, payload["play_id"])
 
 
@@ -894,6 +915,13 @@ class ConfirmImageView(discord.ui.View):
             if interaction.message is not None:
                 await interaction.message.delete()
             self.stop()
+            tracked = message
+            if self.source_message_id and interaction.channel is not None:
+                try:
+                    tracked = await interaction.channel.fetch_message(self.source_message_id)
+                except discord.HTTPException:
+                    tracked = message
+            await announce_new_play(payload, interaction.user.display_name, message, tracked)
         except Exception as exc:
             logger.exception("image_play_confirm_failed interaction=%s", interaction.id)
             await interaction.followup.send(f"Could not record the play: {exc}", ephemeral=True)
@@ -952,6 +980,8 @@ class EditBetModal(discord.ui.Modal, title="Edit Recorded Bet"):
             self.stop()
         except (ValueError, TypeError) as exc:
             await interaction.response.send_message(f"Could not update bet: {exc}", ephemeral=True)
+            return
+        await refresh_play_card(interaction.guild, self.play_id)
 
 
 class EditBetView(discord.ui.View):
@@ -1279,22 +1309,37 @@ def is_official(user) -> bool:
     return not OFFICIAL_ROLE_IDS or any(role.id in OFFICIAL_ROLE_IDS for role in getattr(user, "roles", []))
 
 
+def can_manage_plays(user, guild: discord.Guild | None) -> bool:
+    return is_official(user) or user_can_settle(user, "", guild)
+
+
 PLAY_PICKER_PAGE_SIZE = 10
 REGRADE_LOOKBACK = timedelta(days=2)
+UNSETTLE_LOOKBACK = timedelta(days=7)
 SETTLE_RESULTS = (("win", "Win", discord.ButtonStyle.success), ("loss", "Loss", discord.ButtonStyle.danger),
                   ("void", "Void", discord.ButtonStyle.secondary), ("partial", "Partial", discord.ButtonStyle.primary))
+PICKER_MODES = {
+    "settle": ("Select an open play to settle", "Choose a play to settle", "There are no open plays to settle."),
+    "regrade": ("Select a play from the last 2 days to regrade", "Choose a play to regrade", "There are no plays from the last 2 days to regrade."),
+    "unsettle": ("Select a play settled in the last 7 days to reopen", "Choose a play to reopen", "There are no plays settled in the last 7 days."),
+    "edit": ("Select an open play to edit", "Choose a play to edit", "There are no open plays to edit."),
+}
 
 
 def load_play_page(mode: str, page: int) -> tuple[list[dict], bool]:
-    if mode == "settle":
-        return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, statuses=["open"])
-    return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, since=datetime.now(timezone.utc) - REGRADE_LOOKBACK)
+    now = datetime.now(timezone.utc)
+    if mode in {"settle", "edit"}:
+        return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, statuses=sorted(SETTLEABLE_STATUSES))
+    if mode == "unsettle":
+        return official_play_service.list_plays(
+            page, PLAY_PICKER_PAGE_SIZE, statuses=["win", "loss", "void", "partial"],
+            since=now - UNSETTLE_LOOKBACK, since_column="settled_at",
+        )
+    return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, since=now - REGRADE_LOOKBACK)
 
 
 def play_picker_content(mode: str, page: int) -> str:
-    if mode == "settle":
-        return f"Select an open play to settle (page {page + 1}):"
-    return f"Select a play from the last 2 days to regrade (page {page + 1}):"
+    return f"{PICKER_MODES[mode][0]} (page {page + 1}):"
 
 
 class OwnerOnlyView(discord.ui.View):
@@ -1317,7 +1362,7 @@ class PlayPickerView(OwnerOnlyView):
         self.plays = {str(play["id"]): play for play in plays}
 
         select = discord.ui.Select(
-            placeholder="Choose a play to settle" if mode == "settle" else "Choose a play to regrade",
+            placeholder=PICKER_MODES[mode][1],
             options=[discord.SelectOption(label=official_play_service.open_play_label(play), value=str(play["id"])) for play in plays],
         )
         select.callback = self.on_select
@@ -1340,10 +1385,58 @@ class PlayPickerView(OwnerOnlyView):
         if self.mode == "regrade":
             await interaction.response.send_modal(RegradeModal(play))
             return
+        if self.mode == "edit":
+            try:
+                legs = await asyncio.to_thread(official_play_service.get_play_legs, int(play["id"]))
+            except Exception as exc:
+                logger.exception("edit_picker_legs_failed play=%s", play["id"])
+                await interaction.response.send_message(f"Could not load play #{play['id']}: {exc}", ephemeral=True)
+                return
+            payload = {"units": play.get("units"), "team_name": play.get("team_name"), "leg_records": legs}
+            await interaction.response.send_modal(EditBetModal(int(play["id"]), self.owner_id, payload))
+            return
+        if self.mode == "unsettle":
+            await interaction.response.edit_message(
+                content=f"Reopen **{official_play_service.open_play_label(play)}**? Its result will be removed from the tracker.",
+                view=UnsettleConfirmView(self.owner_id, play, self.page),
+            )
+            return
         await interaction.response.edit_message(
             content=f"Settle **{official_play_service.open_play_label(play)}** as:",
             view=SettleResultView(self.owner_id, play, self.page),
         )
+
+
+class UnsettleConfirmView(OwnerOnlyView):
+    def __init__(self, owner_id: int, play: dict, page: int):
+        super().__init__(owner_id)
+        self.play = play
+        self.page = page
+
+    @discord.ui.button(label="Reopen play", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+        play_id = int(self.play["id"])
+        try:
+            outcome = await asyncio.to_thread(official_play_service.unsettle_play, play_id)
+        except ValueError as exc:
+            await interaction.edit_original_response(content=str(exc), view=None)
+            return
+        except Exception as exc:
+            logger.exception("unsettle_failed play=%s user=%s", play_id, interaction.user.id)
+            await interaction.edit_original_response(content=f"Could not reopen play #{play_id}: {exc}", view=None)
+            return
+        await refresh_play_card(interaction.guild, play_id)
+        logger.info("play_unsettled play=%s previous=%s user=%s", play_id, outcome["previous"], interaction.user.id)
+        await interaction.edit_original_response(
+            content=f"Play #{play_id} reopened (was **{outcome['previous'].upper()}**). Settle it again with /settle.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+        await show_play_picker(interaction, "unsettle", self.page, edit=True)
 
 
 class SettleResultView(OwnerOnlyView):
@@ -1368,7 +1461,7 @@ class SettleResultView(OwnerOnlyView):
         play_id = int(self.play["id"])
         try:
             current = await asyncio.to_thread(official_play_service._fetch_play, play_id)
-            if current.get("status") != "open":
+            if current.get("status") not in SETTLEABLE_STATUSES:
                 await interaction.edit_original_response(content=f"Play #{play_id} is already settled as **{current.get('status')}**.", view=None)
                 return
             outcome = await asyncio.to_thread(official_play_service.settle_play, play_id, result)
@@ -1408,6 +1501,7 @@ class RegradeModal(discord.ui.Modal):
             content=f"Play #{play_id} regraded to {outcome['legs_left']}-leg at {outcome['odds']:+d}.",
             view=None,
         )
+        await refresh_play_card(interaction.guild, play_id)
 
 
 async def show_play_picker(interaction: discord.Interaction, mode: str, page: int, edit: bool = False) -> None:
@@ -1420,7 +1514,7 @@ async def show_play_picker(interaction: discord.Interaction, mode: str, page: in
     if plays is None:
         content, view = "Could not load plays right now. Please retry.", None
     elif not plays and page == 0:
-        content = "There are no open plays to settle." if mode == "settle" else "There are no plays from the last 2 days to regrade."
+        content = PICKER_MODES[mode][2]
         view = None
     elif not plays:
         # The page emptied out (e.g. plays were settled meanwhile); fall back to the first page.
@@ -1453,6 +1547,420 @@ async def regrade_command(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     await show_play_picker(interaction, "regrade", 0)
+
+
+@bot.tree.command(name="unsettle", description="Reopen an official play settled in the last 7 days")
+async def unsettle_command(interaction: discord.Interaction):
+    if not is_official(interaction.user):
+        await interaction.response.send_message("Only officials can reopen plays.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    await show_play_picker(interaction, "unsettle", 0)
+
+
+@bot.tree.command(name="edit_play", description="Edit the units, team, or legs of an open official play")
+async def edit_play_command(interaction: discord.Interaction):
+    if not is_official(interaction.user):
+        await interaction.response.send_message("Only officials can edit plays.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    await show_play_picker(interaction, "edit", 0)
+
+
+# ---- Play cards, staff alerts, tails/follows, auto-settle, recaps -------------------------
+
+STAFF_ALERT_INTERVAL = timedelta(minutes=10)
+staff_alert_sent: dict[str, datetime] = {}
+background_tasks: set[asyncio.Task] = set()
+RECAP_TIME = datetime_time(hour=10, minute=0, tzinfo=TRACKER_TIMEZONE)
+RESULT_COLORS = {
+    "win": discord.Color.green(), "loss": discord.Color.red(),
+    "void": discord.Color.dark_grey(), "partial": discord.Color.orange(),
+}
+MEDALS = ["🥇", "🥈", "🥉"]
+
+
+async def send_staff_alert(key: str, text: str) -> None:
+    """Post a throttled heads-up for staff in the confirmation channel; never raises."""
+    now = datetime.now(timezone.utc)
+    last = staff_alert_sent.get(key)
+    if last is not None and now - last < STAFF_ALERT_INTERVAL:
+        return
+    staff_alert_sent[key] = now
+    try:
+        channel = await resolve_channel(CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID")
+        if channel is not None:
+            await channel.send(f"⚠️ {text}"[:2000], allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        logger.exception("staff_alert_failed key=%s", key)
+
+
+def build_play_card_embed(message: discord.Message, play: dict) -> discord.Embed:
+    embed = build_settled_play_embed(message, int(play["id"]), play["status"])
+    units, odds = float(play["units"]), int(play["odds"])
+    values = {
+        "units": f"{units:g}u",
+        "odds": f"{odds:+d}",
+        "to win": f"{float(play_service.calculate_to_win(units, odds)):g}u",
+    }
+    if play.get("play_text"):
+        values["selections"] = str(play["play_text"])[:1024]
+    for index, field in enumerate(embed.fields):
+        key = field.name.casefold()
+        if key in values:
+            embed.set_field_at(index, name=field.name, value=values[key], inline=field.inline)
+    return embed
+
+
+async def refresh_play_card(guild: discord.Guild | None, play_id: int) -> None:
+    """Re-render a bot-posted play card from the database (status, units, odds, to-win, selections)."""
+    try:
+        play = await asyncio.to_thread(official_play_service._fetch_play, int(play_id))
+        if not play.get("message_id"):
+            return
+        message = await fetch_guild_message(guild, int(play["message_id"]))
+        if message is None or bot.user is None or message.author.id != bot.user.id:
+            return
+        await message.edit(embed=build_play_card_embed(message, play))
+    except Exception:
+        logger.warning("play_card_refresh_failed play=%s", play_id, exc_info=True)
+
+
+def build_engagement_view(play_id: int, capper_user_id, capper_name: str, tails: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label=f"Tail ({tails})", emoji="🎯", style=discord.ButtonStyle.success, custom_id=f"pm:tail:{play_id}"))
+    if capper_user_id:
+        view.add_item(discord.ui.Button(
+            label=f"Follow {capper_name}"[:80], emoji="🔔", style=discord.ButtonStyle.secondary,
+            custom_id=f"pm:follow:{capper_user_id}",
+        ))
+    # Clicks are handled by on_play_feature_interaction; a stopped view is never stored, so it survives restarts.
+    view.stop()
+    return view
+
+
+async def notify_followers(payload: dict, capper_name: str, link: str) -> None:
+    try:
+        followers = await asyncio.to_thread(play_features_service.followers, int(payload["user_id"]))
+    except Exception:
+        logger.exception("followers_load_failed play=%s", payload.get("play_id"))
+        return
+    text = (
+        f"🔔 New play from **{capper_name}**: Play #{payload['play_id']} — "
+        f"{float(payload['units']):g}u at {int(payload['odds']):+d}\n{link}"
+    )
+    for follower_id in followers:
+        try:
+            user = bot.get_user(int(follower_id)) or await bot.fetch_user(int(follower_id))
+            await user.send(text)
+        except (discord.HTTPException, ValueError):
+            continue
+
+
+async def announce_new_play(payload: dict, capper_name: str, card: discord.Message, tracked: discord.Message | None) -> None:
+    """Attach the Tail/Follow bar under the tracked post and DM the capper's followers; never raises."""
+    play_id = int(payload["play_id"])
+    view = build_engagement_view(play_id, payload.get("user_id"), capper_name, 0)
+    tracked = tracked or card
+    try:
+        if tracked.id == card.id:
+            await card.edit(view=view)
+        else:
+            await tracked.reply("Tailing this play? Tap below.", view=view, mention_author=False)
+    except discord.HTTPException:
+        logger.warning("engagement_bar_failed play=%s", play_id, exc_info=True)
+    if payload.get("user_id"):
+        task = asyncio.create_task(notify_followers(payload, capper_name, tracked.jump_url))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+
+async def handle_tail_click(interaction: discord.Interaction, play_id: int) -> None:
+    await interaction.response.defer()
+    play = await asyncio.to_thread(official_play_service._fetch_play, play_id)
+    if play.get("status") not in SETTLEABLE_STATUSES:
+        await interaction.followup.send(f"Play #{play_id} is already settled — tails are closed.", ephemeral=True)
+        return
+    tailing, count = await asyncio.to_thread(play_features_service.toggle_tail, play_id, interaction.user.id)
+    if interaction.message is not None:
+        view = discord.ui.View.from_message(interaction.message, timeout=None)
+        for item in view.children:
+            if isinstance(item, discord.ui.Button) and item.custom_id == f"pm:tail:{play_id}":
+                item.label = f"Tail ({count})"
+        view.stop()
+        await interaction.edit_original_response(view=view)
+    message = (
+        f"🎯 You're tailing Play #{play_id}. It counts toward your /mystats once settled."
+        if tailing else f"Removed your tail on Play #{play_id}."
+    )
+    await interaction.followup.send(message, ephemeral=True)
+
+
+async def handle_follow_click(interaction: discord.Interaction, capper_user_id: int) -> None:
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    own_id = await asyncio.to_thread(play_features_service.user_id_for_discord, interaction.user.id)
+    if own_id == capper_user_id:
+        await interaction.followup.send("You can't follow yourself.", ephemeral=True)
+        return
+    following = await asyncio.to_thread(play_features_service.toggle_follow, capper_user_id, interaction.user.id)
+    await interaction.followup.send(
+        "🔔 Following. You'll get a DM when this capper posts a new play (make sure your DMs are open)."
+        if following else "Unfollowed. You won't get DMs for this capper anymore.",
+        ephemeral=True,
+    )
+
+
+def build_suggestion_view(play_id: int, result: str) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label=f"Confirm {result.upper()}", style=discord.ButtonStyle.success, custom_id=f"pm:as:{play_id}:{result}"))
+    view.add_item(discord.ui.Button(label="Dismiss", style=discord.ButtonStyle.secondary, custom_id=f"pm:asx:{play_id}"))
+    view.stop()
+    return view
+
+
+async def handle_suggestion_click(interaction: discord.Interaction, play_id: int, result: str | None) -> None:
+    if not can_manage_plays(interaction.user, interaction.guild):
+        await interaction.response.send_message("Only officials or moderators can act on suggestions.", ephemeral=True)
+        return
+    await interaction.response.defer()
+    embed = interaction.message.embeds[0] if interaction.message is not None and interaction.message.embeds else discord.Embed()
+    if result is None:
+        embed.color = discord.Color.dark_grey()
+        embed.set_footer(text=f"Dismissed by {interaction.user.display_name}")
+        await interaction.edit_original_response(embed=embed, view=None)
+        return
+    current = await asyncio.to_thread(official_play_service._fetch_play, play_id)
+    if current.get("status") not in SETTLEABLE_STATUSES:
+        embed.set_footer(text=f"Already settled as {str(current.get('status')).upper()}")
+        await interaction.edit_original_response(embed=embed, view=None)
+        return
+    await asyncio.to_thread(official_play_service.settle_play, play_id, result)
+    message = await fetch_guild_message(interaction.guild, int(current["message_id"])) if current.get("message_id") else None
+    await update_play_message(message, play_id, result)
+    embed.color = RESULT_COLORS.get(result, discord.Color.blurple())
+    embed.set_footer(text=f"Settled as {result.upper()} by {interaction.user.display_name}")
+    await interaction.edit_original_response(embed=embed, view=None)
+    logger.info("auto_settle_confirmed play=%s result=%s user=%s", play_id, result, interaction.user.id)
+
+
+@bot.listen("on_interaction")
+async def on_play_feature_interaction(interaction: discord.Interaction) -> None:
+    if interaction.type != discord.InteractionType.component:
+        return
+    custom_id = str((interaction.data or {}).get("custom_id") or "")
+    if not custom_id.startswith("pm:"):
+        return
+    parts = custom_id.split(":")
+    try:
+        if parts[1] == "tail":
+            await handle_tail_click(interaction, int(parts[2]))
+        elif parts[1] == "follow":
+            await handle_follow_click(interaction, int(parts[2]))
+        elif parts[1] == "as" and parts[3] in RESULT_COLORS:
+            await handle_suggestion_click(interaction, int(parts[2]), parts[3])
+        elif parts[1] == "asx":
+            await handle_suggestion_click(interaction, int(parts[2]), None)
+    except Exception:
+        logger.exception("play_feature_interaction_failed custom_id=%s user=%s", custom_id, interaction.user.id)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("Something went wrong. Please try again.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Something went wrong. Please try again.", ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
+def build_suggestion_embed(play: dict, suggestion: dict) -> discord.Embed:
+    result = suggestion["result"]
+    embed = discord.Embed(
+        title=f"🤖 Play #{play['id']} looks like a {result.upper()}",
+        description="\n".join(suggestion["notes"])[:4000] or "All legs graded from final scores.",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="Play", value=official_play_service.open_play_label(play), inline=False)
+    embed.set_footer(text="Suggestion from final scores — confirm to settle, or dismiss and settle manually.")
+    return embed
+
+
+@tasks.loop(minutes=15)
+async def auto_settle_suggestions() -> None:
+    try:
+        channel = await resolve_channel(CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID")
+        if channel is None:
+            return
+        candidates = await asyncio.to_thread(play_features_service.suggestion_candidates)
+        for play in candidates:
+            suggestion = await asyncio.to_thread(play_features_service.suggest, play)
+            if suggestion is None:
+                continue
+            await channel.send(embed=build_suggestion_embed(play, suggestion), view=build_suggestion_view(int(play["id"]), suggestion["result"]))
+            await asyncio.to_thread(play_features_service.mark_suggested, int(play["id"]))
+            logger.info("auto_settle_suggested play=%s result=%s", play["id"], suggestion["result"])
+    except Exception as exc:
+        logger.exception("auto_settle_suggestions_failed")
+        await send_staff_alert("auto_settle", f"Auto-settle suggestions failed: `{str(exc)[:1500]}`")
+
+
+@auto_settle_suggestions.before_loop
+async def before_auto_settle_suggestions() -> None:
+    await bot.wait_until_ready()
+
+
+def record_line(summary: dict) -> str:
+    return f"{format_record(summary)} · **{summary['net']:+.2f}u** · {summary['roi']:+.1f}% ROI"
+
+
+def clip_lines(lines: list[str], limit: int = 1024) -> str:
+    text = ""
+    for line in lines:
+        if len(text) + len(line) + 1 > limit:
+            break
+        text += line + "\n"
+    return text.strip() or "—"
+
+
+def build_recap_embed(period: str, now: datetime | None = None) -> discord.Embed:
+    """Build the weekly/monthly recap for the last completed period (blocking: run in a thread)."""
+    now = now or datetime.now(TRACKER_TIMEZONE)
+    start, end = previous_week(now) if period == "weekly" else previous_month(now)
+    plays, users, sports = play_features_service.history()
+    recap = build_recap(plays, users, sports, start, end)
+    last_day = end - timedelta(days=1)
+    label = (
+        f"{start.strftime('%b')} {start.day} – {last_day.strftime('%b')} {last_day.day}, {last_day.year}"
+        if period == "weekly" else f"{start.strftime('%B')} {start.year}"
+    )
+    embed = discord.Embed(title=f"📊 {period.title()} Recap", color=discord.Color.green())
+    if not recap["count"]:
+        embed.description = f"**{label}**\nNo settled plays this period."
+    else:
+        embed.description = f"**{label}**\n{recap['count']} settled plays · {record_line(recap['total'])}"
+        embed.add_field(name="🏆 Cappers", value=clip_lines([
+            f"{MEDALS[index] if index < 3 else f'{index + 1}.'} **{row['name']}** — {record_line(row)} · Streak {row['streak']}"
+            for index, row in enumerate(recap["cappers"])
+        ]), inline=False)
+        embed.add_field(name="🏟️ By Sport", value=clip_lines([f"**{row['sport']}** — {record_line(row)}" for row in recap["sports"]]), inline=False)
+        best = recap["best_play"]
+        if best:
+            embed.add_field(
+                name="⭐ Best Play",
+                value=f"Play #{best['id']} by **{best['name']}** — {best['units']:+.2f}u at {int(best['odds']):+d}",
+                inline=False,
+            )
+    if period == "monthly":
+        board = vault_leaderboard(play_features_service.vault_bets(), start, end, limit=5)
+        if board:
+            embed.add_field(name="🏦 Vault Leaders", value=clip_lines([
+                f"{MEDALS[index] if index < 3 else f'{index + 1}.'} **{row['name']}** — {record_line(row)}"
+                for index, row in enumerate(board)
+            ]), inline=False)
+    embed.set_footer(text="Eastern Time • Official plays count once per tracked post")
+    return embed
+
+
+async def post_recap(period: str) -> None:
+    channel = await resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
+    embed = await asyncio.to_thread(build_recap_embed, period)
+    await channel.send(embed=embed)
+    logger.info("recap_posted period=%s", period)
+
+
+@tasks.loop(time=RECAP_TIME)
+async def scheduled_recaps() -> None:
+    now = datetime.now(TRACKER_TIMEZONE)
+    for period, due in (("weekly", now.weekday() == 0), ("monthly", now.day == 1)):
+        if not due:
+            continue
+        try:
+            await post_recap(period)
+        except Exception as exc:
+            logger.exception("recap_failed period=%s", period)
+            await send_staff_alert(f"recap_{period}", f"The {period} recap failed: `{str(exc)[:1500]}`")
+
+
+@scheduled_recaps.before_loop
+async def before_scheduled_recaps() -> None:
+    await bot.wait_until_ready()
+
+
+@bot.tree.command(name="recap", description="Preview or post the last weekly/monthly recap")
+@discord.app_commands.describe(period="Which recap to build", post="Post it to the results channel instead of previewing")
+@discord.app_commands.choices(period=[
+    discord.app_commands.Choice(name="Weekly (last Mon–Sun)", value="weekly"),
+    discord.app_commands.Choice(name="Monthly (last month)", value="monthly"),
+])
+async def recap_command(interaction: discord.Interaction, period: discord.app_commands.Choice[str], post: bool = False):
+    if not can_manage_plays(interaction.user, interaction.guild):
+        await interaction.response.send_message("Only officials or moderators can run recaps.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if post:
+            await post_recap(period.value)
+            await interaction.followup.send(f"{period.value.title()} recap posted in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
+        else:
+            embed = await asyncio.to_thread(build_recap_embed, period.value)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as exc:
+        logger.exception("recap_command_failed period=%s", period.value)
+        await interaction.followup.send(f"Could not build the recap: {exc}", ephemeral=True)
+
+
+def build_mystats_embed(member: discord.abc.User, stats: dict) -> discord.Embed:
+    embed = discord.Embed(title=f"📈 Stats for {member.display_name}", color=discord.Color.blurple())
+    capper = stats["capper"]
+    if capper:
+        sports = ", ".join(f"{row['sport']} {row['net']:+.2f}u" for row in capper["sports"][:3])
+        embed.add_field(name="📣 Your Official Plays", value=(
+            f"This month: {record_line(capper['month'])}\n"
+            f"All-time: {record_line(capper['all_time'])}\n"
+            f"Streak: **{capper['streak']}**" + (f"\nTop sports: {sports}" if sports else "")
+        )[:1024], inline=False)
+    tails = stats["tails"]
+    tail_text = f"{record_line(tails)}\nOpen tails: {tails['open']}" if tails["count"] else "You haven't tailed any plays yet — tap 🎯 Tail under a play."
+    embed.add_field(name="🎯 Plays You Tailed (at the capper's units)", value=tail_text, inline=False)
+    vault = stats["vault"]
+    vault_text = (
+        f"This month: {record_line(vault['month'])}\nAll-time: {record_line(vault)}"
+        if vault["count"] else "No settled vault bets yet."
+    )
+    embed.add_field(name="🏦 Your Vault", value=vault_text, inline=False)
+    embed.set_footer(text="Eastern Time")
+    return embed
+
+
+@bot.tree.command(name="mystats", description="Your official play, tail, and vault records")
+async def mystats_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        stats = await asyncio.to_thread(play_features_service.personal_stats, interaction.user.id)
+    except Exception as exc:
+        logger.exception("mystats_failed user=%s", interaction.user.id)
+        await interaction.followup.send(f"Could not load your stats: {exc}", ephemeral=True)
+        return
+    await interaction.followup.send(embed=build_mystats_embed(interaction.user, stats), ephemeral=True)
+
+
+@bot.tree.command(name="vault_leaderboard", description="This month's top member vault records")
+async def vault_leaderboard_command(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    now = datetime.now(TRACKER_TIMEZONE)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    try:
+        bets = await asyncio.to_thread(play_features_service.vault_bets)
+    except Exception as exc:
+        logger.exception("vault_leaderboard_failed")
+        await interaction.followup.send(f"Could not load the leaderboard: {exc}", ephemeral=True)
+        return
+    board = vault_leaderboard(bets, month_start, now + timedelta(seconds=1), limit=10)
+    embed = discord.Embed(title=f"🏦 Vault Leaderboard — {now.strftime('%B')} {now.year}", color=discord.Color.gold())
+    embed.description = clip_lines([
+        f"{MEDALS[index] if index < 3 else f'{index + 1}.'} **{row['name']}** — {record_line(row)}"
+        for index, row in enumerate(board)
+    ], 4000) if board else "No settled vault bets this month yet."
+    embed.set_footer(text="Ranked by net units • Eastern Time")
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="rankings", description="Show the current team ranking summary")
 async def rankings_command(interaction: discord.Interaction):
@@ -1536,6 +2044,9 @@ async def summary_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="update_tracker", description="Refresh the Unit Summary and Top Playmakers embeds")
 async def update_tracker_command(interaction: discord.Interaction):
+    if not can_manage_plays(interaction.user, interaction.guild):
+        await interaction.response.send_message("Only officials or moderators can refresh the tracker.", ephemeral=True)
+        return
     try:
         await interaction.response.defer(ephemeral=True)
         if not RESULT_CHANNEL_ID:

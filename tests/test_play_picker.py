@@ -81,10 +81,17 @@ def test_load_play_page_scopes_settle_and_regrade(monkeypatch):
 
     bot_module.load_play_page("settle", 0)
     bot_module.load_play_page("regrade", 2)
+    bot_module.load_play_page("unsettle", 1)
+    bot_module.load_play_page("edit", 0)
 
-    assert calls[0] == ((0, 10), {"statuses": ["open"]})
+    assert calls[0] == ((0, 10), {"statuses": ["open", "regraded"]})
     assert calls[1][0] == (2, 10)
     assert abs(datetime.now(timezone.utc) - timedelta(days=2) - calls[1][1]["since"]) < timedelta(seconds=5)
+    assert calls[2][0] == (1, 10)
+    assert calls[2][1]["statuses"] == ["win", "loss", "void", "partial"]
+    assert calls[2][1]["since_column"] == "settled_at"
+    assert abs(datetime.now(timezone.utc) - timedelta(days=7) - calls[2][1]["since"]) < timedelta(seconds=5)
+    assert calls[3] == ((0, 10), {"statuses": ["open", "regraded"]})
 
 
 def test_picker_view_has_ten_options_and_paging_buttons():

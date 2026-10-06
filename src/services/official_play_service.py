@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
@@ -11,6 +12,9 @@ class OfficialPlayService:
     def __init__(self) -> None:
         self.play_service = PlayService()
         self.settlement_service = SettlementService()
+
+    def _ensure_sport(self, slug: str) -> int:
+        return play_features_service.ensure_sport(slug)
 
     def _ensure_default_sport(self) -> int:
         result = supabase_service.select("sports", "id", {"api_slug": "official"})
@@ -80,7 +84,16 @@ class OfficialPlayService:
             return {"error": str(exc)}
 
         to_win = self.play_service.calculate_to_win(float(units), odds_value)
-        sport_id = self._ensure_default_sport()
+        leg_rows = [
+            {
+                "selection": leg["selection"],
+                "odds": int(leg["odds"]),
+                "details": clean_leg_details(leg["details"] if isinstance(leg.get("details"), dict) else leg),
+            }
+            for leg in leg_records or []
+        ]
+        sport_slug = play_sport_slug(leg_rows)
+        sport_id = self._ensure_sport(sport_slug) if sport_slug else self._ensure_default_sport()
         user_id = self._ensure_user(discord_user_id, username)
 
         payload = {
@@ -99,19 +112,21 @@ class OfficialPlayService:
 
         inserted = supabase_service.insert("plays", payload)
         play_id = int(inserted.data[0]["id"])
-        if leg_records:
+        if leg_rows:
             supabase_service.insert("play_legs", [
                 {
                     "play_id": play_id,
                     "leg_number": index,
                     "selection": leg["selection"],
-                    "odds": int(leg["odds"]),
+                    "odds": leg["odds"],
+                    "details": leg["details"],
                 }
-                for index, leg in enumerate(leg_records, start=1)
+                for index, leg in enumerate(leg_rows, start=1)
             ])
 
         return {
             "play_id": play_id,
+            "user_id": user_id,
             "units": float(units),
             "legs": int(legs),
             "odds": odds_value,
@@ -143,15 +158,20 @@ class OfficialPlayService:
                 for index, (selection, leg_odds) in enumerate(zip(selections, odds), start=1)
             ),
         }, {"id": int(play_id)})
+        # Keep auto-settle game details for legs whose selection text did not change.
+        previous = {leg["selection"]: leg.get("details") for leg in self.get_play_legs(play_id)}
         supabase_service.delete("play_legs", {"play_id": int(play_id)})
         supabase_service.insert("play_legs", [
-            {"play_id": int(play_id), "leg_number": index, "selection": selection, "odds": int(leg_odds)}
+            {
+                "play_id": int(play_id), "leg_number": index, "selection": selection, "odds": int(leg_odds),
+                "details": previous.get(selection),
+            }
             for index, (selection, leg_odds) in enumerate(zip(selections, odds), start=1)
         ])
         return {"play_id": play_id, "units": float(units), "legs": len(selections), "odds": combined_odds, "team_name": team_name}
 
     def get_play_legs(self, play_id: int) -> list[dict]:
-        result = supabase_service.select("play_legs", "leg_number,selection,odds", {"play_id": int(play_id)})
+        result = supabase_service.select("play_legs", "*", {"play_id": int(play_id)})
         return sorted(result.data or [], key=lambda leg: leg["leg_number"])
 
     def get_play_for_message(self, message_id: int) -> dict | None:
@@ -176,6 +196,13 @@ class OfficialPlayService:
         )
         return {"result": result, "tally": tally}
 
+    def unsettle_play(self, play_id: int) -> dict:
+        play = self._fetch_play(play_id)
+        if play.get("status") not in {"win", "loss", "void", "partial"}:
+            raise ValueError(f"Play {play_id} is not settled.")
+        supabase_service.update("plays", {"status": "open", "settled_at": None, "settled_by": None}, {"id": int(play_id)})
+        return {"previous": play["status"]}
+
     def regrade_play(self, play_id: int, legs_left: int, odds: int, note: str = "") -> dict:
         validated = self.settlement_service.validate_regrade(legs_left, odds)
         supabase_service.update(
@@ -196,19 +223,20 @@ class OfficialPlayService:
         page_size: int = 10,
         statuses: list[str] | None = None,
         since: datetime | None = None,
+        since_column: str = "created_at",
     ) -> tuple[list[dict], bool]:
         """Return one newest-first page of plays and whether another page exists."""
         client = supabase_service._ensure_client()
         start = max(0, int(page)) * page_size
 
         def operation():
-            query = client.table("plays").select("id,user_id,units,legs,odds,status,team_name,play_text,created_at")
+            query = client.table("plays").select("id,user_id,units,legs,odds,status,team_name,play_text,message_id,created_at,settled_at")
             if statuses:
                 query = query.in_("status", statuses)
             if since is not None:
-                query = query.gte("created_at", since.isoformat())
+                query = query.gte(since_column, since.isoformat())
             # Fetch one extra row to learn whether a next page exists.
-            return query.order("created_at", desc=True).order("id", desc=True).range(start, start + page_size).execute()
+            return query.order(since_column, desc=True).order("id", desc=True).range(start, start + page_size).execute()
 
         rows = supabase_service._execute(operation).data or []
         plays, has_more = rows[:page_size], len(rows) > page_size

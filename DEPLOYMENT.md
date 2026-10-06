@@ -1,5 +1,37 @@
 # Proxmox deployment guide
 
+## Official play features (October 6, 2026)
+
+**Apply `supabase/migrations/20261006000000_official_play_features.sql` in the
+Supabase SQL Editor before pulling this code on the server.** The new code
+writes `play_legs.details` and reads `plays.auto_suggested_at`, `play_tails`,
+and `capper_follows`; without the migration, recording plays fails. Then run
+`cd /opt/discord-bot && git pull && systemctl restart discord-bot.service`.
+No new environment variables are required.
+
+- **Auto-settle suggestions:** every 15 minutes, open plays whose legs the image
+  reader identified (sport, teams, market, side, line) are graded against the
+  cached API-Sports final scores (requires `API_SPORTS_KEY`). Full-game
+  moneyline, spread, and total legs in NFL, college football, basketball,
+  baseball, and hockey are supported. A "looks like a WIN/LOSS/VOID" card with
+  Confirm/Dismiss buttons is posted to `CONFIRMATION_CHANNEL_ID`; nothing is
+  settled until an official or moderator confirms.
+- **Staff alerts:** image-reading failures, tracker refresh failures, recap
+  failures, and auto-settle errors post to `CONFIRMATION_CHANNEL_ID`, at most
+  once per 10 minutes per alert type.
+- **Recaps:** weekly (Mondays) and monthly (the 1st) at 10:00 AM Eastern in
+  `RESULT_CHANNEL_ID`, with capper records, sport breakdown, best play, and the
+  monthly vault leaders. `/recap` previews either recap privately or posts it.
+- **Tail/Follow buttons:** each new official play gets a 🎯 Tail / 🔔 Follow bar
+  under the tracked post. Followers receive a DM with a link to new plays.
+- **New commands:** `/unsettle` (reopen a play settled in the last 7 days),
+  `/edit_play` (edit an open play and refresh its card), `/mystats` (private:
+  official, tailed, and vault records), `/vault_leaderboard` (this month), and
+  `/recap`. `/settle` now includes regraded plays, the 🌓 reaction settles a
+  play as partial, regrades refresh the play card, the tracker breakdown shows
+  net units and ROI per capper, and `/update_tracker` is limited to officials and
+  moderators.
+
 ## Removing leftover trial test data
 
 Use `supabase/maintenance/cleanup_trial_test_data.sql` as the database owner in

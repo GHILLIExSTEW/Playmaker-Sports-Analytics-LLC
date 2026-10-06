@@ -84,7 +84,8 @@ create table if not exists public.plays (
   message_id text,
   created_at timestamptz not null default now(),
   settled_at timestamptz,
-  settled_by bigint references public.users(id) on delete set null
+  settled_by bigint references public.users(id) on delete set null,
+  auto_suggested_at timestamptz
 );
 
 create table if not exists public.play_draft_legs (
@@ -107,6 +108,7 @@ create table if not exists public.play_legs (
   leg_number integer not null check (leg_number >= 1),
   selection text not null,
   odds integer not null check (odds <> 0),
+  details jsonb,
   created_at timestamptz not null default now(),
   unique (play_id, leg_number)
 );
@@ -173,3 +175,18 @@ create index if not exists idx_team_daily_summary_date on public.team_daily_summ
 
 -- Upgrade existing installations with the free-text team label used for untracked plays.
 alter table public.plays add column if not exists team_name text;
+
+-- Member tails and capper follows (see supabase/migrations/20261006000000_official_play_features.sql).
+create table if not exists public.play_tails (
+  play_id bigint not null references public.plays(id) on delete cascade,
+  discord_user_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (play_id, discord_user_id)
+);
+
+create table if not exists public.capper_follows (
+  capper_user_id bigint not null references public.users(id) on delete cascade,
+  follower_discord_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (capper_user_id, follower_discord_id)
+);

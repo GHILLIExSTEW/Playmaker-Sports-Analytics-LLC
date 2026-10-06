@@ -20,7 +20,12 @@ class ImagePlayService:
         "Read this betting slip. Return JSON only with keys: units (number), "
         "team_name (string or null), and legs (array). Each legs item must have "
         "selection (string) and odds (American integer or decimal format like 1.44). Do not guess unreadable text; "
-        "explain uncertainty in the selection."
+        "explain uncertainty in the selection. When readable, each leg may also include: "
+        "sport (nfl, ncaa for American college football, basketball, baseball, hockey, football for soccer, mma, or other), "
+        "home_name and away_name (full team names), event_date (YYYY-MM-DD in America/New_York or null), "
+        "market (moneyline, spread, total, or other for props/futures), side (home, away, over, under, or null), "
+        "line (number or null), and scope (full_game, or partial for halves/quarters/periods/innings). "
+        "Use null for any of these you cannot read; never guess them."
     )
 
     def extract_play(self, image_url: str, message_text: str = "") -> dict[str, Any]:

@@ -16,6 +16,14 @@ logger = logging.getLogger("member_stats")
 SPORT_CHOICES = [app_commands.Choice(name=name, value=key) for key, name in SPORTS.items()]
 
 
+def is_stats_moderator(interaction) -> bool:
+    return (
+        GUILD_ID is not None and getattr(interaction, "guild_id", None) == GUILD_ID
+        and isinstance(interaction.user, discord.Member)
+        and any(role.id in LIVE_STATS_MOD_ROLE_IDS for role in interaction.user.roles)
+    )
+
+
 class MemberStats(commands.Cog):
     def __init__(self, membership=None, stats=None, player_stats=None, season_stats=None):
         self.membership = membership or MembershipService()
@@ -25,15 +33,11 @@ class MemberStats(commands.Cog):
 
     async def respond(self, interaction, mode, sport, team=None, opponent=None, refresh=False, *, game_id=None, player=None, league=None):
         await interaction.response.defer(ephemeral=True)
-        if not WHOP_MEMBERSHIP_SYNC_ENABLED:
+        moderator = is_stats_moderator(interaction)
+        if not moderator and not WHOP_MEMBERSHIP_SYNC_ENABLED:
             await interaction.followup.send("Membership verification is not enabled. Stats tools are unavailable.", ephemeral=True)
             return
         try:
-            moderator = (
-                GUILD_ID is not None and getattr(interaction, "guild_id", None) == GUILD_ID
-                and isinstance(interaction.user, discord.Member)
-                and any(role.id in LIVE_STATS_MOD_ROLE_IDS for role in interaction.user.roles)
-            )
             allowed = moderator or await asyncio.to_thread(self.membership.has_stats_access, interaction.user.id)
             if not allowed:
                 await interaction.followup.send("Stats tools require a verified paid membership, an eligible seven-day trial, or an explicit owner/moderator grant.", ephemeral=True)
@@ -113,7 +117,7 @@ class MemberStats(commands.Cog):
 
     @playerstats.autocomplete("league")
     async def league_suggestions(self, interaction: discord.Interaction, current: str):
-        if not interaction.guild_id or not WHOP_MEMBERSHIP_SYNC_ENABLED:
+        if not interaction.guild_id or not (WHOP_MEMBERSHIP_SYNC_ENABLED or is_stats_moderator(interaction)):
             return []
         sport = getattr(interaction.namespace, "sport", "")
         try:
@@ -125,7 +129,7 @@ class MemberStats(commands.Cog):
 
     @playerstats.autocomplete("player")
     async def player_suggestions(self, interaction: discord.Interaction, current: str):
-        if not interaction.guild_id or not WHOP_MEMBERSHIP_SYNC_ENABLED:
+        if not interaction.guild_id or not (WHOP_MEMBERSHIP_SYNC_ENABLED or is_stats_moderator(interaction)):
             return []
         sport = getattr(interaction.namespace, "sport", "")
         league = getattr(interaction.namespace, "league", "")
