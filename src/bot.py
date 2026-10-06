@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands, tasks
 from src.datetime_utils import parse_iso_datetime
 
-from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
+from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, ROOKIE_ROLE_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
 from src.member_bet_vault import MemberBetVault
 from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
@@ -1891,11 +1891,64 @@ def build_mystats_embed(member: discord.abc.User, stats: dict) -> discord.Embed:
     return embed
 
 
-SHARE_CHANNELS = {"free": ("FREE CHAT", FREE_CHAT_CHANNEL_ID), "vip": ("VIP CHAT", VIP_CHAT_CHANNEL_ID)}
+SHARE_CHANNELS = {
+    "free": ("FREE CHAT", FREE_CHAT_CHANNEL_ID, ROOKIE_ROLE_ID, "ROOKIE"),
+    "vip": ("VIP CHAT", VIP_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID, "HIGHROLLER"),
+}
+SHARE_WEBHOOK_NAME = "Playmaker Stats Share"
+share_webhooks: dict[int, discord.Webhook] = {}
 
 
-def has_vip_chat_access(user_id: int) -> bool:
-    return MembershipService().has_vault_access(user_id)
+async def has_vip_chat_access(member) -> bool:
+    # Whop assigns the HIGHROLLER role for paid and trial members; owner grants fall back to the paid ledger.
+    if HIGHROLLER_ROLE_ID and any(role.id == HIGHROLLER_ROLE_ID for role in getattr(member, "roles", [])):
+        return True
+    return await asyncio.to_thread(MembershipService().has_paid_access, member.id)
+
+
+def find_share_role(guild, role_id: int | None, role_name: str):
+    if guild is None:
+        return None
+    role = guild.get_role(role_id) if role_id else None
+    return role or next((role for role in guild.roles if role.name.lower() == role_name.lower()), None)
+
+
+async def get_share_webhook(channel) -> discord.Webhook:
+    cached = share_webhooks.get(channel.id)
+    if cached:
+        return cached
+    webhook = next(
+        (hook for hook in await channel.webhooks()
+         if hook.name == SHARE_WEBHOOK_NAME and hook.user and bot.user and hook.user.id == bot.user.id and hook.token),
+        None,
+    )
+    if webhook is None:
+        webhook = await channel.create_webhook(name=SHARE_WEBHOOK_NAME, reason="Members sharing /mystats")
+    share_webhooks[channel.id] = webhook
+    return webhook
+
+
+async def post_shared_stats(member, embed: discord.Embed, tier: str) -> discord.Message:
+    label, channel_id, role_id, role_name = SHARE_CHANNELS[tier]
+    channel = await resolve_channel(channel_id, label, required=True)
+    thread = channel if isinstance(channel, discord.Thread) else discord.utils.MISSING
+    webhook = await get_share_webhook(channel.parent if isinstance(channel, discord.Thread) else channel)
+    role = find_share_role(getattr(channel, "guild", None), role_id, role_name)
+    if role is None:
+        logger.warning("mystats_share_role_missing tier=%s role=%s", tier, role_id or role_name)
+    try:
+        return await webhook.send(
+            content=f"{role.mention} \U0001F4CA My stats" if role else "\U0001F4CA My stats",
+            embed=embed,
+            username=member.display_name,
+            avatar_url=member.display_avatar.url,
+            allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=[role] if role else False),
+            thread=thread,
+            wait=True,
+        )
+    except discord.NotFound:
+        share_webhooks.pop(webhook.channel_id, None)
+        raise
 
 
 class ShareStatsView(discord.ui.View):
@@ -1906,45 +1959,39 @@ class ShareStatsView(discord.ui.View):
         self.owner_id = owner_id
         self.embed = embed
         self.tier = tier
-        label, channel_id = SHARE_CHANNELS[tier]
+        label, channel_id, _, _ = SHARE_CHANNELS[tier]
         if channel_id:
             button = discord.ui.Button(label=f"Share to {label}", emoji="\U0001F4E3", style=discord.ButtonStyle.primary)
-            button.callback = self.make_callback(button, label, channel_id)
+            button.callback = self.make_callback(label)
             self.add_item(button)
 
-    def make_callback(self, button: discord.ui.Button, label: str, channel_id: int):
+    def make_callback(self, label: str):
         async def callback(interaction: discord.Interaction) -> None:
             if interaction.user.id != self.owner_id:
                 await interaction.response.send_message("Only the member who ran /mystats can share it.", ephemeral=True)
                 return
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.response.defer()
             if self.tier == "vip":
                 try:
-                    allowed = await asyncio.to_thread(has_vip_chat_access, interaction.user.id)
+                    allowed = await has_vip_chat_access(interaction.user)
                 except Exception:
                     logger.exception("mystats_share_access_failed user=%s", interaction.user.id)
                     await interaction.followup.send("Couldn't verify your membership right now. Please try again shortly.", ephemeral=True)
                     return
                 if not allowed:
-                    await interaction.followup.send("Sharing to VIP CHAT is for paid and trial members. Run /mystats again to share to FREE CHAT.", ephemeral=True)
+                    await interaction.followup.send("Sharing to VIP CHAT is for HIGHROLLER members. Run /mystats again to share to FREE CHAT.", ephemeral=True)
                     return
             try:
-                channel = await resolve_channel(channel_id, label, required=True)
-                await channel.send(
-                    content=f"{interaction.user.mention} shared their stats",
-                    embed=self.embed, allowed_mentions=discord.AllowedMentions.none(),
-                )
+                await post_shared_stats(interaction.user, self.embed, self.tier)
             except Exception:
-                logger.exception("mystats_share_failed user=%s channel=%s", interaction.user.id, channel_id)
+                logger.exception("mystats_share_failed user=%s tier=%s", interaction.user.id, self.tier)
                 await interaction.followup.send(f"Couldn't post to {label}. Please let a moderator know.", ephemeral=True)
                 return
-            button.disabled = True
-            button.label = f"Shared to {label}"
+            self.stop()
             try:
-                await interaction.edit_original_response(view=self)
+                await interaction.delete_original_response()
             except discord.HTTPException:
-                pass
-            await interaction.followup.send(f"\U0001F4E3 Posted your stats in <#{channel_id}>.", ephemeral=True)
+                logger.warning("mystats_share_cleanup_failed user=%s", interaction.user.id, exc_info=True)
         return callback
 
 
@@ -1959,7 +2006,7 @@ async def mystats_command(interaction: discord.Interaction):
         return
     embed = build_mystats_embed(interaction.user, stats)
     try:
-        vip = await asyncio.to_thread(has_vip_chat_access, interaction.user.id)
+        vip = await has_vip_chat_access(interaction.user)
     except Exception:
         logger.warning("mystats_membership_lookup_failed user=%s", interaction.user.id, exc_info=True)
         vip = False
