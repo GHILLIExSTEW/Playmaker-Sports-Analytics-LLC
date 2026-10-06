@@ -185,3 +185,35 @@ def test_highroller_role_from_whop_unlocks_vip_without_paid_ledger(monkeypatch):
 def test_share_role_defaults_match_server_roles():
     assert bot_module.HIGHROLLER_ROLE_ID == 1328120234749464739
     assert bot_module.ROOKIE_ROLE_ID == 1556484440396660757
+
+
+def test_tracker_counts_only_current_operators():
+    users = [{"id": 1, "discord_user_id": "100"}, {"id": 2, "discord_user_id": "200"}, {"id": 3, "discord_user_id": None}]
+    plays = [{"id": 10, "user_id": 1}, {"id": 11, "user_id": 2}, {"id": 12, "user_id": 3}]
+    assert [play["id"] for play in bot_module.operator_plays(plays, users, {100})] == [10]
+    assert bot_module.operator_plays(plays, users, None) == plays
+
+
+def test_only_operator_role_can_post_official_images():
+    assert bot_module.TRACKER_ROLE_ID == 1328120848992960543
+    operator = SimpleNamespace(roles=[SimpleNamespace(id=1328120848992960543)])
+    member = SimpleNamespace(roles=[SimpleNamespace(id=bot_module.HIGHROLLER_ROLE_ID)])
+    assert bot_module.is_tracked_operator(operator)
+    assert not bot_module.is_tracked_operator(member)
+
+
+def test_non_operator_image_is_not_recorded(monkeypatch):
+    extract = Mock()
+    monkeypatch.setattr(bot_module.image_play_service, "extract_play", extract)
+    monkeypatch.setattr(bot_module.bot, "process_commands", AsyncMock())
+    monkeypatch.setattr(bot_module, "testing_enabled", False)
+    image = SimpleNamespace(content_type="image/png", url="https://cdn/slip.png")
+    message = SimpleNamespace(
+        author=SimpleNamespace(bot=False, roles=[SimpleNamespace(id=bot_module.HIGHROLLER_ROLE_ID)]),
+        guild=object(), channel=SimpleNamespace(id=bot_module.IMAGE_INPUT_CHANNEL_ID, send=AsyncMock()),
+        attachments=[image], content="",
+    )
+    asyncio.run(bot_module.on_message(message))
+    extract.assert_not_called()
+    message.channel.send.assert_not_awaited()
+

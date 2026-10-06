@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands, tasks
 from src.datetime_utils import parse_iso_datetime
 
-from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, ROOKIE_ROLE_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
+from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, ROOKIE_ROLE_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_ROLE_ID, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
 from src.member_bet_vault import MemberBetVault
 from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
@@ -199,6 +199,37 @@ def fetch_official_tracker_rows() -> tuple[list[dict], list[dict]]:
         fetch("plays", "id,user_id,units,odds,status,message_id,created_at,settled_at"),
         fetch("users", "id,discord_user_id,display_name,username"),
     )
+
+
+def is_tracked_operator(member) -> bool:
+    return not TRACKER_ROLE_ID or any(role.id == TRACKER_ROLE_ID for role in getattr(member, "roles", []))
+
+
+async def tracked_operator_ids() -> set[int] | None:
+    """Discord IDs currently holding the tracker role, or None when the role can't be read."""
+    if not TRACKER_ROLE_ID:
+        return None
+    guild = bot.get_guild(GUILD_ID) if GUILD_ID else None
+    if guild is None:
+        logger.warning("tracker_role_guild_unavailable guild=%s", GUILD_ID)
+        return None
+    if not guild.chunked:
+        await guild.chunk()
+    role = guild.get_role(TRACKER_ROLE_ID)
+    if role is None:
+        logger.warning("tracker_role_missing role=%s", TRACKER_ROLE_ID)
+        return None
+    return {member.id for member in role.members}
+
+
+def operator_plays(plays: list[dict], users: list[dict], operator_ids: set[int] | None) -> list[dict]:
+    if operator_ids is None:
+        return plays
+    allowed = {
+        str(user["id"]) for user in users
+        if str(user.get("discord_user_id") or "").isdigit() and int(user["discord_user_id"]) in operator_ids
+    }
+    return [play for play in plays if str(play.get("user_id")) in allowed]
 
 
 def settlement_channel_settings() -> list[tuple[str, int | None]]:
@@ -424,7 +455,9 @@ async def refresh_tracker_embeds() -> int:
     if reconciled:
         plays, users = await asyncio.to_thread(fetch_official_tracker_rows)
 
-    tracker_embed, top_lines, breakdown = build_official_tracker_embed(plays, users)
+    tracker_embed, top_lines, breakdown = build_official_tracker_embed(
+        operator_plays(plays, users, await tracked_operator_ids()), users,
+    )
     tracker_channel = await resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
     tracker_image = render_tracker_image(
         tracker_embed.description or "",
@@ -628,7 +661,7 @@ async def on_message(message: discord.Message):
         return
 
     image = next((attachment for attachment in message.attachments if (attachment.content_type or "").startswith("image/")), None)
-    if image is None:
+    if image is None or not is_tracked_operator(message.author):
         await bot.process_commands(message)
         return
 
@@ -1780,11 +1813,12 @@ def clip_lines(lines: list[str], limit: int = 1024) -> str:
     return text.strip() or "—"
 
 
-def build_recap_embed(period: str, now: datetime | None = None) -> discord.Embed:
+def build_recap_embed(period: str, now: datetime | None = None, operator_ids: set[int] | None = None) -> discord.Embed:
     """Build the weekly/monthly recap for the last completed period (blocking: run in a thread)."""
     now = now or datetime.now(TRACKER_TIMEZONE)
     start, end = previous_week(now) if period == "weekly" else previous_month(now)
     plays, users, sports = play_features_service.history()
+    plays = operator_plays(plays, users, operator_ids)
     recap = build_recap(plays, users, sports, start, end)
     last_day = end - timedelta(days=1)
     label = (
@@ -1821,7 +1855,7 @@ def build_recap_embed(period: str, now: datetime | None = None) -> discord.Embed
 
 async def post_recap(period: str) -> None:
     channel = await resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
-    embed = await asyncio.to_thread(build_recap_embed, period)
+    embed = await asyncio.to_thread(build_recap_embed, period, None, await tracked_operator_ids())
     await channel.send(embed=embed)
     logger.info("recap_posted period=%s", period)
 
@@ -1860,7 +1894,7 @@ async def recap_command(interaction: discord.Interaction, period: discord.app_co
             await post_recap(period.value)
             await interaction.followup.send(f"{period.value.title()} recap posted in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
         else:
-            embed = await asyncio.to_thread(build_recap_embed, period.value)
+            embed = await asyncio.to_thread(build_recap_embed, period.value, None, await tracked_operator_ids())
             await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as exc:
         logger.exception("recap_command_failed period=%s", period.value)

@@ -9,6 +9,12 @@ without the migration, recording plays fails. Then run
 `cd /opt/discord-bot && git pull && systemctl restart discord-bot.service`.
 No new environment variables are required.
 
+- **Operators only on the tracker:** the unit tracker, Top Playmakers, and
+  weekly/monthly recaps count only plays from members who currently hold the
+  🧪 OPERATOR 🧪 role (`TRACKER_ROLE_ID`, default 1328120848992960543). Bet
+  slips posted in the official channel by anyone without that role are ignored.
+  If the role can't be read (guild not cached), the tracker falls back to all
+  plays and logs `tracker_role_*`.
 - **Auto-settle suggestions:** every 15 minutes, open plays whose legs the image
   reader identified (sport, teams, market, side, line) are graded against the
   cached API-Sports final scores (requires `API_SPORTS_KEY`). Full-game
