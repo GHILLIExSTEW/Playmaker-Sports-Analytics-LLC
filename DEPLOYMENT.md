@@ -15,7 +15,10 @@ No new environment variables are required.
   moneyline, spread, and total legs in NFL, college football, basketball,
   baseball, and hockey are supported. A "looks like a WIN/LOSS/VOID" card with
   Confirm/Dismiss buttons is posted to `CONFIRMATION_CHANNEL_ID`; nothing is
-  settled until an official or moderator confirms.
+  settled until an official or moderator confirms. To grade every outstanding
+  play at once (no 14-day limit), run `python scripts/settle_outstanding.py`
+  for a dry run and add `--apply` to settle; it writes the database only, so
+  the hourly tracker refresh picks up the results.
 - **Staff alerts:** image-reading failures, tracker refresh failures, recap
   failures, and auto-settle errors post to `CONFIRMATION_CHANNEL_ID`, at most
   once per 10 minutes per alert type.
