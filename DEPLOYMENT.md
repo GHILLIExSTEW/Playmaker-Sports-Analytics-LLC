@@ -32,7 +32,13 @@ No new environment variables are required.
   `RESULT_CHANNEL_ID`, with capper records, sport breakdown, best play, and the
   monthly vault leaders. `/recap` previews either recap privately or posts it.
 - **Tail button:** each new official play gets a 🎯 Tail button under the
-  tracked post. The bot never DMs members.
+  tracked post. When an operator's image slip is confirmed, the bot reposts it
+  in the official channel as one app message (play card with the operator's
+  name/avatar, their caption, the re-uploaded slip image, and the Tail button),
+  deletes the original, and tracks reactions/settlement on the repost. The bot
+  needs **Attach Files** and **Manage Messages** there; if the repost fails the
+  original stays and the Tail button is replied under it instead. The bot never
+  DMs members.
 - **Game picker:** `/gamestats` now takes sport → league → game → player, all
   chosen from lists (current and upcoming games from the schedule cache). No
   game, league, or player IDs are typed or shown; `/schedule` and `/results` no

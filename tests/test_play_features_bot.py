@@ -217,3 +217,34 @@ def test_non_operator_image_is_not_recorded(monkeypatch):
     extract.assert_not_called()
     message.channel.send.assert_not_awaited()
 
+def repost_payload():
+    return {"play_id": 7, "summary": "Capper play", "units": 2, "odds": 150, "to_win": 3}
+
+
+def test_repost_official_play_replaces_slip_with_one_tail_message():
+    file = SimpleNamespace(filename="slip.png")
+    image = SimpleNamespace(content_type="image/png", to_file=AsyncMock(return_value=file))
+    source = SimpleNamespace(content="Lock of the day", attachments=[image], delete=AsyncMock())
+    repost = SimpleNamespace(id=99)
+    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source), send=AsyncMock(return_value=repost))
+    operator = SimpleNamespace(display_name="Cap", display_avatar=SimpleNamespace(url="https://a/x.png"))
+
+    result = asyncio.run(bot_module.repost_official_play(channel, 5, repost_payload(), operator))
+
+    assert result is repost
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["file"] is file
+    assert kwargs["embed"].image.url == "attachment://slip.png"
+    assert kwargs["embed"].description == "Lock of the day"
+    assert kwargs["embed"].author.name == "Cap"
+    assert [item.custom_id for item in kwargs["view"].children] == ["pm:tail:7"]
+    source.delete.assert_awaited_once()
+
+
+def test_repost_official_play_falls_back_when_send_fails():
+    source = SimpleNamespace(content="", attachments=[], delete=AsyncMock())
+    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source), send=AsyncMock(side_effect=RuntimeError("no perms")))
+    operator = SimpleNamespace(display_name="Cap", display_avatar=SimpleNamespace(url="https://a/x.png"))
+
+    assert asyncio.run(bot_module.repost_official_play(channel, 5, repost_payload(), operator)) is None
+    source.delete.assert_not_awaited()

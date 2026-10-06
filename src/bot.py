@@ -940,20 +940,24 @@ class ConfirmImageView(discord.ui.View):
                 return
             payload["image_url"] = self.parsed.get("image_url")
             message = await publish_play_message(interaction, payload)
-            # Reactions are tracked on the player's original post in the official channel.
-            tracked_message_id = self.source_message_id or message.id
+            repost = None
+            if self.source_message_id and interaction.channel is not None:
+                repost = await repost_official_play(interaction.channel, self.source_message_id, payload, interaction.user)
+            # Reactions are tracked on the app repost, or on the operator's original post if reposting failed.
+            tracked_message_id = repost.id if repost else (self.source_message_id or message.id)
             await asyncio.to_thread(official_play_service.attach_message_id, payload["play_id"], tracked_message_id)
             await send_confirmation_message(interaction, payload)
             if interaction.message is not None:
                 await interaction.message.delete()
             self.stop()
-            tracked = message
-            if self.source_message_id and interaction.channel is not None:
-                try:
-                    tracked = await interaction.channel.fetch_message(self.source_message_id)
-                except discord.HTTPException:
-                    tracked = message
-            await announce_new_play(payload, interaction.user.display_name, message, tracked)
+            if repost is None:
+                tracked = message
+                if self.source_message_id and interaction.channel is not None:
+                    try:
+                        tracked = await interaction.channel.fetch_message(self.source_message_id)
+                    except discord.HTTPException:
+                        tracked = message
+                await announce_new_play(payload, interaction.user.display_name, message, tracked)
         except Exception as exc:
             logger.exception("image_play_confirm_failed interaction=%s", interaction.id)
             await interaction.followup.send(f"Could not record the play: {exc}", ephemeral=True)
@@ -1664,6 +1668,32 @@ def build_engagement_view(play_id: int, tails: int) -> discord.ui.View:
     # Clicks are handled by on_play_feature_interaction; a stopped view is never stored, so it survives restarts.
     view.stop()
     return view
+
+
+async def repost_official_play(channel, source_message_id: int, payload: dict, operator) -> discord.Message | None:
+    """Replace the operator's slip with one app message (card + slip image + Tail button); never raises."""
+    try:
+        source = await channel.fetch_message(int(source_message_id))
+        image = next((item for item in source.attachments if (item.content_type or "").startswith("image/")), None)
+        embed = build_play_embed(payload)
+        if source.content.strip():
+            embed.description = source.content.strip()[:4000]
+        embed.set_author(name=operator.display_name, icon_url=operator.display_avatar.url)
+        kwargs = {}
+        if image is not None:
+            # Re-upload first: the original attachment URL dies with the deleted message.
+            file = await image.to_file()
+            embed.set_image(url=f"attachment://{file.filename}")
+            kwargs["file"] = file
+        repost = await channel.send(embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs)
+    except Exception:
+        logger.warning("official_repost_failed play=%s source=%s", payload.get("play_id"), source_message_id, exc_info=True)
+        return None
+    try:
+        await source.delete()
+    except discord.HTTPException:
+        logger.warning("official_source_delete_failed play=%s source=%s", payload.get("play_id"), source_message_id, exc_info=True)
+    return repost
 
 
 async def announce_new_play(payload: dict, capper_name: str, card: discord.Message, tracked: discord.Message | None) -> None:
