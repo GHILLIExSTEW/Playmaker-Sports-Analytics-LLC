@@ -1908,7 +1908,7 @@ class ShareStatsView(discord.ui.View):
         self.tier = tier
         label, channel_id = SHARE_CHANNELS[tier]
         if channel_id:
-            button = discord.ui.Button(label=f"Share to {label}", emoji="??", style=discord.ButtonStyle.primary)
+            button = discord.ui.Button(label=f"Share to {label}", emoji="\U0001F4E3", style=discord.ButtonStyle.primary)
             button.callback = self.make_callback(button, label, channel_id)
             self.add_item(button)
 
@@ -1944,7 +1944,7 @@ class ShareStatsView(discord.ui.View):
                 await interaction.edit_original_response(view=self)
             except discord.HTTPException:
                 pass
-            await interaction.followup.send(f"?? Posted your stats in <#{channel_id}>.", ephemeral=True)
+            await interaction.followup.send(f"\U0001F4E3 Posted your stats in <#{channel_id}>.", ephemeral=True)
         return callback
 
 

@@ -118,6 +118,7 @@ def test_share_view_offers_one_chat_per_tier(monkeypatch):
     free, _ = share_view(monkeypatch, "free")
     assert [item.label for item in vip.children] == ["Share to VIP CHAT"]
     assert [item.label for item in free.children] == ["Share to FREE CHAT"]
+    assert str(vip.children[0].emoji) == "\U0001F4E3"
 
 
 def test_paid_or_trial_member_publishes_to_vip_once_without_pinging(monkeypatch):
