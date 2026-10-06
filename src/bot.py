@@ -261,7 +261,7 @@ def build_official_tracker_embed(
     users: list[dict],
     now: datetime | None = None,
     cutoff: date | None = None,
-) -> tuple[discord.Embed, list[str]]:
+) -> tuple[discord.Embed, list[str], str]:
     timezone_name = TRACKER_TIMEZONE.key
     now = now or datetime.now(ZoneInfo(timezone_name))
     if now.tzinfo is None:
@@ -319,13 +319,16 @@ def build_official_tracker_embed(
         reverse=True,
     )
     top_lines = []
+    breakdown = []
     medals = ["🥇", "🥈", "🥉"]
-    for index, (user_id, data) in enumerate(ranked[:3]):
+    for index, (user_id, data) in enumerate(ranked):
         total = data["win_count"] + data["loss_count"]
         name = names.get(user_id, user_id)
         rate = data["win_count"] / total * 100 if total else 0
         net_units = data["wins"] - data["losses"]
-        top_lines.append(f"{medals[index]} **{name}** — **{net_units:+g} units**\n{data['win_count']}-{data['loss_count']} record | {rate:.0f}% win rate")
+        breakdown.append(f"**{name}** · {data['win_count']}-{data['loss_count']}")
+        if index < 3:
+            top_lines.append(f"{medals[index]} **{name}** — **{net_units:+g} units**\n{data['win_count']}-{data['loss_count']} record | {rate:.0f}% win rate")
 
     report_date = f"{today.strftime('%B')} {today.day}, {today.year}"
     embed = discord.Embed(title="Playmaker Picks | Unit Summary", description=f"Results for **{report_date}**", color=discord.Color.green())
@@ -346,7 +349,8 @@ def build_official_tracker_embed(
         inline=True,
     )
     embed.set_footer(text="Auto-updates hourly • Eastern Time")
-    return embed, top_lines
+    # The breakdown is drawn only on the tracker image, not in the embed text.
+    return embed, top_lines, "\n\n".join(breakdown)
 
 
 async def update_or_post_tracker_embed(channel, embed: discord.Embed, image: BytesIO | None = None) -> None:
@@ -408,11 +412,12 @@ async def refresh_tracker_embeds() -> int:
     if reconciled:
         plays, users = await asyncio.to_thread(fetch_official_tracker_rows)
 
-    tracker_embed, top_lines = build_official_tracker_embed(plays, users)
+    tracker_embed, top_lines, breakdown = build_official_tracker_embed(plays, users)
     tracker_channel = await resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
     tracker_image = render_tracker_image(
         tracker_embed.description or "",
-        [(field.name, field.value) for field in tracker_embed.fields],
+        [(field.name, field.value) for field in tracker_embed.fields]
+        + [("🏆 Monthly Playmaker Breakdown", breakdown or "No settled plays yet.")],
         tracker_embed.footer.text or "",
     )
     await update_or_post_tracker_embed(tracker_channel, tracker_embed, tracker_image)
