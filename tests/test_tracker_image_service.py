@@ -14,21 +14,20 @@ def test_decorative_display_names_render_as_readable_text():
     assert _plain_text("José") == "José"
 
 
-def test_tracker_image_has_transparency_and_contains_a_breakdown_section():
+def test_tracker_image_has_transparency_and_only_summary_cards():
     image_data = render_tracker_image(
         "Results for September 27, 2026",
         [
             ("⏳ Pending Bets", "2 bets"),
             ("📅 Monthly Units", "+8u"),
             ("🗓️ Yearly Units", "+21u"),
-            ("🏆 Playmaker Breakdown", "**Capper** · 4-1 · +3u · 80%\n\n**Another** · 2-2 · +1u · 50%"),
         ],
         "Auto-updates hourly • Eastern Time",
     )
 
     rendered = Image.open(BytesIO(image_data.getvalue()))
     alpha = rendered.getchannel("A")
-    assert rendered.size[0] == 1200
+    assert rendered.size == (1200, 480)
     assert alpha.getpixel((0, 0)) < 255
     assert alpha.getextrema()[1] == 255
 

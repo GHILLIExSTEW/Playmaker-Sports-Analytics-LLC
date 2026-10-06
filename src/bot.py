@@ -319,16 +319,13 @@ def build_official_tracker_embed(
         reverse=True,
     )
     top_lines = []
-    breakdown = []
     medals = ["🥇", "🥈", "🥉"]
-    for index, (user_id, data) in enumerate(ranked):
+    for index, (user_id, data) in enumerate(ranked[:3]):
         total = data["win_count"] + data["loss_count"]
         name = names.get(user_id, user_id)
         rate = data["win_count"] / total * 100 if total else 0
         net_units = data["wins"] - data["losses"]
-        breakdown.append(f"**{name}** · {data['win_count']}-{data['loss_count']}")
-        if index < 3:
-            top_lines.append(f"{medals[index]} **{name}** — **{net_units:+g} units**\n{data['win_count']}-{data['loss_count']} record | {rate:.0f}% win rate")
+        top_lines.append(f"{medals[index]} **{name}** — **{net_units:+g} units**\n{data['win_count']}-{data['loss_count']} record | {rate:.0f}% win rate")
 
     report_date = f"{today.strftime('%B')} {today.day}, {today.year}"
     embed = discord.Embed(title="Playmaker Picks | Unit Summary", description=f"Results for **{report_date}**", color=discord.Color.green())
@@ -347,11 +344,6 @@ def build_official_tracker_embed(
         name="🗓️ Yearly Units",
         value=f"{net([play for play in settled if in_period(play, year_start)]):+g}u",
         inline=True,
-    )
-    embed.add_field(
-        name="🏆 Monthly Playmaker Breakdown",
-        value="\n\n".join(breakdown)[:1024] or "No settled plays yet.",
-        inline=False,
     )
     embed.set_footer(text="Auto-updates hourly • Eastern Time")
     return embed, top_lines
