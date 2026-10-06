@@ -1278,11 +1278,39 @@ async def tracker_start_command(interaction: discord.Interaction, date_value: st
     logger.info("tracker_start_date_set value=%s user=%s", parsed.isoformat(), interaction.user.id)
 
 
+async def open_play_autocomplete(interaction: discord.Interaction, current: str) -> list[discord.app_commands.Choice[str]]:
+    if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
+        return []
+    try:
+        # Discord drops autocomplete responses that take longer than three seconds.
+        plays = await asyncio.wait_for(asyncio.to_thread(official_play_service.list_open_plays, current or ""), timeout=2.5)
+    except Exception:
+        logger.exception("open_play_autocomplete_failed user=%s", interaction.user.id)
+        return []
+    return [
+        discord.app_commands.Choice(name=official_play_service.open_play_label(play), value=str(play["id"]))
+        for play in plays
+    ]
+
+
+SETTLE_RESULT_CHOICES = [
+    discord.app_commands.Choice(name=label, value=value)
+    for value, label in (("win", "Win"), ("loss", "Loss"), ("void", "Void"), ("partial", "Partial"), ("regraded", "Regraded"))
+]
+
+
 @bot.tree.command(name="settle", description="Settle an official play")
-@discord.app_commands.describe(play_id="The play record ID", result="win, loss, void, partial, or regraded")
+@discord.app_commands.describe(play_id="Pick an open play (type to search by ID, capper, team or selection)", result="Result to record")
+@discord.app_commands.choices(result=SETTLE_RESULT_CHOICES)
+@discord.app_commands.autocomplete(play_id=open_play_autocomplete)
 async def settle_command(interaction: discord.Interaction, play_id: str, result: str):
     if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in interaction.user.roles):
         await interaction.response.send_message("Only officials can settle plays.", ephemeral=True)
+        return
+
+    play_id = play_id.strip().lstrip("#")
+    if not play_id.isdigit():
+        await interaction.response.send_message("Pick a play from the dropdown list.", ephemeral=True)
         return
 
     try:
@@ -1298,10 +1326,16 @@ async def settle_command(interaction: discord.Interaction, play_id: str, result:
 
 
 @bot.tree.command(name="regrade", description="Regrade an official play")
-@discord.app_commands.describe(play_id="The play record ID", legs_left="Remaining legs", odds="New American odds", note="Optional regrade notes")
+@discord.app_commands.describe(play_id="Pick an open play (type to search by ID, capper, team or selection)", legs_left="Remaining legs", odds="New American odds", note="Optional regrade notes")
+@discord.app_commands.autocomplete(play_id=open_play_autocomplete)
 async def regrade_command(interaction: discord.Interaction, play_id: str, legs_left: int, odds: str, note: str | None = None):
     if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in interaction.user.roles):
         await interaction.response.send_message("Only officials can regrade plays.", ephemeral=True)
+        return
+
+    play_id = play_id.strip().lstrip("#")
+    if not play_id.isdigit():
+        await interaction.response.send_message("Pick a play from the dropdown list.", ephemeral=True)
         return
 
     try:
