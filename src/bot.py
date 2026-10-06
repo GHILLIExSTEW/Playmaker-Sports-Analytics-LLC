@@ -1278,77 +1278,184 @@ async def tracker_start_command(interaction: discord.Interaction, date_value: st
     logger.info("tracker_start_date_set value=%s user=%s", parsed.isoformat(), interaction.user.id)
 
 
-async def open_play_autocomplete(interaction: discord.Interaction, current: str) -> list[discord.app_commands.Choice[str]]:
-    if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
-        return []
+def is_official(user) -> bool:
+    return not OFFICIAL_ROLE_IDS or any(role.id in OFFICIAL_ROLE_IDS for role in getattr(user, "roles", []))
+
+
+PLAY_PICKER_PAGE_SIZE = 10
+REGRADE_LOOKBACK = timedelta(days=2)
+SETTLE_RESULTS = (("win", "Win", discord.ButtonStyle.success), ("loss", "Loss", discord.ButtonStyle.danger),
+                  ("void", "Void", discord.ButtonStyle.secondary), ("partial", "Partial", discord.ButtonStyle.primary))
+
+
+def load_play_page(mode: str, page: int) -> tuple[list[dict], bool]:
+    if mode == "settle":
+        return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, statuses=["open"])
+    return official_play_service.list_plays(page, PLAY_PICKER_PAGE_SIZE, since=datetime.now(timezone.utc) - REGRADE_LOOKBACK)
+
+
+def play_picker_content(mode: str, page: int) -> str:
+    if mode == "settle":
+        return f"Select an open play to settle (page {page + 1}):"
+    return f"Select a play from the last 2 days to regrade (page {page + 1}):"
+
+
+class OwnerOnlyView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This menu belongs to someone else.", ephemeral=True)
+            return False
+        return True
+
+
+class PlayPickerView(OwnerOnlyView):
+    def __init__(self, owner_id: int, mode: str, plays: list[dict], page: int, has_more: bool):
+        super().__init__(owner_id)
+        self.mode = mode
+        self.page = page
+        self.plays = {str(play["id"]): play for play in plays}
+
+        select = discord.ui.Select(
+            placeholder="Choose a play to settle" if mode == "settle" else "Choose a play to regrade",
+            options=[discord.SelectOption(label=official_play_service.open_play_label(play), value=str(play["id"])) for play in plays],
+        )
+        select.callback = self.on_select
+        self.select = select
+        self.add_item(select)
+
+        previous_button = discord.ui.Button(label="◀ Newer", style=discord.ButtonStyle.secondary, disabled=page == 0)
+        previous_button.callback = lambda interaction: self.change_page(interaction, page - 1)
+        self.add_item(previous_button)
+        next_button = discord.ui.Button(label="Older ▶", style=discord.ButtonStyle.secondary, disabled=not has_more)
+        next_button.callback = lambda interaction: self.change_page(interaction, page + 1)
+        self.add_item(next_button)
+
+    async def change_page(self, interaction: discord.Interaction, page: int) -> None:
+        await interaction.response.defer()
+        await show_play_picker(interaction, self.mode, max(0, page), edit=True)
+
+    async def on_select(self, interaction: discord.Interaction) -> None:
+        play = self.plays[self.select.values[0]]
+        if self.mode == "regrade":
+            await interaction.response.send_modal(RegradeModal(play))
+            return
+        await interaction.response.edit_message(
+            content=f"Settle **{official_play_service.open_play_label(play)}** as:",
+            view=SettleResultView(self.owner_id, play, self.page),
+        )
+
+
+class SettleResultView(OwnerOnlyView):
+    def __init__(self, owner_id: int, play: dict, page: int):
+        super().__init__(owner_id)
+        self.play = play
+        self.page = page
+        for value, label, style in SETTLE_RESULTS:
+            button = discord.ui.Button(label=label, style=style)
+            button.callback = lambda interaction, result=value: self.settle(interaction, result)
+            self.add_item(button)
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
+        back_button.callback = self.back
+        self.add_item(back_button)
+
+    async def back(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        await show_play_picker(interaction, "settle", self.page, edit=True)
+
+    async def settle(self, interaction: discord.Interaction, result: str) -> None:
+        await interaction.response.defer()
+        play_id = int(self.play["id"])
+        try:
+            current = await asyncio.to_thread(official_play_service._fetch_play, play_id)
+            if current.get("status") != "open":
+                await interaction.edit_original_response(content=f"Play #{play_id} is already settled as **{current.get('status')}**.", view=None)
+                return
+            outcome = await asyncio.to_thread(official_play_service.settle_play, play_id, result)
+            message = await fetch_guild_message(interaction.guild, int(current["message_id"])) if current.get("message_id") else None
+            await update_play_message(message, play_id, outcome["result"])
+        except Exception as exc:
+            logger.exception("settle_picker_failed play=%s user=%s", play_id, interaction.user.id)
+            await interaction.edit_original_response(content=f"Could not settle play #{play_id}: {exc}", view=None)
+            return
+        await interaction.edit_original_response(content=f"Play #{play_id} settled as **{result.upper()}**.", view=None)
+
+
+class RegradeModal(discord.ui.Modal):
+    def __init__(self, play: dict):
+        super().__init__(title=f"Regrade Play #{play['id']}")
+        self.play = play
+        try:
+            odds_default = f"{int(play.get('odds')):+d}"
+        except (TypeError, ValueError):
+            odds_default = ""
+        self.legs_left = discord.ui.TextInput(label="Legs left", default=str(play.get("legs") or ""), max_length=3)
+        self.odds = discord.ui.TextInput(label="New American odds", default=odds_default, max_length=8)
+        self.note = discord.ui.TextInput(label="Note (optional)", style=discord.TextStyle.paragraph, required=False, max_length=500)
+        for item in (self.legs_left, self.odds, self.note):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        play_id = int(self.play["id"])
+        try:
+            outcome = await asyncio.to_thread(
+                official_play_service.regrade_play, play_id, self.legs_left.value.strip(), self.odds.value.strip(), self.note.value.strip()
+            )
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await interaction.response.edit_message(
+            content=f"Play #{play_id} regraded to {outcome['legs_left']}-leg at {outcome['odds']:+d}.",
+            view=None,
+        )
+
+
+async def show_play_picker(interaction: discord.Interaction, mode: str, page: int, edit: bool = False) -> None:
     try:
-        # Discord drops autocomplete responses that take longer than three seconds.
-        plays = await asyncio.wait_for(asyncio.to_thread(official_play_service.list_open_plays, current or ""), timeout=2.5)
+        plays, has_more = await asyncio.to_thread(load_play_page, mode, page)
     except Exception:
-        logger.exception("open_play_autocomplete_failed user=%s", interaction.user.id)
-        return []
-    return [
-        discord.app_commands.Choice(name=official_play_service.open_play_label(play), value=str(play["id"]))
-        for play in plays
-    ]
+        logger.exception("play_picker_load_failed mode=%s user=%s", mode, interaction.user.id)
+        plays, has_more = None, False
+
+    if plays is None:
+        content, view = "Could not load plays right now. Please retry.", None
+    elif not plays and page == 0:
+        content = "There are no open plays to settle." if mode == "settle" else "There are no plays from the last 2 days to regrade."
+        view = None
+    elif not plays:
+        # The page emptied out (e.g. plays were settled meanwhile); fall back to the first page.
+        await show_play_picker(interaction, mode, 0, edit=edit)
+        return
+    else:
+        content, view = play_picker_content(mode, page), PlayPickerView(interaction.user.id, mode, plays, page, has_more)
+
+    if edit:
+        await interaction.edit_original_response(content=content, view=view)
+    elif view is not None:
+        await interaction.followup.send(content, view=view, ephemeral=True)
+    else:
+        await interaction.followup.send(content, ephemeral=True)
 
 
-SETTLE_RESULT_CHOICES = [
-    discord.app_commands.Choice(name=label, value=value)
-    for value, label in (("win", "Win"), ("loss", "Loss"), ("void", "Void"), ("partial", "Partial"), ("regraded", "Regraded"))
-]
-
-
-@bot.tree.command(name="settle", description="Settle an official play")
-@discord.app_commands.describe(play_id="Pick an open play (type to search by ID, capper, team or selection)", result="Result to record")
-@discord.app_commands.choices(result=SETTLE_RESULT_CHOICES)
-@discord.app_commands.autocomplete(play_id=open_play_autocomplete)
-async def settle_command(interaction: discord.Interaction, play_id: str, result: str):
-    if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in interaction.user.roles):
+@bot.tree.command(name="settle", description="Settle an official play from a list of open plays")
+async def settle_command(interaction: discord.Interaction):
+    if not is_official(interaction.user):
         await interaction.response.send_message("Only officials can settle plays.", ephemeral=True)
         return
-
-    play_id = play_id.strip().lstrip("#")
-    if not play_id.isdigit():
-        await interaction.response.send_message("Pick a play from the dropdown list.", ephemeral=True)
-        return
-
-    try:
-        outcome = official_play_service.settle_play(int(play_id), result)
-    except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-
-    play_record = await asyncio.to_thread(official_play_service._fetch_play, int(play_id))
-    message = await fetch_guild_message(interaction.guild, int(play_record["message_id"])) if play_record.get("message_id") else None
-    await update_play_message(message, int(play_id), outcome["result"])
-    await interaction.response.send_message(f"Play #{play_id} updated.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    await show_play_picker(interaction, "settle", 0)
 
 
-@bot.tree.command(name="regrade", description="Regrade an official play")
-@discord.app_commands.describe(play_id="Pick an open play (type to search by ID, capper, team or selection)", legs_left="Remaining legs", odds="New American odds", note="Optional regrade notes")
-@discord.app_commands.autocomplete(play_id=open_play_autocomplete)
-async def regrade_command(interaction: discord.Interaction, play_id: str, legs_left: int, odds: str, note: str | None = None):
-    if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in interaction.user.roles):
+@bot.tree.command(name="regrade", description="Regrade an official play from the last 2 days")
+async def regrade_command(interaction: discord.Interaction):
+    if not is_official(interaction.user):
         await interaction.response.send_message("Only officials can regrade plays.", ephemeral=True)
         return
-
-    play_id = play_id.strip().lstrip("#")
-    if not play_id.isdigit():
-        await interaction.response.send_message("Pick a play from the dropdown list.", ephemeral=True)
-        return
-
-    try:
-        outcome = official_play_service.regrade_play(int(play_id), legs_left, odds, note or "")
-    except ValueError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-
-    await interaction.response.send_message(
-        f"Play {play_id} regraded to {outcome['legs_left']}-leg at {outcome['odds']}.",
-        ephemeral=True,
-    )
-
+    await interaction.response.defer(ephemeral=True)
+    await show_play_picker(interaction, "regrade", 0)
 
 @bot.tree.command(name="rankings", description="Show the current team ranking summary")
 async def rankings_command(interaction: discord.Interaction):

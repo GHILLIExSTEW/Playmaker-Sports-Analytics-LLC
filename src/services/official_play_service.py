@@ -190,11 +190,28 @@ class OfficialPlayService:
         )
         return {"result": "regraded", **validated}
 
-    def list_open_plays(self, search: str = "", limit: int = 25) -> list[dict]:
+    def list_plays(
+        self,
+        page: int = 0,
+        page_size: int = 10,
+        statuses: list[str] | None = None,
+        since: datetime | None = None,
+    ) -> tuple[list[dict], bool]:
+        """Return one newest-first page of plays and whether another page exists."""
         client = supabase_service._ensure_client()
-        plays = supabase_service._execute(lambda: client.table("plays").select(
-            "id,user_id,units,legs,odds,team_name,play_text,created_at"
-        ).eq("status", "open").order("created_at", desc=True).limit(200).execute()).data or []
+        start = max(0, int(page)) * page_size
+
+        def operation():
+            query = client.table("plays").select("id,user_id,units,legs,odds,status,team_name,play_text,created_at")
+            if statuses:
+                query = query.in_("status", statuses)
+            if since is not None:
+                query = query.gte("created_at", since.isoformat())
+            # Fetch one extra row to learn whether a next page exists.
+            return query.order("created_at", desc=True).order("id", desc=True).range(start, start + page_size).execute()
+
+        rows = supabase_service._execute(operation).data or []
+        plays, has_more = rows[:page_size], len(rows) > page_size
 
         user_ids = sorted({play["user_id"] for play in plays if play.get("user_id") is not None})
         names = {}
@@ -203,18 +220,9 @@ class OfficialPlayService:
                 "id,display_name,username"
             ).in_("id", user_ids).execute()).data or []
             names = {user["id"]: user.get("display_name") or user.get("username") or "" for user in users}
-
-        needle = search.strip().lstrip("#").casefold()
-        matches = []
         for play in plays:
             play["user_name"] = names.get(play.get("user_id"), "")
-            haystack = " ".join(str(play.get(key) or "") for key in ("id", "user_name", "team_name", "play_text")).casefold()
-            if needle and needle not in haystack:
-                continue
-            matches.append(play)
-            if len(matches) >= limit:
-                break
-        return matches
+        return plays, has_more
 
     @staticmethod
     def open_play_label(play: dict) -> str:
@@ -223,6 +231,8 @@ class OfficialPlayService:
         except (TypeError, ValueError):
             odds = str(play.get("odds") or "?")
         parts = [f"#{play['id']}"]
+        if play.get("status") and play["status"] != "open":
+            parts[0] += f" [{str(play['status']).upper()}]"
         if play.get("user_name"):
             parts.append(str(play["user_name"]))
         parts.append(f"{float(play.get('units') or 0):g}u {play.get('legs') or '?'}-leg {odds}")
