@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import src.bot as bot_module
 
@@ -84,3 +85,65 @@ def test_mystats_embed_sections():
         "vault": {**summary, "count": 0, "month": summary},
     })
     assert [field.name for field in empty.fields][0].startswith("🎯")
+
+
+class ShareInteraction:
+    def __init__(self, user_id=42):
+        self.user = SimpleNamespace(id=user_id, mention=f"<@{user_id}>")
+        self.response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock())
+        self.followup = SimpleNamespace(send=AsyncMock())
+        self.edit_original_response = AsyncMock()
+
+
+def share_view(monkeypatch, tier="vip", allowed=True):
+    channel = SimpleNamespace(send=AsyncMock())
+
+    async def resolve(channel_id, name, required=False):
+        channel.id = channel_id
+        return channel
+
+    monkeypatch.setattr(bot_module, "resolve_channel", resolve)
+    membership = Mock()
+    membership.has_vault_access.return_value = allowed
+    monkeypatch.setattr(bot_module, "MembershipService", lambda: membership)
+
+    async def build():
+        return bot_module.ShareStatsView(42, bot_module.discord.Embed(title="Stats"), tier)
+
+    return asyncio.run(build()), channel
+
+
+def test_share_view_offers_one_chat_per_tier(monkeypatch):
+    vip, _ = share_view(monkeypatch, "vip")
+    free, _ = share_view(monkeypatch, "free")
+    assert [item.label for item in vip.children] == ["Share to VIP CHAT"]
+    assert [item.label for item in free.children] == ["Share to FREE CHAT"]
+
+
+def test_paid_or_trial_member_publishes_to_vip_once_without_pinging(monkeypatch):
+    view, channel = share_view(monkeypatch, "vip")
+    button = view.children[0]
+    asyncio.run(button.callback(ShareInteraction()))
+    assert channel.id == bot_module.VIP_CHAT_CHANNEL_ID == 1328136977463378051
+    kwargs = channel.send.call_args.kwargs
+    assert kwargs["embed"].title == "Stats" and "<@42>" in kwargs["content"]
+    assert kwargs["allowed_mentions"].users is False
+    assert button.disabled and button.label == "Shared to VIP CHAT"
+
+
+def test_free_member_publishes_to_free_chat_without_membership_check(monkeypatch):
+    view, channel = share_view(monkeypatch, "free", allowed=False)
+    asyncio.run(view.children[0].callback(ShareInteraction()))
+    assert channel.id == bot_module.FREE_CHAT_CHANNEL_ID == 1556482816974389290
+    channel.send.assert_awaited_once()
+
+
+def test_share_rejects_other_users_and_lapsed_vip(monkeypatch):
+    view, channel = share_view(monkeypatch, "vip", allowed=False)
+    stranger = ShareInteraction(user_id=7)
+    asyncio.run(view.children[0].callback(stranger))
+    assert "Only the member" in stranger.response.send_message.call_args.args[0]
+    owner = ShareInteraction()
+    asyncio.run(view.children[0].callback(owner))
+    assert "paid and trial members" in owner.followup.send.call_args.args[0]
+    channel.send.assert_not_awaited()

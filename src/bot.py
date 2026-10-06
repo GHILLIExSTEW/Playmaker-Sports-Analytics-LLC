@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands, tasks
 from src.datetime_utils import parse_iso_datetime
 
-from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, GUILD_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VOID_REACTION, WIN_REACTION
+from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
 from src.member_bet_vault import MemberBetVault
 from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
@@ -1891,6 +1891,63 @@ def build_mystats_embed(member: discord.abc.User, stats: dict) -> discord.Embed:
     return embed
 
 
+SHARE_CHANNELS = {"free": ("FREE CHAT", FREE_CHAT_CHANNEL_ID), "vip": ("VIP CHAT", VIP_CHAT_CHANNEL_ID)}
+
+
+def has_vip_chat_access(user_id: int) -> bool:
+    return MembershipService().has_vault_access(user_id)
+
+
+class ShareStatsView(discord.ui.View):
+    """Lets a member publish their private /mystats card once: paid/trial to VIP, everyone else to FREE."""
+
+    def __init__(self, owner_id: int, embed: discord.Embed, tier: str):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.embed = embed
+        self.tier = tier
+        label, channel_id = SHARE_CHANNELS[tier]
+        if channel_id:
+            button = discord.ui.Button(label=f"Share to {label}", emoji="??", style=discord.ButtonStyle.primary)
+            button.callback = self.make_callback(button, label, channel_id)
+            self.add_item(button)
+
+    def make_callback(self, button: discord.ui.Button, label: str, channel_id: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            if interaction.user.id != self.owner_id:
+                await interaction.response.send_message("Only the member who ran /mystats can share it.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            if self.tier == "vip":
+                try:
+                    allowed = await asyncio.to_thread(has_vip_chat_access, interaction.user.id)
+                except Exception:
+                    logger.exception("mystats_share_access_failed user=%s", interaction.user.id)
+                    await interaction.followup.send("Couldn't verify your membership right now. Please try again shortly.", ephemeral=True)
+                    return
+                if not allowed:
+                    await interaction.followup.send("Sharing to VIP CHAT is for paid and trial members. Run /mystats again to share to FREE CHAT.", ephemeral=True)
+                    return
+            try:
+                channel = await resolve_channel(channel_id, label, required=True)
+                await channel.send(
+                    content=f"{interaction.user.mention} shared their stats",
+                    embed=self.embed, allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except Exception:
+                logger.exception("mystats_share_failed user=%s channel=%s", interaction.user.id, channel_id)
+                await interaction.followup.send(f"Couldn't post to {label}. Please let a moderator know.", ephemeral=True)
+                return
+            button.disabled = True
+            button.label = f"Shared to {label}"
+            try:
+                await interaction.edit_original_response(view=self)
+            except discord.HTTPException:
+                pass
+            await interaction.followup.send(f"?? Posted your stats in <#{channel_id}>.", ephemeral=True)
+        return callback
+
+
 @bot.tree.command(name="mystats", description="Your official play, tail, and vault records")
 async def mystats_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -1900,7 +1957,17 @@ async def mystats_command(interaction: discord.Interaction):
         logger.exception("mystats_failed user=%s", interaction.user.id)
         await interaction.followup.send(f"Could not load your stats: {exc}", ephemeral=True)
         return
-    await interaction.followup.send(embed=build_mystats_embed(interaction.user, stats), ephemeral=True)
+    embed = build_mystats_embed(interaction.user, stats)
+    try:
+        vip = await asyncio.to_thread(has_vip_chat_access, interaction.user.id)
+    except Exception:
+        logger.warning("mystats_membership_lookup_failed user=%s", interaction.user.id, exc_info=True)
+        vip = False
+    view = ShareStatsView(interaction.user.id, embed, "vip" if vip else "free")
+    if view.children:
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    else:
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="vault_leaderboard", description="This month's top member vault records")

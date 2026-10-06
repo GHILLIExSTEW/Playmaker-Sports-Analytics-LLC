@@ -32,7 +32,10 @@ No new environment variables are required.
   channel as an @mention that deletes itself after 60 seconds instead of a DM.
 - **New commands:** `/unsettle` (reopen a play settled in the last 7 days),
   `/edit_play` (edit an open play and refresh its card), `/mystats` (private:
-  official, tailed, and vault records), `/vault_leaderboard` (this month), and
+  official, tailed, and vault records; paid and trial members get a "Share to
+  VIP CHAT" button, everyone else gets "Share to FREE CHAT", each posting the
+  card once, with VIP access rechecked on click; override the channels with
+  `FREE_CHAT_CHANNEL_ID` / `VIP_CHAT_CHANNEL_ID`), `/vault_leaderboard` (this month), and
   `/recap`. `/settle` now includes regraded plays, the 🌓 reaction settles a
   play as partial, regrades refresh the play card, the tracker breakdown shows
   net units and ROI per capper, and `/update_tracker` is limited to officials and
