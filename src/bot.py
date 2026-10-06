@@ -1626,41 +1626,18 @@ async def refresh_play_card(guild: discord.Guild | None, play_id: int) -> None:
         logger.warning("play_card_refresh_failed play=%s", play_id, exc_info=True)
 
 
-def build_engagement_view(play_id: int, capper_user_id, capper_name: str, tails: int) -> discord.ui.View:
+def build_engagement_view(play_id: int, tails: int) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Button(label=f"Tail ({tails})", emoji="🎯", style=discord.ButtonStyle.success, custom_id=f"pm:tail:{play_id}"))
-    if capper_user_id:
-        view.add_item(discord.ui.Button(
-            label=f"Follow {capper_name}"[:80], emoji="🔔", style=discord.ButtonStyle.secondary,
-            custom_id=f"pm:follow:{capper_user_id}",
-        ))
     # Clicks are handled by on_play_feature_interaction; a stopped view is never stored, so it survives restarts.
     view.stop()
     return view
 
 
-async def notify_followers(payload: dict, capper_name: str, link: str) -> None:
-    try:
-        followers = await asyncio.to_thread(play_features_service.followers, int(payload["user_id"]))
-    except Exception:
-        logger.exception("followers_load_failed play=%s", payload.get("play_id"))
-        return
-    text = (
-        f"🔔 New play from **{capper_name}**: Play #{payload['play_id']} — "
-        f"{float(payload['units']):g}u at {int(payload['odds']):+d}\n{link}"
-    )
-    for follower_id in followers:
-        try:
-            user = bot.get_user(int(follower_id)) or await bot.fetch_user(int(follower_id))
-            await user.send(text)
-        except (discord.HTTPException, ValueError):
-            continue
-
-
 async def announce_new_play(payload: dict, capper_name: str, card: discord.Message, tracked: discord.Message | None) -> None:
-    """Attach the Tail/Follow bar under the tracked post and DM the capper's followers; never raises."""
+    """Attach the Tail bar under the tracked post; never raises."""
     play_id = int(payload["play_id"])
-    view = build_engagement_view(play_id, payload.get("user_id"), capper_name, 0)
+    view = build_engagement_view(play_id, 0)
     tracked = tracked or card
     try:
         if tracked.id == card.id:
@@ -1669,10 +1646,6 @@ async def announce_new_play(payload: dict, capper_name: str, card: discord.Messa
             await tracked.reply("Tailing this play? Tap below.", view=view, mention_author=False)
     except discord.HTTPException:
         logger.warning("engagement_bar_failed play=%s", play_id, exc_info=True)
-    if payload.get("user_id"):
-        task = asyncio.create_task(notify_followers(payload, capper_name, tracked.jump_url))
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
 
 
 async def handle_tail_click(interaction: discord.Interaction, play_id: int) -> None:
@@ -1696,18 +1669,6 @@ async def handle_tail_click(interaction: discord.Interaction, play_id: int) -> N
     await interaction.followup.send(message, ephemeral=True)
 
 
-async def handle_follow_click(interaction: discord.Interaction, capper_user_id: int) -> None:
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    own_id = await asyncio.to_thread(play_features_service.user_id_for_discord, interaction.user.id)
-    if own_id == capper_user_id:
-        await interaction.followup.send("You can't follow yourself.", ephemeral=True)
-        return
-    following = await asyncio.to_thread(play_features_service.toggle_follow, capper_user_id, interaction.user.id)
-    await interaction.followup.send(
-        "🔔 Following. You'll get a DM when this capper posts a new play (make sure your DMs are open)."
-        if following else "Unfollowed. You won't get DMs for this capper anymore.",
-        ephemeral=True,
-    )
 
 
 def build_suggestion_view(play_id: int, result: str) -> discord.ui.View:
@@ -1755,7 +1716,7 @@ async def on_play_feature_interaction(interaction: discord.Interaction) -> None:
         if parts[1] == "tail":
             await handle_tail_click(interaction, int(parts[2]))
         elif parts[1] == "follow":
-            await handle_follow_click(interaction, int(parts[2]))
+            await interaction.response.send_message("Follow alerts have been retired.", ephemeral=True)
         elif parts[1] == "as" and parts[3] in RESULT_COLORS:
             await handle_suggestion_click(interaction, int(parts[2]), parts[3])
         elif parts[1] == "asx":

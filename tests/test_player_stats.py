@@ -271,10 +271,11 @@ def test_unknown_basketball_team_is_explicit_data_error():
         athlete_records("basketball", bad, 21561, game)
 
 
-def test_omitting_player_lists_available_names_and_ids_without_provider_call():
+def test_omitting_player_lists_available_names_without_ids_or_provider_call():
     target, _, api = service()
     report = target.report("nfl", 21561)[1]
-    assert "Deshaun Watson - ID 609" in report and "1 of 1" in report
+    assert "Deshaun Watson - Cleveland Browns" in report and "1 of 1" in report
+    assert "609" not in report and "21561" not in report
     api._request.assert_not_called()
 
 
@@ -311,6 +312,68 @@ def test_actual_soccer_zero_id_retains_named_stats_without_inventing_identifier(
     payload[0]["players"][0]["player"] = {"id": 0, "name": "Ana Beatriz Gomes Lopes"}
     target, _, _ = service(payload=payload, sport="football")
     report = target.report("football", 21561, "Gomes")[1]
-    assert "minutes: 90" in report and "provider returned ID 0; name-only lookup" in report
-    assert "Provider returned ID 0; search by name" in target.report("football", 21561)[1]
+    assert "minutes: 90" in report and "ID 0" not in report
+    assert "Ana Beatriz Gomes Lopes" in target.report("football", 21561)[1]
     assert "No matching" in target.report("football", 21561, "0")[1]
+
+
+def window_service(rows, sport="nfl"):
+    query = Mock()
+    for method in ("select", "eq", "gte", "lte", "order", "limit"):
+        getattr(query, method).return_value = query
+    query.execute.return_value = SimpleNamespace(data=rows)
+    database = Mock()
+    database._ensure_client.return_value.table.return_value = query
+    return PlayerStatsService(database, clock=lambda: NOW, api=Mock(), multi_api=Mock()), query
+
+
+def test_game_picker_lists_league_games_live_then_upcoming_without_ids():
+    rows = [
+        {"game_id": 1, "league_id": 1, "kickoff_at": "2026-10-02T22:00:00Z", "status_short": "Q2",
+         "home_team_name": "Cleveland Browns", "away_team_name": "Pittsburgh Steelers"},
+        {"game_id": 2, "league_id": 1, "kickoff_at": "2026-10-04T17:00:00Z", "status_short": "NS",
+         "home_team_name": "Buffalo Bills", "away_team_name": "Miami Dolphins"},
+    ]
+    target, query = window_service(rows)
+    games = target.games("nfl", "1")
+    assert [game["id"] for game in games] == [1, 2]
+    assert games[0]["label"] == "Pittsburgh Steelers @ Cleveland Browns \u00b7 Live"
+    assert games[1]["label"] == "Miami Dolphins @ Buffalo Bills \u00b7 Sun Oct 4 1:00 PM ET"
+    assert ("league_id", 1) in [call.args for call in query.eq.call_args_list]
+    assert [game["id"] for game in target.games("nfl", "1", "bills")] == [2]
+    assert target.games("nfl", "") == []
+    assert target.leagues("nfl") == [{"league_id": "1", "name": "NFL"}]
+
+
+def test_event_league_picker_uses_cached_league_names():
+    rows = [
+        {"event_id": "5", "league_id": "12", "league_name": "NBA", "start_at": "2026-10-03T23:00:00Z",
+         "status_code": "NS", "home_name": "Lakers", "away_name": "Celtics"},
+        {"event_id": "6", "league_id": "12", "league_name": "NBA", "start_at": "2026-10-04T23:00:00Z",
+         "status_code": "NS", "home_name": "Knicks", "away_name": "Heat"},
+    ]
+    target, query = window_service(rows, "basketball")
+    assert target.leagues("basketball", "nb") == [{"league_id": "12", "name": "NBA"}]
+    assert ("sport_slug", "basketball") in [call.args for call in query.eq.call_args_list]
+
+
+def test_gamestats_autocomplete_shows_games_and_players_without_ids():
+    stats = Mock()
+    stats.games.return_value = [{"id": 21561, "label": "Pittsburgh Steelers @ Cleveland Browns \u00b7 Live"}]
+    stats.players.return_value = [{"name": "Deshaun Watson", "team": "Cleveland Browns"}]
+    target = interaction()
+    target.guild_id = 1
+    target.namespace = SimpleNamespace(sport="nfl", league="1", game="21561")
+    cog = MemberStats(player_stats=stats)
+    with patch("src.member_stats.WHOP_MEMBERSHIP_SYNC_ENABLED", True):
+        games = asyncio.run(cog.game_suggestions(target, ""))
+        players = asyncio.run(cog.game_player_suggestions(target, "Wat"))
+    stats.games.assert_called_once_with("nfl", "1", "")
+    stats.players.assert_called_once_with("nfl", 21561, "Wat")
+    assert games[0].value == "21561" and "21561" not in games[0].name
+    assert players[0].name == "Deshaun Watson - Cleveland Browns" and players[0].value == "Deshaun Watson"
+
+
+def test_player_picker_lists_snapshot_names():
+    target, _, _ = service()
+    assert target.players("nfl", 21561, "wat") == [{"name": "Deshaun Watson", "team": "Cleveland Browns"}]

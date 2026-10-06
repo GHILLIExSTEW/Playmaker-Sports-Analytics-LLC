@@ -17,6 +17,7 @@ from src.services.play_service import PlayService
 from src.services.membership_service import MembershipService
 
 logger = logging.getLogger("member_bet_vault")
+NOTICE_SECONDS = 60
 
 
 def can_moderate(user) -> bool:
@@ -302,11 +303,15 @@ class MemberBetVault:
         self.ingest_slots = asyncio.Semaphore(2)
         self.view = VaultCardView(self)
 
-    async def dm(self, user, text: str) -> None:
+    async def notify(self, message, text: str) -> None:
+        # Members are never DMed; notices go in-channel and clean themselves up.
         try:
-            await user.send(text, allowed_mentions=discord.AllowedMentions.none())
+            await message.channel.send(
+                f"{message.author.mention} {text}", delete_after=NOTICE_SECONDS,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=[message.author]),
+            )
         except discord.HTTPException:
-            logger.warning("member_vault_dm_failed user=%s channel=%s", user.id, self.channel_id, exc_info=True)
+            logger.warning("member_vault_notice_failed user=%s channel=%s", message.author.id, self.channel_id, exc_info=True)
 
     async def delete(self, message) -> bool:
         try:
@@ -316,7 +321,7 @@ class MemberBetVault:
             return True
         except discord.HTTPException:
             logger.exception("member_vault_delete_failed message=%s channel=%s", message.id, self.channel_id)
-            await self.dm(message.author, "I could not remove your original submission. It may still be visible. Please delete it and contact a moderator.")
+            await self.notify(message, "I could not remove your original submission. It may still be visible. Please delete it and contact a moderator.")
             return False
 
     async def handle_message(self, message) -> None:
@@ -327,16 +332,16 @@ class MemberBetVault:
         except Exception:
             logger.exception("member_vault_membership_lookup_failed user=%s", message.author.id)
             await self.delete(message)
-            await self.dm(message.author, "I could not verify your membership access. Your submission was not accepted. Please try again later or contact support.")
+            await self.notify(message, "I could not verify your membership access. Your submission was not accepted. Please try again later or contact support.")
             return
         if not eligible:
             await self.delete(message)
-            await self.dm(message.author, "Member Vault submissions require current verified paid access, an eligible seven-day trial, or an explicit owner grant. Your submission was not accepted. Link your Discord account in Whop and contact support if access is missing.")
+            await self.notify(message, "Member Vault submissions require current verified paid access, an eligible seven-day trial, or an explicit owner grant. Your submission was not accepted. Link your Discord account in Whop and contact support if access is missing.")
             return
         photos = [attachment for attachment in message.attachments if accepted_photo(attachment)]
         if len(photos) != 1:
             deleted = await self.delete(message)
-            await self.dm(message.author, (
+            await self.notify(message, (
                 f"Your message in <#{self.channel_id}> was removed." if deleted else "Your message could not be removed."
             ) + " Attach exactly one static JPEG, PNG, or WebP bet-slip photo, up to 10 MB. Text-only messages, image links, GIFs, and PDFs are not accepted. Units can go in the caption.")
             return
@@ -346,28 +351,28 @@ class MemberBetVault:
                 photo = await asyncio.to_thread(sanitize_photo, photo)
             except ValueError as exc:
                 await self.delete(message)
-                await self.dm(message.author, f"Your photo was rejected: {exc} Please resubmit a readable bet-slip photo.")
+                await self.notify(message, f"Your photo was rejected: {exc} Please resubmit a readable bet-slip photo.")
                 return
             except discord.HTTPException:
                 logger.exception("member_photo_download_failed message=%s", message.id)
                 await self.delete(message)
-                await self.dm(message.author, "I could not download your photo. The submission was not recorded. Please try again.")
+                await self.notify(message, "I could not download your photo. The submission was not recorded. Please try again.")
                 return
             try:
                 async with self.lock:
                     if not await asyncio.to_thread(self.membership.has_vault_access, message.author.id):
                         await self.delete(message)
-                        await self.dm(message.author, "Your membership access expired before the submission completed. This ticket was not accepted.")
+                        await self.notify(message, "Your membership access expired before the submission completed. This ticket was not accepted.")
                         return
                     row = await asyncio.to_thread(self.service.save_submission, message, photo)
                     if not await self.delete(message):
                         return
                     row = await asyncio.to_thread(self.service.update, row["id"], {"original_removed": True}) or row
                     await self.publish(row)
-                await self.dm(message.author, f"Your slip was saved privately. Use Private review / confirm on Member Bet #{row['id']} in <#{self.channel_id}> once processing finishes.")
+                await self.notify(message, f"Your slip was saved privately. Use Private review / confirm on Member Bet #{row['id']} in <#{self.channel_id}> once processing finishes.")
             except Exception:
                 logger.exception("member_submission_failed message=%s", message.id)
-                await self.dm(message.author, "Your submission could not be completed. Its original photo may still be visible; check the channel and contact a moderator before resubmitting.")
+                await self.notify(message, "Your submission could not be completed. Its original photo may still be visible; check the channel and contact a moderator before resubmitting.")
 
     async def channel(self):
         return self.bot.get_channel(self.channel_id) or await self.bot.fetch_channel(self.channel_id)

@@ -27,10 +27,10 @@ def test_play_card_embed_reflects_regrade_and_reopen():
 
 def test_engagement_and_suggestion_views_use_dispatcher_ids_and_are_not_stored():
     async def build():
-        return bot_module.build_engagement_view(7, 3, "Ace", 2), bot_module.build_suggestion_view(7, "win")
+        return bot_module.build_engagement_view(7, 2), bot_module.build_suggestion_view(7, "win")
 
     engagement, suggestion = asyncio.run(build())
-    assert [item.custom_id for item in engagement.children] == ["pm:tail:7", "pm:follow:3"]
+    assert [item.custom_id for item in engagement.children] == ["pm:tail:7"]
     assert engagement.children[0].label == "Tail (2)"
     assert [item.custom_id for item in suggestion.children] == ["pm:as:7:win", "pm:asx:7"]
     assert engagement.is_finished() and suggestion.is_finished()

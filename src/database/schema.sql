@@ -176,17 +176,10 @@ create index if not exists idx_team_daily_summary_date on public.team_daily_summ
 -- Upgrade existing installations with the free-text team label used for untracked plays.
 alter table public.plays add column if not exists team_name text;
 
--- Member tails and capper follows (see supabase/migrations/20261006000000_official_play_features.sql).
+-- Member tails (see supabase/migrations/20261006000000_official_play_features.sql).
 create table if not exists public.play_tails (
   play_id bigint not null references public.plays(id) on delete cascade,
   discord_user_id text not null,
   created_at timestamptz not null default now(),
   primary key (play_id, discord_user_id)
-);
-
-create table if not exists public.capper_follows (
-  capper_user_id bigint not null references public.users(id) on delete cascade,
-  follower_discord_id text not null,
-  created_at timestamptz not null default now(),
-  primary key (capper_user_id, follower_discord_id)
 );

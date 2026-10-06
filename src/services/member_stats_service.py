@@ -153,11 +153,9 @@ class MemberStatsService:
             home_score, away_score = row["home_score"], row["away_score"]
             result = f"{home_score:g}–{away_score:g}" if home_score is not None and away_score is not None else "Scores unavailable"
             if sport == "formula-1":
-                lines.append(f"<t:{stamp}:f> • {row['name']} • {row['session']} • {row['status']} • Session ID: {row['id']}")
+                lines.append(f"<t:{stamp}:f> • {row['name']} • {row['session']} • {row['status']}")
             else:
                 lines.append(f"<t:{stamp}:f> • {row['home']} vs {row['away']} • {row['status']} • {result}")
-                if sport in {"nfl", "ncaa", "basketball", "football"}:
-                    lines[-1] += f" • Game ID: {row['id']}"
         if mode == "teamstats":
             wins = losses = ties = 0
             points_for = points_against = 0.0
@@ -182,7 +180,7 @@ class MemberStatsService:
         if sport not in SPORTS:
             raise ValueError("Select a supported sport.")
         if sport == "formula-1":
-            raise ValueError("Formula 1 schedules/results are cached only. Use /playerstats with a session ID for a limited driver-result refresh.")
+            raise ValueError("Formula 1 schedules/results are cached only. Use /gamestats and pick a session for a limited driver-result refresh.")
         now = self.clock()
         day = now.astimezone(timezone.utc).date().isoformat()
         nfl = sport == "nfl"

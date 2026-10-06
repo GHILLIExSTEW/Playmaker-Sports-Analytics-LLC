@@ -97,7 +97,7 @@ def test_f1_session_discovery_uses_name_type_and_id_not_team_scores():
         raw_event={"type": "2nd Practice"}, status_code="COMPLETED",
     )])
     report = service.report("results", "formula-1")[1]
-    assert "Bahrain Grand Prix" in report and "2nd Practice" in report and "Session ID: 1" in report
+    assert "Bahrain Grand Prix" in report and "2nd Practice" in report and "Session ID" not in report
     assert "None vs None" not in report
     with pytest.raises(ValueError, match="not team-form"):
         service.report("teamstats", "formula-1", "Ferrari")

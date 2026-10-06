@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import math
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -7,7 +8,14 @@ from src.datetime_utils import parse_iso_datetime
 from src.services.api_budget_service import member_request_user
 from src.services.api_sports_service import ApiSportsService
 from src.services.api_sports_multi_service import ApiSportsMultiService
+from src.services.member_stats_service import FINAL
 from src.services.supabase_service import supabase_service
+
+EASTERN = ZoneInfo("America/New_York")
+# Picker window: games in progress (or just ended) through the coming week.
+GAME_LOOKBACK = timedelta(hours=12)
+GAME_LOOKAHEAD = timedelta(days=7)
+NFL_LEAGUE_NAMES = {1: "NFL", 2: "NCAA"}
 
 PLAYER_SPORTS = {
     "nfl": "NFL", "ncaa": "College football", "basketball": "Basketball",
@@ -138,6 +146,86 @@ class PlayerStatsService:
         self.api = api or ApiSportsService()
         self.multi_api = multi_api or ApiSportsMultiService()
 
+    def window_rows(self, sport: str, league_id: str | None = None) -> list[dict]:
+        if sport not in SUPPORTED_PLAYER_SPORTS:
+            return []
+        nfl = sport == "nfl"
+        time_column = "kickoff_at" if nfl else "start_at"
+        now = self.clock()
+        query = self.db._ensure_client().table("api_sports_nfl_games" if nfl else "api_sports_events").select("*")
+        if not nfl:
+            query = query.eq("sport_slug", sport)
+        if league_id:
+            query = query.eq("league_id", int(league_id) if nfl and str(league_id).isdecimal() else league_id)
+        rows = query.gte(time_column, (now - GAME_LOOKBACK).isoformat()).lte(
+            time_column, (now + GAME_LOOKAHEAD).isoformat(),
+        ).order(time_column).limit(200).execute().data
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise RuntimeError("Game cache returned an invalid response.")
+        return rows
+
+    def leagues(self, sport: str, current: str = "") -> list[dict]:
+        leagues = {}
+        for row in self.window_rows(sport):
+            league_id = row.get("league_id")
+            if league_id is None:
+                continue
+            if sport == "nfl":
+                name = NFL_LEAGUE_NAMES.get(int(league_id), "NFL")
+            else:
+                name = row.get("league_name") or PLAYER_SPORTS[sport]
+            leagues.setdefault(str(league_id), name)
+        text = current.strip().casefold()
+        return sorted(
+            ({"league_id": key, "name": name} for key, name in leagues.items() if text in name.casefold()),
+            key=lambda row: row["name"],
+        )[:25]
+
+    def games(self, sport: str, league_id: str, current: str = "") -> list[dict]:
+        if not league_id:
+            return []
+        nfl = sport == "nfl"
+        now = self.clock()
+        text = current.strip().casefold()
+        games = []
+        for row in self.window_rows(sport, league_id):
+            start = parse_iso_datetime(row["kickoff_at"] if nfl else row["start_at"])
+            status = str(row.get("status_short") if nfl else row.get("status_code") or "")
+            if sport == "formula-1":
+                matchup = f"{row.get('event_name') or 'Session'} - {(row.get('raw_event') or {}).get('type') or 'Session'}"
+            else:
+                home = row["home_team_name"] if nfl else row.get("home_name")
+                away = row["away_team_name"] if nfl else row.get("away_name")
+                matchup = f"{away or 'TBD'} @ {home or 'TBD'}"
+            if text and text not in matchup.casefold():
+                continue
+            if status in FINAL:
+                state = "Final"
+            elif start <= now:
+                state = "Live"
+            else:
+                local = start.astimezone(EASTERN)
+                state = f"{local:%a %b} {local.day} {local:%I:%M %p} ET".replace(" 0", " ")
+            games.append({"id": int(row["game_id"] if nfl else row["event_id"]), "label": f"{matchup} · {state}"[:100], "start": start})
+        live = [game for game in games if game["start"] <= now]
+        upcoming = [game for game in games if game["start"] > now]
+        return (live + upcoming)[:25]
+
+    def players(self, sport: str, game_id: int, current: str = "") -> list[dict]:
+        snapshot = self.snapshot(sport, game_id)
+        if snapshot is None:
+            return []
+        records = athlete_records(sport, snapshot["payload"], game_id, self.game(sport, game_id))
+        text = current.strip().casefold()
+        seen, rows = set(), []
+        for record in records:
+            key = record["name"].casefold()
+            if key in seen or (text and text not in key):
+                continue
+            seen.add(key)
+            rows.append({"name": record["name"], "team": record["team"]})
+        return rows[:25]
+
     def game(self, sport: str, game_id: int) -> dict:
         if sport not in SUPPORTED_PLAYER_SPORTS:
             if sport == "mma":
@@ -148,7 +236,7 @@ class PlayerStatsService:
                 raise ValueError(f"The supplied API-Sports {PLAYER_SPORTS[sport]} documentation has no individual-player statistics endpoint. A different data source is required; team scores are not player stats.")
             raise ValueError("Select a tracked sport.")
         if isinstance(game_id, bool) or not isinstance(game_id, int) or game_id <= 0:
-            raise ValueError("Enter a positive game ID from /results or /schedule.")
+            raise ValueError("Pick a game from the list.")
         nfl = sport == "nfl"
         query = self.db._ensure_client().table("api_sports_nfl_games" if nfl else "api_sports_events")
         query = query.select("*").eq("game_id" if nfl else "event_id", game_id)
@@ -158,7 +246,7 @@ class PlayerStatsService:
         if not isinstance(rows, list):
             raise RuntimeError("Game cache returned an invalid response.")
         if not rows:
-            raise ValueError("Game ID is not in this sport's cache. Get an ID from /results or /schedule.")
+            raise ValueError("That game is not in this sport's schedule. Pick a game from the list.")
         return rows[0]
 
     def snapshot(self, sport: str, game_id: int) -> dict | None:
@@ -173,7 +261,7 @@ class PlayerStatsService:
         if player is not None:
             player = " ".join(player.split())
             if not player or len(player) > 100:
-                raise ValueError("Enter a player name or numeric player ID (1-100 characters), or omit it to list available players.")
+                raise ValueError("Pick a player from the list (1-100 characters), or leave it empty to list available players.")
         game = self.game(sport, game_id)
         title = f"{PLAYER_SPORTS[sport]} " + ("driver results" if sport == "formula-1" else "player statistics")
         snapshot = self.snapshot(sport, game_id)
@@ -185,11 +273,10 @@ class PlayerStatsService:
         if player is None:
             if not records:
                 return title, f"No individual statistics were supplied for this game/session (updated <t:{updated}:R>). This is unavailable data, not zero."
-            lines = [f"Available players/drivers for game/session {game_id}. Run /playerstats again with a name or player/driver ID."]
+            lines = ["Available players/drivers for this game. Run /gamestats again and pick a player."]
             shown = 0
             for row in records:
-                identifier = f"ID {row['id']}" if row["id"] is not None else "Provider returned ID 0; search by name"
-                line = f"{escape(row['name'])} - {identifier} - {escape(row['team'])}"
+                line = f"{escape(row['name'])} - {escape(row['team'])}"
                 if shown >= 20 or len("\n".join(lines) + line) > 3000:
                     break
                 lines.append(line)
@@ -203,13 +290,13 @@ class PlayerStatsService:
             if not matches:
                 matches = [row for row in records if player.casefold() in row["name"].casefold()]
         if not matches:
-            return title, f"No matching player statistics in this game snapshot (updated <t:{updated}:R>). This does not mean the player recorded zero. Try a full name or player ID."
+            return title, f"No matching player statistics in this game snapshot (updated <t:{updated}:R>). This does not mean the player recorded zero. Pick a player from the list."
         if len(matches) != 1:
             names = ", ".join(
-                f"{escape(row['name'][:80])} ({row['id'] if row['id'] is not None else 'ID unavailable'}, {escape(row['team'][:80])})"
+                f"{escape(row['name'][:80])} ({escape(row['team'][:80])})"
                 for row in matches[:5]
             )
-            raise ValueError("Player name is ambiguous. Use a full name or available player ID: " + names)
+            raise ValueError("Player name is ambiguous. Pick one of: " + names)
         record = matches[0]
         nfl = sport == "nfl"
         start = game["kickoff_at"] if nfl else game["start_at"]
@@ -222,9 +309,9 @@ class PlayerStatsService:
             label = f"{home} vs {away}"
             scope = "Per-game provider stats, not season totals."
         lines = [
-            f"**{escape(record['name'])}** ({record['id'] if record['id'] is not None else 'provider returned ID 0; name-only lookup'}) - {escape(record['team'])}",
+            f"**{escape(record['name'])}** - {escape(record['team'])}",
             f"{escape(label)} - <t:{int(parse_iso_datetime(start).timestamp())}:f>",
-            f"Game/session ID: {game_id}. {scope}",
+            scope,
         ]
         footer = f"\nUpdated <t:{updated}:R>. Data may be stale or incomplete. Missing values are unavailable, not zero."
         omitted = False

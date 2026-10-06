@@ -53,8 +53,8 @@ def ticket(**overrides):
 def message(attachments=None, channel=300):
     return SimpleNamespace(
         id=100, guild=SimpleNamespace(id=400), webhook_id=None,
-        channel=SimpleNamespace(id=channel),
-        author=SimpleNamespace(id=10, bot=False, display_name="Member", send=AsyncMock()),
+        channel=SimpleNamespace(id=channel, send=AsyncMock()),
+        author=SimpleNamespace(id=10, bot=False, display_name="Member", mention="<@10>", send=AsyncMock()),
         content="2u", attachments=attachments or [], delete=AsyncMock(),
     )
 
@@ -186,25 +186,26 @@ def test_dict_scores_are_supported():
     }) == "win"
 
 
-def test_no_photo_is_deleted_and_dm_sent_without_public_reply():
+def test_no_photo_is_deleted_and_member_notified_in_channel_not_dm():
     service = Mock()
     vault = MemberBetVault(Mock(), 300, service)
     msg = message()
     asyncio.run(vault.handle_message(msg))
     msg.delete.assert_awaited_once()
-    msg.author.send.assert_awaited_once()
-    assert "removed" in msg.author.send.call_args.args[0]
+    msg.channel.send.assert_awaited_once()
+    msg.author.send.assert_not_awaited()
+    assert "removed" in msg.channel.send.call_args.args[0]
     service.save_submission.assert_not_called()
 
 
-def test_invalid_photo_bytes_deleted_and_dm_sent():
+def test_invalid_photo_bytes_deleted_and_member_notified():
     attachment = photo_attachment()
     attachment.read.return_value = b"fake image"
     vault = MemberBetVault(Mock(), 300, Mock())
     msg = message([attachment])
     asyncio.run(vault.handle_message(msg))
     msg.delete.assert_awaited_once()
-    assert "rejected" in msg.author.send.call_args.args[0]
+    assert "rejected" in msg.channel.send.call_args.args[0]
 
 
 def test_valid_photo_saved_before_deletion_and_card_contains_no_original():
@@ -231,12 +232,20 @@ def test_valid_photo_saved_before_deletion_and_card_contains_no_original():
     assert events == ["saved", "deleted", "published"]
 
 
-def test_dm_failure_is_logged_without_public_fallback(caplog):
+def test_notice_failure_is_logged(caplog):
     vault = MemberBetVault(Mock(), 300, Mock())
     msg = message()
-    msg.author.send.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "DMs disabled")
+    msg.channel.send.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "No permission")
     asyncio.run(vault.handle_message(msg))
-    assert "member_vault_dm_failed" in caplog.text
+    assert "member_vault_notice_failed" in caplog.text
+    msg.author.send.assert_not_awaited()
+
+
+def test_notice_mentions_member_and_self_deletes():
+    msg = message()
+    asyncio.run(MemberBetVault(Mock(), 300, Mock()).handle_message(msg))
+    call = msg.channel.send.call_args
+    assert call.args[0].startswith("<@10> ") and call.kwargs["delete_after"] == 60
 
 
 def test_deletion_failure_is_logged_and_does_not_claim_removal(caplog):
@@ -245,7 +254,7 @@ def test_deletion_failure_is_logged_and_does_not_claim_removal(caplog):
     msg.delete.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "No permission")
     asyncio.run(vault.handle_message(msg))
     assert "member_vault_delete_failed" in caplog.text
-    assert "could not be removed" in msg.author.send.call_args.args[0]
+    assert "could not be removed" in msg.channel.send.call_args.args[0]
 
 
 @pytest.mark.parametrize("change", ["bot", "webhook", "dm", "other_channel"])
@@ -616,7 +625,7 @@ def test_nonpaying_member_photo_is_deleted_without_processing(paid_membership_de
     msg = message([attachment])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
     msg.delete.assert_awaited_once()
-    assert "current verified paid access" in msg.author.send.call_args.args[0]
+    assert "current verified paid access" in msg.channel.send.call_args.args[0]
     attachment.read.assert_not_awaited()
     service.save_submission.assert_not_called()
 
@@ -627,7 +636,7 @@ def test_membership_lookup_failure_fails_closed(paid_membership_default, caplog)
     msg = message([photo_attachment()])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
     msg.delete.assert_awaited_once()
-    assert "could not verify" in msg.author.send.call_args.args[0]
+    assert "could not verify" in msg.channel.send.call_args.args[0]
     assert "membership_lookup_failed" in caplog.text
     service.save_submission.assert_not_called()
 
@@ -638,4 +647,4 @@ def test_membership_expiring_while_queued_is_rechecked(paid_membership_default):
     msg = message([photo_attachment()])
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
     service.save_submission.assert_not_called()
-    assert "expired" in msg.author.send.call_args.args[0]
+    assert "expired" in msg.channel.send.call_args.args[0]

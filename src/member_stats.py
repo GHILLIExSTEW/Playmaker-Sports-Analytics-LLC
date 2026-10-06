@@ -101,16 +101,62 @@ class MemberStats(commands.Cog):
     async def results(self, interaction: discord.Interaction, sport: str, team: str | None = None, refresh: bool = False):
         await self.respond(interaction, "results", sport, team, refresh=refresh)
 
-    @app_commands.command(name="gamestats", description="Optional per-game player/driver stats by game or session ID")
+    @app_commands.command(name="gamestats", description="Player/driver stats for a current or upcoming game")
     @app_commands.guild_only()
-    @app_commands.describe(game_id="Game, fixture or F1 session ID from /results or /schedule", player="Player/driver name or ID; omit to list available players/drivers")
+    @app_commands.describe(league="Choose a league", game="Choose a current or upcoming game", player="Choose a player/driver; omit to list everyone available")
     @app_commands.choices(sport=[app_commands.Choice(name=name, value=key) for key, name in PLAYER_SPORTS.items()])
-    async def gamestats(self, interaction: discord.Interaction, sport: str, game_id: int, player: str | None = None, refresh: bool = False):
-        await self.respond(interaction, "gamestats", sport, refresh=refresh, game_id=game_id, player=player)
+    async def gamestats(self, interaction: discord.Interaction, sport: str, league: str, game: str, player: str | None = None, refresh: bool = False):
+        if not game.isdecimal() or int(game) <= 0:
+            await interaction.response.send_message("Pick a game from the list.", ephemeral=True)
+            return
+        await self.respond(interaction, "gamestats", sport, refresh=refresh, game_id=int(game), player=player)
+
+    def autocomplete_allowed(self, interaction) -> bool:
+        return bool(interaction.guild_id) and (WHOP_MEMBERSHIP_SYNC_ENABLED or is_stats_moderator(interaction))
+
+    @gamestats.autocomplete("league")
+    async def game_league_suggestions(self, interaction: discord.Interaction, current: str):
+        if not self.autocomplete_allowed(interaction):
+            return []
+        sport = getattr(interaction.namespace, "sport", "")
+        try:
+            rows = await asyncio.wait_for(asyncio.to_thread(self.player_stats.leagues, sport, current), timeout=2)
+            return [app_commands.Choice(name=row["name"][:100], value=row["league_id"]) for row in rows[:25]]
+        except Exception:
+            logger.exception("game_league_autocomplete_failed sport=%s", sport)
+            return []
+
+    @gamestats.autocomplete("game")
+    async def game_suggestions(self, interaction: discord.Interaction, current: str):
+        if not self.autocomplete_allowed(interaction):
+            return []
+        sport = getattr(interaction.namespace, "sport", "")
+        league = getattr(interaction.namespace, "league", "")
+        try:
+            rows = await asyncio.wait_for(asyncio.to_thread(self.player_stats.games, sport, league, current), timeout=2)
+            return [app_commands.Choice(name=row["label"][:100], value=str(row["id"])) for row in rows[:25]]
+        except Exception:
+            logger.exception("game_autocomplete_failed sport=%s league=%s", sport, league)
+            return []
+
+    @gamestats.autocomplete("player")
+    async def game_player_suggestions(self, interaction: discord.Interaction, current: str):
+        if not self.autocomplete_allowed(interaction):
+            return []
+        sport = getattr(interaction.namespace, "sport", "")
+        game = str(getattr(interaction.namespace, "game", "") or "")
+        if not game.isdecimal():
+            return []
+        try:
+            rows = await asyncio.wait_for(asyncio.to_thread(self.player_stats.players, sport, int(game), current), timeout=2)
+            return [app_commands.Choice(name=f"{row['name']} - {row['team']}"[:100], value=row["name"][:100]) for row in rows[:25]]
+        except Exception:
+            logger.exception("game_player_autocomplete_failed sport=%s", sport)
+            return []
 
     @app_commands.command(name="playerstats", description="Player/driver current and previous season stats; filter sport, league and name")
     @app_commands.guild_only()
-    @app_commands.describe(league="Choose a league for the selected sport", player="Type a name and select a suggestion; no game ID required")
+    @app_commands.describe(league="Choose a league for the selected sport", player="Type a name and select a suggestion")
     @app_commands.choices(sport=[app_commands.Choice(name=name, value=key) for key, name in PLAYER_SPORTS.items()])
     async def playerstats(self, interaction: discord.Interaction, sport: str, league: str, player: str, refresh: bool = False):
         await self.respond(interaction, "playerstats", sport, refresh=refresh, league=league, player=player)
@@ -122,7 +168,7 @@ class MemberStats(commands.Cog):
         sport = getattr(interaction.namespace, "sport", "")
         try:
             rows = await asyncio.wait_for(asyncio.to_thread(self.season_stats.leagues, sport, current), timeout=2)
-            return [app_commands.Choice(name=f"{row['name']} ({row['league_id']})"[:100], value=row["league_id"]) for row in rows[:25]]
+            return [app_commands.Choice(name=row["name"][:100], value=row["league_id"]) for row in rows[:25]]
         except Exception:
             logger.exception("player_league_autocomplete_failed sport=%s", sport)
             return []
@@ -136,7 +182,7 @@ class MemberStats(commands.Cog):
         try:
             rows = await asyncio.wait_for(asyncio.to_thread(self.season_stats.players, sport, league, current), timeout=2)
             return [app_commands.Choice(
-                name=(row["name"] + (f" - {row['team_name']}" if row.get("team_name") else "") + f" ({row['player_id']})")[:100],
+                name=(row["name"] + (f" - {row['team_name']}" if row.get("team_name") else ""))[:100],
                 value=str(row["player_id"]),
             ) for row in rows[:25]]
         except Exception:

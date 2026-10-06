@@ -4,8 +4,8 @@
 
 **Apply `supabase/migrations/20261006000000_official_play_features.sql` in the
 Supabase SQL Editor before pulling this code on the server.** The new code
-writes `play_legs.details` and reads `plays.auto_suggested_at`, `play_tails`,
-and `capper_follows`; without the migration, recording plays fails. Then run
+writes `play_legs.details` and reads `plays.auto_suggested_at` and `play_tails`;
+without the migration, recording plays fails. Then run
 `cd /opt/discord-bot && git pull && systemctl restart discord-bot.service`.
 No new environment variables are required.
 
@@ -22,8 +22,14 @@ No new environment variables are required.
 - **Recaps:** weekly (Mondays) and monthly (the 1st) at 10:00 AM Eastern in
   `RESULT_CHANNEL_ID`, with capper records, sport breakdown, best play, and the
   monthly vault leaders. `/recap` previews either recap privately or posts it.
-- **Tail/Follow buttons:** each new official play gets a 🎯 Tail / 🔔 Follow bar
-  under the tracked post. Followers receive a DM with a link to new plays.
+- **Tail button:** each new official play gets a 🎯 Tail button under the
+  tracked post. The bot never DMs members.
+- **Game picker:** `/gamestats` now takes sport → league → game → player, all
+  chosen from lists (current and upcoming games from the schedule cache). No
+  game, league, or player IDs are typed or shown; `/schedule` and `/results` no
+  longer print IDs.
+- **Member vault notices:** rejection and status notices are posted in the vault
+  channel as an @mention that deletes itself after 60 seconds instead of a DM.
 - **New commands:** `/unsettle` (reopen a play settled in the last 7 days),
   `/edit_play` (edit an open play and refresh its card), `/mystats` (private:
   official, tailed, and vault records), `/vault_leaderboard` (this month), and
@@ -195,14 +201,16 @@ remain in effect; no flags were changed and no background backfill was added.
 
 Apply `supabase/migrations/20261003060000_player_game_stats.sql` after the
 membership and API-budget migrations, then restart the bot to register
-`/gamestats sport game_id player refresh`.
-Use a game ID from `/results` or `/schedule`; player accepts a name or provider ID.
-Omit player to list up to 20 available player/driver names and IDs. Searches
+`/gamestats sport league game player refresh`.
+League, game, and player are picked from lists: the game list shows current and
+upcoming games (last 12 hours through the next 7 days) for the chosen league,
+and the player list comes from that game's cached stats. No IDs are typed or
+shown. Omit player to list up to 20 available player/driver names. Searches
 still cover the whole cached response, not only the displayed roster.
 Reports show per-game provider groups, not calculated season totals. Supported
 adapters are NFL/NCAA football, basketball, soccer and Formula 1 session results.
-For optional F1 game reports, use `/results sport:formula-1` or `/schedule sport:formula-1` to get a
-session ID; practice/qualifying results are explicitly distinguished from races.
+For F1, the game list shows sessions; practice/qualifying results are explicitly
+distinguished from races.
 F1 schedule/results refresh is disabled; `/gamestats` driver-result refresh is game-specific.
 
 All verified paid and eligible trial members read shared cached snapshots. Those members, the owner grant, and
@@ -366,10 +374,9 @@ Before enabling this feature:
 Every human message in this channel is a submission, not conversation. Require
 exactly one static JPEG, PNG, or WebP upload, no larger than 10 MB and 16
 megapixels; a photo may contain up to ten legs. Text can specify units, but image
-links, GIFs, PDFs, and text-only posts are rejected, deleted, and explained by DM.
-DMs are not ephemeral interaction responses; when DMs are disabled, failures
-are logged without a public reply. Deletion failures are logged and privately
-reported to the uploader.
+links, GIFs, PDFs, and text-only posts are rejected, deleted, and explained with
+an in-channel @mention that deletes itself after 60 seconds (members are never
+DMed). Notice and deletion failures are logged.
 
 For accepted photos, the bot saves a metadata-stripped copy in private storage
 and persists a ticket before deleting the source message. Discord makes the

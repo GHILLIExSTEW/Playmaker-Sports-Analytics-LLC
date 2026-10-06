@@ -334,7 +334,7 @@ class PlayFeaturesService:
             "vault": {**record_summary(vault), "count": len(vault), "month": record_summary([bet for bet in vault if bet.get("settled_at") and settled_time(bet) >= month_start])},
         }
 
-    # ---- Tails and follows ---------------------------------------------
+    # ---- Tails ---------------------------------------------------------
     def toggle_tail(self, play_id: int, discord_user_id: int) -> tuple[bool, int]:
         match = {"play_id": int(play_id), "discord_user_id": str(discord_user_id)}
         if self.db.select("play_tails", "play_id", match).data:
@@ -347,18 +347,6 @@ class PlayFeaturesService:
 
     def tail_count(self, play_id: int) -> int:
         return len(self.db.select("play_tails", "discord_user_id", {"play_id": int(play_id)}).data or [])
-
-    def toggle_follow(self, capper_user_id: int, discord_user_id: int) -> bool:
-        match = {"capper_user_id": int(capper_user_id), "follower_discord_id": str(discord_user_id)}
-        if self.db.select("capper_follows", "capper_user_id", match).data:
-            self.db.delete("capper_follows", match)
-            return False
-        self.db.upsert("capper_follows", match, ["capper_user_id", "follower_discord_id"])
-        return True
-
-    def followers(self, capper_user_id: int) -> list[str]:
-        rows = self.db.select("capper_follows", "follower_discord_id", {"capper_user_id": int(capper_user_id)}).data or []
-        return [row["follower_discord_id"] for row in rows]
 
     # ---- Auto-settle suggestions ---------------------------------------
     def suggestion_candidates(self, now: datetime | None = None) -> list[dict]:
