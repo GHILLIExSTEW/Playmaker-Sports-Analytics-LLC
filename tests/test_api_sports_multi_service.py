@@ -2,7 +2,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+import httpx
 
+from src.services import supabase_service as supabase_module
 from src.services.api_sports_multi_service import ApiSportsMultiService, DATE_PRODUCTS, DATE_PRODUCT_PARAMS, normalize_event
 
 
@@ -154,3 +156,104 @@ def test_live_sync_with_no_active_sports_uses_no_api_requests(synced_at):
 def test_ncaa_feed_uses_american_football_ncaa_league_filter():
     assert DATE_PRODUCTS["ncaa"] == ("https://v1.american-football.api-sports.io", "games")
     assert DATE_PRODUCT_PARAMS["ncaa"] == {"league": 2}
+
+
+@pytest.mark.parametrize("operation", ["daily_check", "record", "store", "active"])
+def test_cache_requests_retry_disconnect_with_a_fresh_client(monkeypatch, synced_at, operation):
+    calls = []
+
+    class CacheClient:
+        def __init__(self, disconnected):
+            self.disconnected = disconnected
+
+        def table(self, name):
+            query = FakeQuery([{"success": True, "last_success_at": synced_at.isoformat()}] if name == "api_sports_sync_state" else [])
+
+            def execute():
+                calls.append((name, self.disconnected))
+                if self.disconnected:
+                    raise httpx.RemoteProtocolError("Server disconnected")
+                return SimpleNamespace(data=query.data)
+
+            query.execute = execute
+            return query
+
+    monkeypatch.setattr(supabase_module.supabase_service, "client", CacheClient(True))
+    monkeypatch.setattr(supabase_module, "create_client", lambda *_args: CacheClient(False))
+    service = ApiSportsMultiService(clock=lambda: synced_at)
+    if operation == "daily_check":
+        assert service._daily_complete("formula-1", synced_at.date())
+    elif operation == "record":
+        service._record("events:formula-1", synced_at, True, 1)
+    elif operation == "store":
+        service._store_events([{"sport_slug": "formula-1", "event_id": "1"}])
+    else:
+        assert service.active_sports() == []
+    assert len(calls) == 2
+    assert calls[0][1] is True and calls[1][1] is False
+    assert service.request_count == 0
+
+
+def test_persistent_cache_disconnect_is_not_reported_as_success(monkeypatch, synced_at):
+    calls = []
+
+    class DisconnectedClient:
+        def table(self, _name):
+            query = FakeQuery()
+
+            def execute():
+                calls.append(True)
+                raise httpx.RemoteProtocolError("Server disconnected")
+
+            query.execute = execute
+            return query
+
+    monkeypatch.setattr(supabase_module.supabase_service, "client", DisconnectedClient())
+    monkeypatch.setattr(supabase_module, "create_client", lambda *_args: DisconnectedClient())
+    service = ApiSportsMultiService(clock=lambda: synced_at)
+    with pytest.raises(httpx.RemoteProtocolError, match="Server disconnected"):
+        service.sync_daily()
+    assert len(calls) == 3
+
+
+def test_daily_sync_retries_event_storage_without_repeating_provider_request(monkeypatch, synced_at):
+    provider_calls = []
+    storage_calls = []
+
+    class CacheClient:
+        def __init__(self, disconnected):
+            self.disconnected = disconnected
+
+        def table(self, name):
+            query = FakeQuery()
+            query.eq = lambda _column, key: (
+                setattr(query, "data", [] if key == "events:formula-1" else [
+                    {"success": True, "last_success_at": synced_at.isoformat()},
+                ]) or query
+            )
+
+            def execute():
+                if name == "api_sports_events":
+                    storage_calls.append(self.disconnected)
+                    if self.disconnected:
+                        raise httpx.RemoteProtocolError("Server disconnected")
+                return SimpleNamespace(data=query.data)
+
+            query.execute = execute
+            return query
+
+    class RaceResponse(FakeApiResponse):
+        def json(self):
+            return {"response": [{"id": 300, "date": synced_at.isoformat(), "season": 2026}]}
+
+    monkeypatch.setattr(supabase_module.supabase_service, "client", CacheClient(True))
+    monkeypatch.setattr(supabase_module, "create_client", lambda *_args: CacheClient(False))
+    service = ApiSportsMultiService(
+        api_key="test-key", clock=lambda: synced_at,
+        get=lambda *args, **kwargs: provider_calls.append((args, kwargs)) or RaceResponse(),
+    )
+    result = service.sync_daily()
+    assert storage_calls == [True, False]
+    assert len(provider_calls) == 1
+    assert result["total_requests"] == 1
+    assert result["sports"]["formula-1"] == {"requests": 1, "events": 1}

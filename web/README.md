@@ -86,6 +86,10 @@ the member-picks migration and deploy the bot's five-minute roster sync.
 Role `1328120848992960543` is the configured default. A missing/stale roster
 produces an explicit error; it never lists all historical authors as cappers.
 Historical settled results are preserved independently.
+An unavailable roster blocks capper choices only, not member profile settings,
+age verification, or membership status. The account page shows the roster
+error with a retry action; other account-load errors include their database
+message so missing schema/grants can be diagnosed.
 
 Apply `supabase/migrations/20261008000000_website_member_picks.sql` after the
 existing account, Whop paid, owner-grant, and full-trial migrations. It adds the

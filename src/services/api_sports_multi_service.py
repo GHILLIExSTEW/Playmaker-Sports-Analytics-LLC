@@ -167,25 +167,31 @@ class ApiSportsMultiService:
         return rows
 
     def _daily_complete(self, sport_slug: str, today: date) -> bool:
-        rows = self._client().table("api_sports_sync_state").select("success,last_success_at").eq("sync_key", f"events:{sport_slug}").limit(1).execute().data or []
+        rows = supabase_service._execute(
+            lambda: self._client().table("api_sports_sync_state").select("success,last_success_at")
+            .eq("sync_key", f"events:{sport_slug}").limit(1).execute()
+        ).data or []
         if not rows or not rows[0].get("success") or not rows[0].get("last_success_at"):
             return False
         last = parse_iso_datetime(rows[0]["last_success_at"])
         return last.astimezone(TRACKER_TIMEZONE).date() == today
 
     def _record(self, sync_key: str, started: datetime, success: bool, requests_used: int, error: str | None = None) -> None:
-        self._client().table("api_sports_sync_state").upsert({
+        supabase_service._execute(lambda: self._client().table("api_sports_sync_state").upsert({
             "sync_key": sync_key,
             "last_attempt_at": started.isoformat(),
             "last_success_at": self.clock().isoformat() if success else None,
             "request_count": requests_used,
             "success": success,
             "error_message": error[:500] if error else None,
-        }, on_conflict="sync_key").execute()
+        }, on_conflict="sync_key").execute())
 
     def _store_events(self, rows: list[dict]) -> None:
         if rows:
-            self._client().table("api_sports_events").upsert(rows, on_conflict="sport_slug,event_id").execute()
+            supabase_service._execute(
+                lambda: self._client().table("api_sports_events")
+                .upsert(rows, on_conflict="sport_slug,event_id").execute()
+            )
 
     def sync_daily(self, force: bool = False) -> dict:
         self.request_count = 0
@@ -239,7 +245,11 @@ class ApiSportsMultiService:
 
     def active_sports(self) -> list[str]:
         now = self.clock()
-        rows = self._client().table("api_sports_events").select("sport_slug,start_at,status_code").gte("start_at", (now - timedelta(hours=5)).isoformat()).lte("start_at", (now + timedelta(minutes=20)).isoformat()).execute().data or []
+        rows = supabase_service._execute(
+            lambda: self._client().table("api_sports_events").select("sport_slug,start_at,status_code")
+            .gte("start_at", (now - timedelta(hours=5)).isoformat())
+            .lte("start_at", (now + timedelta(minutes=20)).isoformat()).execute()
+        ).data or []
         active = set()
         for row in rows:
             if row.get("sport_slug") in DATE_PRODUCTS and str(row.get("status_code") or "").upper() not in SEASON_FINAL_STATUSES:

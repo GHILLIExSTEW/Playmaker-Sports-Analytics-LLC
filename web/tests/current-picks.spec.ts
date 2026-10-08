@@ -129,8 +129,14 @@ test('larger boards fetch every page and progressively display results', async (
   await expect(page.getByRole('article')).toHaveCount(100)
 })
 
-test('account reloads saved profile controls and displays verified membership; sign-out closes picks', async ({ page }) => {
+for (const rosterUnavailable of [false, true]) {
+test(`account reloads saved profile controls and displays verified membership; sign-out closes picks (${rosterUnavailable ? 'unavailable' : 'available'} roster)`, async ({ page }) => {
   await mockApi(page)
+  if (rosterUnavailable) {
+    await page.route('**/rest/v1/rpc/public_favorite_cappers*', (route) => route.fulfill({
+      status: 400, json: { message: 'Website capper roster is unavailable or stale. Check the bot OPERATOR role sync.' },
+    }))
+  }
   await page.addInitScript(() => {
     const userId = '11111111-1111-1111-1111-111111111111'
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
@@ -148,12 +154,21 @@ test('account reloads saved profile controls and displays verified membership; s
   await expect(page.getByLabel('Time zone', { exact: false })).toHaveValue('America/Chicago')
   await expect(page.getByLabel('Make my profile public')).toBeChecked()
   await expect(page.getByText('HIGHROLLER paid', { exact: true })).toBeVisible()
+  if (rosterUnavailable) {
+    await expect(page.getByRole('alert')).toContainText('Capper choices are unavailable.')
+    await expect(page.getByRole('heading', { name: 'Account settings.' })).toBeVisible()
+    await page.unroute('**/rest/v1/rpc/public_favorite_cappers*')
+    await page.getByRole('button', { name: 'Retry capper choices' }).click()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(page.getByLabel('Display name', { exact: true })).toHaveValue('Saved Member')
+  }
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Continue with Discord' })).toBeVisible()
   await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Expert Picks' }).click()
   await expect(page.getByText('Current picks are for HIGHROLLER members.', { exact: false })).toBeVisible()
   await expect(page.getByRole('article')).toHaveCount(0)
 })
+}
 
 test('no published open picks has a distinct empty state', async ({ page }) => {
   await mockApi(page, { dataset: [] })

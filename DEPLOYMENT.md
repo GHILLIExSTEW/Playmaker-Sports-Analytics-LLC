@@ -1,5 +1,17 @@
 # Proxmox deployment guide
 
+## Sports startup cache disconnect recovery
+
+The multi-sport service now uses the existing Supabase three-attempt transport
+retry helper for daily cache-status reads, active-event reads, and idempotent
+event/status upserts. Each production retry rebuilds the query against the
+replacement Supabase client. A cache connection reset no longer immediately
+aborts the startup sync. This does not restart the whole sync or repeat successful
+API-Sports requests merely because a cache operation disconnected. Persistent
+transport errors still propagate to the existing failure reporting; provider
+request limits and provider errors are unchanged. No migration or environment
+change is needed: deploy the bot update and restart the service.
+
 ## OPERATOR-only website cappers
 
 For the separately authorized removal of Jatin/Doomsday's official records,

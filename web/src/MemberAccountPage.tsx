@@ -35,6 +35,7 @@ export default function MemberAccountPage() {
   const [profile, setProfile] = useState<MemberProfile | null>(null)
   const [sports, setSports] = useState<SportOption[]>([])
   const [cappers, setCappers] = useState<CapperOption[]>([])
+  const [capperError, setCapperError] = useState('')
   const [favoriteSportIds, setFavoriteSportIds] = useState<number[]>([])
   const [favoriteCapperKeys, setFavoriteCapperKeys] = useState<string[]>([])
   const [displayName, setDisplayName] = useState('')
@@ -66,6 +67,7 @@ export default function MemberAccountPage() {
         setProfile(null)
         setSports([])
         setCappers([])
+        setCapperError('')
         setFavoriteSportIds([])
         setFavoriteCapperKeys([])
         setPageState('ready')
@@ -91,7 +93,6 @@ export default function MemberAccountPage() {
         ])
         if (profileResult.error) throw profileResult.error
         if (sportsResult.error) throw sportsResult.error
-        if (cappersResult.error) throw cappersResult.error
         if (cancelled) return
         const nextProfile = profileResult.data as MemberProfile | null
         setProfile(nextProfile)
@@ -104,7 +105,10 @@ export default function MemberAccountPage() {
         setDiscordAlertsEnabled(Boolean(nextProfile?.discord_alerts_enabled))
         setEmailAlertsEnabled(Boolean(nextProfile?.email_alerts_enabled))
         setSports((sportsResult.data ?? []) as SportOption[])
-        setCappers((cappersResult.data ?? []) as CapperOption[])
+        setCappers(cappersResult.error ? [] : (cappersResult.data ?? []) as CapperOption[])
+        setCapperError(cappersResult.error
+          ? `Capper choices are unavailable. ${cappersResult.error.message}`
+          : '')
 
         if (nextProfile?.age_verified_at) {
           const [favoriteSportsResult, favoriteCappersResult] = await Promise.all([
@@ -121,9 +125,11 @@ export default function MemberAccountPage() {
           setMessage('')
           setPageState('ready')
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setMessage('Your account settings could not be loaded. Check the account migration and try again.')
+          const detail = error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+            ? ` ${error.message}` : ''
+          setMessage(`Your account settings could not be loaded. Check the account migration and try again.${detail}`)
           setPageState('error')
         }
       }
@@ -392,7 +398,10 @@ export default function MemberAccountPage() {
     </section>
     <section className="account-preferences">
       <div className="account-section-heading"><p className="eyebrow">02 · Cappers</p><h2>Choose by sport.</h2></div>
-      {capperGroups.length ? capperGroups.map((group) => <div className="account-capper-group" key={group.sport.id}>
+      {capperError ? <div>
+        <p className="account-message" role="alert">{capperError}</p>
+        <button className="account-secondary-button" type="button" onClick={() => { setPageState('loading'); setRetryCount((count) => count + 1) }}>Retry capper choices</button>
+      </div> : capperGroups.length ? capperGroups.map((group) => <div className="account-capper-group" key={group.sport.id}>
         <h3>{group.sport.name}</h3>
         <div className="account-cappers-list">
           {group.cappers.map((capper) => {
@@ -403,7 +412,7 @@ export default function MemberAccountPage() {
             </label>
           })}
         </div>
-      </div>) : <p className="account-state">Capper choices appear as public settled records are published.</p>}
+      </div>) : <p className="account-state">Capper choices appear when current OPERATOR cappers have published plays for a sport.</p>}
     </section>
     <section className="account-danger-zone">
       <div><p className="eyebrow">Privacy controls</p><h2>Delete your account.</h2><p>This permanently removes your member profile and saved preferences. It does not delete official plays or Discord data.</p></div>
