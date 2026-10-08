@@ -1,5 +1,70 @@
 # Proxmox deployment guide
 
+## Website member access and current picks (October 8, 2026)
+
+This release adds `/picks`, sport/capper filters, current picks on capper pages,
+and verified website membership status. Checkout stays closed. Website premium
+access also stays closed until explicitly enabled server-side; a successful
+local build/test is not completion of the live launch gates.
+
+1. Confirm backups and separate staging/production credentials. Apply the
+   existing account/profile, Whop paid, owner grant, and full-trial migrations
+   first, then `supabase/migrations/20261008000000_website_member_picks.sql`.
+   This revokes browser access to raw play, leg, draft, history, settlement,
+   and author tables. The bot's service-role grants are unchanged; public
+   settled-result RPCs remain available.
+   The migration adds `users.public_avatar_url` if absent without changing
+   existing avatar values. If a previous run failed with missing-column error
+   `42703`, its transaction did not commit: rerun the complete corrected file
+   (from `begin;` through `commit;`), not only the failing function. The older
+   public-avatar migration remains necessary for avatars in public settled results.
+2. As database owner, configure the singleton row in
+   `public.website_membership_config` with the approved seller and the complete
+   production `WHOP_PAID_PLAN_IDS` / `WHOP_TRIAL_PLAN_IDS` arrays. The initial
+   paid array contains only `plan_cdPyKCHjSQeG2`; retain **all approved historical
+   paid IDs**, not just the new-sale offer. The trial array starts with
+   `plan_R7H8Sx7MEKzh0`. Never include trial IDs in the paid array.
+   Do not expose these controls as frontend variables. Leave `enabled=false`
+   in production until the relevant gates pass.
+3. Deploy the website to staging and verify the Discord OAuth callback and
+   allowed `/account` redirects described in `web/README.md`. Age verification
+   must complete. OAuth must use the same Discord identity linked in Whop;
+   changing a profile name or metadata cannot link membership.
+4. Enable website access **in staging only**, start the existing verified Whop
+   polling process, and test a provider-approved purchase and eligible trial.
+   Confirm HIGHROLLER access, exact expiry, matching trial claim, paid/trial
+   overlap, and historical paid-plan support. Verify that the account status
+   and `/picks` agree. Roles alone must not authorize website picks.
+5. Test sign-out, unverified age, wrong Discord account, revoked/refunded/
+   chargeback-invalidated snapshots, expired passes, and polling interruption
+   longer than 15 minutes. Verify direct `plays`/`play_legs` browser reads and
+   unauthenticated `member_current_picks` requests are denied. Open selections
+   must not appear in public results or member public profiles.
+6. Publish an official test play through the normal bot confirmation flow.
+   Verify its selections, odds, risk, sport, notes, and capper on the board;
+   unpublished drafts must stay absent. A capper with no settled history must
+   have a working page. Settle the play and confirm it leaves the board and
+   appears once in the existing public ledger. Discord Tail behavior is unchanged.
+7. Complete Gate A and the outstanding positive production paid-member test,
+   Discord role mappings/expiry tests, alerting, and backup/recovery checks in
+   `LAUNCH_PLAN.md`. Whop business review/payout clearance and professional
+   policy review remain external requirements. Only then authorize production
+   website access by setting `enabled=true` on the configured singleton.
+   Opening Whop sales is a separate owner-controlled step; this release does
+   not publish checkout or alter offer availability.
+
+Rollback premium access by setting `enabled=false`, not by deleting membership
+snapshots or trial claims. Requests immediately fail closed; open browser boards
+recheck every 30 seconds and on focus. Previously viewed/saved information cannot
+be recalled. A wrong/missing RPC or database failure produces an explicit access
+or feed error, not a successful empty board.
+
+Reproducible local checks: from `web/`, run `npm.cmd run test:access`,
+`npm.cmd run test:picks`, `npm.cmd run build`, and `npm.cmd run lint`.
+Install the Playwright Chromium headless shell if needed as documented in
+`web/README.md`. SQL tests use isolated PGlite and browser tests mock the API;
+neither constitutes production payment/OAuth validation.
+
 ## Official play features (October 6, 2026)
 
 **Apply `supabase/migrations/20261006000000_official_play_features.sql` in the

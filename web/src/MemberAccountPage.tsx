@@ -3,6 +3,8 @@ import type { Session } from '@supabase/supabase-js'
 import { ArrowRight, Copy, Download, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from './supabaseClient'
+import { MemberAccessNotice } from './MemberAccess'
+import { useMemberAccess } from './memberAccessContext'
 
 type SportOption = { id: number; api_slug: string; name: string }
 type CapperOption = { sport_id: number; sport: string; capper_name: string }
@@ -27,6 +29,7 @@ function capperKey(sportId: number, capperName: string): string {
 
 export default function MemberAccountPage() {
   const navigate = useNavigate()
+  const { access, refresh: refreshAccess } = useMemberAccess()
   const [session, setSession] = useState<Session | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [profile, setProfile] = useState<MemberProfile | null>(null)
@@ -82,13 +85,14 @@ export default function MemberAccountPage() {
     void (async () => {
       try {
         const [profileResult, sportsResult, cappersResult] = await Promise.all([
-          supabase.from('member_profiles').select('age_verified_at').eq('user_id', signedInUserId).maybeSingle(),
+          supabase.from('member_profiles').select('age_verified_at,created_at,display_name,public_handle,avatar_url,public_profile_enabled,timezone,discord_alerts_enabled,email_alerts_enabled').eq('user_id', signedInUserId).maybeSingle(),
           supabase.rpc('public_favorite_sports'),
           supabase.rpc('public_favorite_cappers'),
         ])
         if (profileResult.error) throw profileResult.error
         if (sportsResult.error) throw sportsResult.error
         if (cappersResult.error) throw cappersResult.error
+        if (cancelled) return
         const nextProfile = profileResult.data as MemberProfile | null
         setProfile(nextProfile)
         const userName = String(sessionMetadata?.full_name || sessionMetadata?.name || sessionMetadata?.username || 'Playmaker Member')
@@ -154,6 +158,7 @@ export default function MemberAccountPage() {
       setPageState('loading')
       setProfile((current) => current ? { ...current, age_verified_at: new Date().toISOString() } : current)
       setRetryCount((count) => count + 1)
+      refreshAccess()
     } catch {
       setMessage('Age verification could not be completed. Try again.')
     } finally {
@@ -341,7 +346,11 @@ export default function MemberAccountPage() {
     <section className="account-status-grid" aria-label="Account status">
       <div><span>Discord</span><strong>Connected</strong><small>{String(session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.user_metadata?.username || 'Discord member')}</small></div>
       <div><span>Age verification</span><strong>Verified 21+</strong><small>Date of birth is not retained</small></div>
-      <div><span>Membership</span><strong>No paid plan</strong><small>Membership billing is not connected yet</small></div>
+      <div><span>Membership</span><strong>{access?.state === 'active' ? `HIGHROLLER ${access.kind === 'trial' ? 'trial' : access.kind === 'owner' ? 'owner' : 'paid'}` : access?.state === 'launch-pending' ? 'Launch pending' : access?.state === 'membership-required' ? 'No verified active pass' : 'Access check required'}</strong><small>Verified against server-side entitlements, not Discord roles</small></div>
+    </section>
+    <section className="account-panel" aria-label="Membership access">
+      <MemberAccessNotice />
+      <button className="account-secondary-button" type="button" onClick={refreshAccess}>Recheck membership access</button>
     </section>
     <form className="account-preferences account-profile-form" onSubmit={(event) => { event.preventDefault(); void saveProfile() }}>
       <div className="account-section-heading"><p className="eyebrow">Profile</p><h2>Make it yours.</h2></div>

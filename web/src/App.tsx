@@ -5,6 +5,8 @@ import {
 } from 'lucide-react'
 import { BrowserRouter, Link, useLocation } from 'react-router-dom'
 import { getCapperAvatarUrl } from './capperAvatars'
+import { capperSlug } from './capperIdentity'
+import { MemberAccessProvider } from './MemberAccess'
 import { supabase } from './supabaseClient'
 import { sportsCatalog } from './sportsCatalog'
 import SportsDropdown from './SportsDropdown'
@@ -42,6 +44,25 @@ const MemberHomeFeed = lazy(() => import('./MemberHomeFeed'))
 const MembershipPage = lazy(() => import('./MembershipPage'))
 const PolicyPage = lazy(() => import('./PolicyPage'))
 const SportPage = lazy(() => import('./SportPage'))
+const CurrentPicksFeed = lazy(() => import('./CurrentPicksFeed'))
+
+type CapperDirectoryEntry = { name: string; avatar_url: string | null }
+
+async function fetchCapperDirectory(): Promise<CapperDirectoryEntry[]> {
+  const entries: CapperDirectoryEntry[] = []
+  for (let offset = 0; ; offset += resultsPageSize) {
+    const { data, error } = await supabase.rpc('public_capper_directory').range(offset, offset + resultsPageSize - 1)
+    if (error) throw error
+    if (!Array.isArray(data)) throw new Error('Unexpected capper directory response.')
+    for (const row of data) {
+      if (!row || typeof row.name !== 'string' || (row.avatar_url !== null && typeof row.avatar_url !== 'string')) {
+        throw new Error('Unexpected capper directory entry.')
+      }
+      entries.push({ name: row.name, avatar_url: row.avatar_url })
+    }
+    if (data.length < resultsPageSize) return entries
+  }
+}
 
 async function fetchPublicResults(): Promise<Result[]> {
   if (!supabase) throw new Error('Public Supabase configuration is missing.')
@@ -56,8 +77,12 @@ async function fetchPublicResults(): Promise<Result[]> {
   }
 }
 
-function summarizeCappers(results: Result[]): CapperSummary[] {
+function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]): CapperSummary[] {
   const summaries = new Map<string, CapperSummary>()
+  for (const entry of directory) {
+    summaries.set(entry.name, { name: entry.name, slug: capperSlug(entry.name),
+      avatar_url: entry.avatar_url ?? getCapperAvatarUrl(entry.name), plays: 0, wins: 0, losses: 0, net_units: 0 })
+  }
   for (const result of results) {
     const summary = summaries.get(result.capper) ?? {
       name: result.capper,
@@ -76,10 +101,6 @@ function summarizeCappers(results: Result[]): CapperSummary[] {
     summaries.set(result.capper, summary)
   }
   return [...summaries.values()].sort((first, second) => second.net_units - first.net_units)
-}
-
-function capperSlug(name: string): string {
-  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'capper'
 }
 
 function generatedAvatarUrl(name: string): string {
@@ -158,7 +179,7 @@ function formatNetUnits(value: number): string {
 }
 
 function App() {
-  return <BrowserRouter><Website /></BrowserRouter>
+  return <BrowserRouter><MemberAccessProvider><Website /></MemberAccessProvider></BrowserRouter>
 }
 
 function Website() {
@@ -171,6 +192,17 @@ function Website() {
   const [results, setResults] = useState<Result[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [retryCount, setRetryCount] = useState(0)
+  const [directory, setDirectory] = useState<CapperDirectoryEntry[]>([])
+  const [directoryState, setDirectoryState] = useState<LoadState>('loading')
+  useEffect(() => {
+    let cancelled = false
+    fetchCapperDirectory().then((entries) => {
+      if (!cancelled) { setDirectory(entries); setDirectoryState('ready') }
+    }).catch(() => {
+      if (!cancelled) setDirectoryState('error')
+    })
+    return () => { cancelled = true }
+  }, [retryCount])
   useEffect(() => {
     let cancelled = false
     fetchPublicResults()
@@ -216,7 +248,7 @@ function Website() {
 
   const sports: string[] = ['All', ...Array.from(new Set(results.map((result) => result.sport)))]
   const visibleResults = sport === 'All' ? results : results.filter((result) => result.sport === sport)
-  const cappers = summarizeCappers(results)
+  const cappers = summarizeCappers(results, directory)
   const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
   const memberHandle = routePath.startsWith('/members/') ? decodeURIComponent(routePath.slice('/members/'.length)) : null
   const selectedCapper = cappers.find((capper) => capper.slug === profileSlug)
@@ -228,6 +260,8 @@ function Website() {
       ? `${selectedCapperName} | Playmaker Picks`
       : routePath === '/results'
         ? 'Settled Results | Playmaker Picks'
+        : routePath === '/picks'
+          ? 'Expert Picks | Playmaker Picks'
         : routePath === '/account'
           ? 'Member Account | Playmaker Picks'
             : routePath === '/membership'
@@ -260,6 +294,7 @@ function Website() {
           <BrandLogo className="brand-logo" />
         </Link>
         <nav className={menuOpen ? 'main-nav is-open' : 'main-nav'} aria-label="Primary navigation">
+          <Link to="/picks" onClick={closeMenu}>Expert Picks</Link>
           <a href="/results" onClick={closeMenu}>Results</a>
           <SportsDropdown onNavigate={closeMenu} />
           <a href="/account" onClick={closeMenu}>Account</a>
@@ -287,6 +322,10 @@ function Website() {
         ) : routePath === '/membership' ? (
           <Suspense fallback={<section className="membership-page"><p className="account-state">Loading membership options…</p></section>}>
             <MembershipPage />
+          </Suspense>
+        ) : routePath === '/picks' ? (
+          <Suspense fallback={<p className="account-state">Loading expert picks...</p>}>
+            <CurrentPicksFeed />
           </Suspense>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
@@ -323,6 +362,9 @@ function Website() {
               <div><span>Win rate</span><strong>{capperDecisions ? `${Math.round(capperWins / capperDecisions * 100)}%` : '—'}</strong></div>
               <div><span>Net units</span><strong className={selectedCapper.net_units > 0 ? 'net-positive' : selectedCapper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(selectedCapper.net_units)}</strong></div>
             </div>
+            <Suspense fallback={<p className="account-state">Loading current picks...</p>}>
+              <CurrentPicksFeed key={selectedCapper.name} capper={selectedCapper.name} />
+            </Suspense>
             <div className="capper-analytics-grid">
               <Suspense fallback={<div className="results-empty">Loading analytics graphs…</div>}>
                 <CapperAnalyticsCharts trend={capperAnalytics.trend} bySport={capperAnalytics.bySport} />
@@ -354,7 +396,7 @@ function Website() {
             </section>
           </section>
         ) : profileSlug ? (
-          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' ? 'Loading record' : loadState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1><Link to="/#cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
+          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry capper directory</button>}<Link to="/#cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
         ) : routePath !== '/' ? (
           <section className="capper-not-found"><p className="eyebrow">Page not found</p><h1>This page isn't on the board.</h1><Link to="/">Return home <ArrowRight size={16} /></Link></section>
         ) : (
@@ -374,6 +416,10 @@ function Website() {
         <Suspense fallback={<section className="personalized-feed"><p className="account-state">Loading your board…</p></section>}>
           <MemberHomeFeed results={results} />
         </Suspense>
+        <section className="membership-promo">
+          <div><p className="eyebrow">The current board</p><h2>See the latest calls.</h2><p>HIGHROLLER members can browse published open picks by sport and capper. Settled records remain public.</p></div>
+          <Link className="button membership-promo-link" to="/picks">Browse expert picks <ArrowRight size={17} /></Link>
+        </section>
 
         <section className="results-section scroll-reveal" id="results">
           <div className="section-heading">
@@ -421,7 +467,7 @@ function Website() {
         <section className="cappers-section scroll-reveal" id="cappers">
           <div className="section-heading compact">
             <div><p className="eyebrow">The room</p><h2>Know who made the call.</h2></div>
-            <p>Capper summaries below are calculated from published, settled plays. Private member details are not included.</p>
+            <p>Meet the authors of published official plays. Performance summaries use settled plays only; open selections require verified member access.</p>
           </div>
           <div className="capper-grid">
             {cappers.map((capper, index) => (
@@ -433,7 +479,8 @@ function Website() {
                 <Link to={`/cappers/${capper.slug}`}>Open capper homepage <ArrowRight size={16} /></Link>
               </article>
             ))}
-            {loadState === 'ready' && cappers.length === 0 && <p className="results-empty">Capper records will appear after official plays settle.</p>}
+            {loadState === 'ready' && directoryState === 'ready' && cappers.length === 0 && <p className="results-empty">Capper pages will appear after official plays are published.</p>}
+            {directoryState === 'error' && <p className="data-notice" role="alert">The capper directory could not be loaded. <button className="results-retry" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry</button></p>}
             {loadState !== 'ready' && <p className="results-empty">Capper records load with the settled results.</p>}
           </div>
         </section>

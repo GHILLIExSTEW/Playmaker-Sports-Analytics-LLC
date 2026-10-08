@@ -8,6 +8,7 @@ const plans = [
 
 const features = [
   { name: 'Public settled-play record', values: ['Included', 'Included'] },
+  { name: 'Website current-picks feed', values: ['Published open plays by sport and capper; requires verified access after launch validation', 'Published open plays by sport and capper; requires verified access after launch validation'] },
   { name: 'Personalized sports & capper follows', values: ['Included', 'Included'] },
   { name: 'Weekly recap', values: ['Included', 'Included'] },
   { name: 'Member analysis & Discord community', values: ['7 days of HIGHROLLER access', '30 days of HIGHROLLER access'] },
@@ -24,6 +25,7 @@ export default function MembershipPage() {
       <p className="eyebrow">Membership</p>
       <h1>One membership. Your seat.</h1>
       <p>Start with a full-access seven-day trial, then choose HIGHROLLER for $19.99 per 30-day pass. ROOKIE is our free community role, not a paid tier. For adults 21+ (or the higher local legal age). Checkout remains closed while launch review is completed.</p>
+      <p>Already have access? <Link to="/account">Sign in with the Discord account linked in Whop</Link>, complete age verification, and <Link to="/picks">check the current-picks board</Link>. An expired pass or stale membership sync does not grant premium access.</p>
     </header>
     <section className="membership-plan-grid" aria-label="Membership plans awaiting launch">
       {plans.map((plan) => <article className={`membership-plan${plan.featured ? ' is-featured' : ''}`} key={plan.name}>

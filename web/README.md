@@ -78,6 +78,67 @@ available only after verification and are restricted to the signed-in user by
 row-level security. This is self-attested age verification, not an identity or
 document verification service.
 
+## Current Picks and Verified Website Access
+
+Apply `supabase/migrations/20261008000000_website_member_picks.sql` after the
+existing account, Whop paid, owner-grant, and full-trial migrations. It adds the
+optional `users.public_avatar_url` column if missing; the older public-avatar
+migration is still needed to include avatars in the public settled-results RPC.
+The new
+`/picks` board filters published open official plays by sport and capper.
+Capper pages include their current board, even before their first settled
+result. The public directory exposes only author names and approved avatars;
+performance metrics and the public ledger still use settled results only.
+The homepage and primary navigation link to the board.
+
+Website premium access is **disabled by default**. The database-owner/service
+configuration is `public.website_membership_config`; clients cannot read or
+change it. Copy the seller and the **complete** bot `WHOP_PAID_PLAN_IDS` and
+`WHOP_TRIAL_PLAN_IDS` allowlists into this configuration before enabling it.
+The seeded paid list includes only the new 30-day plan; add all approved
+historical paid IDs so existing purchases keep access. Never put a trial ID
+in the paid list. Follow the staging/production checklist in `DEPLOYMENT.md`;
+do not enable production access or checkout before the launch gates pass.
+
+`website_member_access()` resolves the signed-in user's provider-managed
+`auth.identities.provider_id` for Discord, not editable user metadata or
+Discord roles. It requires age verification and a seller/plan-scoped verified
+paid snapshot, an eligible matching seven-day trial claim, or a current
+explicit owner HIGHROLLER grant. Paid/trial snapshots older than 15 minutes
+fail closed, as do expired or revoked access and future verification timestamps
+more than five minutes ahead. The account page shows this verified access
+instead of a static "No paid plan" placeholder.
+
+`member_current_picks()` rechecks access on every request and rejects ineligible
+users. It excludes unpublished drafts, settled/inconsistent records, and
+duplicate message records. Only display fields are returned, not Discord or
+message identifiers. Source play/user/history tables have their browser grants
+revoked, preserving service-role access and the restricted public RPCs.
+No slip-image reveal, reaction requirement, or change to Discord Tail tracking
+is included. Event times and live status are not inferred from publication time.
+
+The browser rechecks access and refreshes the board every 30 seconds, on focus,
+and on explicit refresh. It hides previously loaded picks while checking access,
+when signed out, when expired, or on access-check failure. Exact pass expiry
+also triggers a recheck; changes already viewed cannot be retroactively erased
+from a user's memory or saved copies.
+
+Validation from `web/`:
+
+```powershell
+npm.cmd run test:access
+npx.cmd playwright install chromium --only-shell
+npm.cmd run test:picks
+npm.cmd run build
+npm.cmd run lint
+```
+
+The access suite executes the real migrations in isolated embedded PostgreSQL
+(PGlite), with synthetic OAuth identities and entitlements. Browser tests use
+mock API responses and a dedicated localhost port. Neither suite writes to
+production or proves live Discord OAuth, Whop purchases, role mappings, or
+provider approval.
+
 ## NFL API-Sports Feed
 
 1. Run `supabase/migrations/20260930260000_api_sports_nfl.sql` in Supabase SQL

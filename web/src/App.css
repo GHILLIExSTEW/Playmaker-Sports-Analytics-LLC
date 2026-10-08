@@ -1,4 +1,19 @@
 #root { min-height: 100vh; }
+.current-picks { padding: 64px clamp(20px, 7vw, 108px); }
+.current-picks-embedded { padding: 36px 0; border-top: 1px solid var(--line); }
+.current-picks h1 { margin: 0; font: 700 clamp(48px, 6vw, 86px)/0.95 var(--display); text-transform: uppercase; }
+.current-picks-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; margin: 24px 0; }
+.current-picks-filter { display: grid; gap: 8px; font-size: 14px; }
+.current-picks-toolbar select { max-width: 100%; min-height: 44px; padding: 8px 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); }
+.current-picks-toolbar > span { color: var(--muted); padding: 12px 0; }
+.current-picks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px; margin-bottom: 24px; }
+.current-pick-card { min-width: 0; padding: 24px; background: var(--white); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.current-pick-card header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.current-pick-card a { color: var(--green); }
+.current-pick-card header span, .current-pick-time { color: var(--muted); font-size: 13px; }
+.current-pick-card h3 { font-size: 22px; line-height: 1.4; }
+.current-pick-line { font-weight: 700; display: flex; flex-wrap: wrap; gap: 20px; }
+.current-pick-analysis { white-space: pre-wrap; line-height: 1.65; }
 .site-shell { overflow: hidden; }
 .site-header { height: 76px; padding: 0 clamp(20px, 5vw, 76px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: rgba(4, 9, 22, 0.96); position: sticky; top: 0; z-index: 20; backdrop-filter: blur(12px); }
 .brand { min-width: 0; display: flex; align-items: center; text-decoration: none; }

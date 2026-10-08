@@ -63,6 +63,28 @@ tier roles; the bot independently checks private payment or eligible trial evide
 submissions. Successful empty production sync has been observed, but a positive
 production paid-member test remains outstanding.
 
+### Website access and current-picks implementation (October 8, 2026)
+
+The repository now includes a HIGHROLLER `/picks` board with sport/capper
+filters, current-picks sections on capper pages, and a public author directory
+that supports cappers without settled history. Public performance records remain
+settled-only. The account page reads verified membership status and reloads all
+saved profile controls, rather than reporting a fixed "No paid plan" value.
+
+`20261008000000_website_member_picks.sql` connects provider-managed Discord
+OAuth identity and age verification to seller/plan-scoped paid, eligible trial,
+and owner entitlements. It restricts premium data server-side and closes raw
+browser table access. Website premium access is disabled by default; configure
+the full historical paid/trial allowlists and complete staging/live validation
+before enabling it. Checkout remains closed and no offer availability was changed.
+See `DEPLOYMENT.md` for rollout and rollback.
+
+Local SQL authorization and mocked browser regressions are available; they do
+not prove live OAuth, payment, refund/chargeback polling, Discord role mapping,
+provider approval, policy approval, or recovery readiness. Gate A and Gate B
+remain unchecked until supported by live evidence. Forced reactions, slip-image
+unlocking, and paid advertising are not included in this release.
+
 ## 3. Initial Product
 
 On October 5, 2026, the owner approved Robin's free/paid role structure and
