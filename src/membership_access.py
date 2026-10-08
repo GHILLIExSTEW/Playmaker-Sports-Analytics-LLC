@@ -39,7 +39,7 @@ class MembershipRoleSync:
             try:
                 has_role = any(existing.id == self.role_id for existing in member.roles)
                 if member.id in member_ids and not has_role:
-                    await member.add_roles(role, reason="Current paid, trial, or owner membership entitlement")
+                    await member.add_roles(role, reason="Current paid, trial, owner, or OPERATOR team entitlement")
                 elif member.id not in member_ids and has_role:
                     await member.remove_roles(role, reason="No current membership entitlement")
             except discord.HTTPException:

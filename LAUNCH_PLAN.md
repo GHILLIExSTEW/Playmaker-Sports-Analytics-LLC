@@ -79,6 +79,19 @@ the full historical paid/trial allowlists and complete staging/live validation
 before enabling it. Checkout remains closed and no offer availability was changed.
 See `DEPLOYMENT.md` for rollout and rollback.
 
+Owner-approved team exception: members holding Discord OPERATOR role
+`1328120848992960543` receive complimentary HIGHROLLER access with no scheduled
+expiry while they remain OPERATORs. This is not a paid pass, consumed trial, or
+permanent entitlement after leaving the team. The owner-preview, operator-access,
+and operator-benefits migrations (`20261008020000`, `20261008030000`,
+`20261008040000`) allow verified owner/team website access while general
+enrollment stays closed, and include stats/vault authorization and membership
+reconciliation. Website sign-in and age verification still apply; a fresh
+five-minute OPERATOR roster is required. Team access fails closed after 15
+minutes without roster verification. Independent paid/trial/owner access remains
+valid after role removal. Whop-owned Discord role assignments are a separate
+deployment configuration and are not fabricated as payments.
+
 Local SQL authorization and mocked browser regressions are available; they do
 not prove live OAuth, payment, refund/chargeback polling, Discord role mapping,
 provider approval, policy approval, or recovery readiness. Gate A and Gate B

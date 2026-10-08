@@ -352,7 +352,7 @@ export default function MemberAccountPage() {
     <section className="account-status-grid" aria-label="Account status">
       <div><span>Discord</span><strong>Connected</strong><small>{String(session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.user_metadata?.username || 'Discord member')}</small></div>
       <div><span>Age verification</span><strong>Verified 21+</strong><small>Date of birth is not retained</small></div>
-      <div><span>Membership</span><strong>{access?.state === 'active' ? `HIGHROLLER ${access.kind === 'trial' ? 'trial' : access.kind === 'owner' ? 'owner' : 'paid'}` : access?.state === 'launch-pending' ? 'Launch pending' : access?.state === 'membership-required' ? 'No verified active pass' : 'Access check required'}</strong><small>Verified against server-side entitlements, not Discord roles</small></div>
+      <div><span>Membership</span><strong>{access?.state === 'active' ? access.kind === 'operator' ? 'HIGHROLLER team' : `HIGHROLLER ${access.kind === 'trial' ? 'trial' : access.kind === 'owner' ? 'owner' : 'paid'}` : access?.state === 'launch-pending' ? 'Launch pending' : access?.state === 'membership-required' ? 'No verified active pass' : 'Access check required'}</strong><small>Verified against server-side entitlements or the synchronized OPERATOR roster</small></div>
     </section>
     <section className="account-panel" aria-label="Membership access">
       <MemberAccessNotice />

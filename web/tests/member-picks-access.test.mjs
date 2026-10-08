@@ -11,7 +11,7 @@ test(`website member access and current picks enforce server authorization (${ha
   await db.exec(`
     create role anon;
     create role authenticated;
-    create role service_role;
+    create role service_role bypassrls;
     create schema auth;
     create table auth.users (id uuid primary key, raw_user_meta_data jsonb default '{}');
     create table auth.identities (user_id uuid references auth.users(id), provider text, provider_id text);
@@ -217,6 +217,102 @@ test(`website member access and current picks enforce server authorization (${ha
     await db.exec("update public.website_capper_roster set verified_at=now()-interval '16 minutes'")
     await assert.rejects(call('select * from public.public_capper_directory()', 'anon', ''), /unavailable or stale/)
     await assert.rejects(call('select * from public.member_current_picks()'), /unavailable or stale/)
+  })
+  await t.test('closed-launch preview authorizes only the verified owner with a current grant', async () => {
+    await load('../../supabase/migrations/20261008020000_owner_website_preview.sql')
+    await db.exec('update public.website_membership_config set enabled=false')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111'])", 'service_role')
+    assert.equal((await access()).kind, 'owner')
+    assert.deepEqual((await call('select * from public.member_current_picks()')).map((row) => row.id), [1])
+    assert.equal((await db.query('select enabled from public.website_membership_config')).rows[0].enabled, false)
+    await assert.rejects(call('select public.website_member_access_standard()'), /permission denied/)
+    for (const mutation of [
+      "update auth.identities set provider_id='123456789'",
+      "delete from auth.identities",
+      "update public.member_profiles set age_verified_at=null",
+      "update public.owner_membership_grants set revoked_at=now()",
+      "update public.owner_membership_grants set account_id='wrong-seller'",
+      "update public.owner_membership_grants set starts_at=now()+interval '1 hour'",
+      "update public.owner_membership_grants set starts_at=now()-interval '2 days',expires_at=now()-interval '1 minute'",
+    ]) {
+      await db.exec('begin')
+      inTransaction = true
+      try {
+        await db.exec(mutation)
+        assert.notEqual((await access()).state, 'active', mutation)
+        await denied()
+      } finally { await db.exec('rollback'); inTransaction = false }
+    }
+    await db.exec("update auth.identities set provider_id='123456789'")
+    assert.equal((await access()).state, 'launch-pending')
+    await denied()
+    await db.exec('update public.whop_memberships set paid=false')
+    assert.equal((await access()).state, 'launch-pending')
+    await denied()
+    assert.equal((await call('select public.website_member_access() as access', 'anon', '')).at(0).access.state, 'signed-out')
+  })
+  await t.test('verified OPERATORs can view picks while launch is closed; removal and stale roster deny', async () => {
+    await load('../../supabase/migrations/20261008030000_operator_website_access.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','123456789'])", 'service_role')
+    assert.equal((await access()).kind, 'operator')
+    assert.deepEqual((await call('select * from public.member_current_picks()')).map((row) => row.id), [1])
+    assert.equal((await db.query('select enabled from public.website_membership_config')).rows[0].enabled, false)
+    await assert.rejects(call('select public.website_member_access_owner_preview()'), /permission denied/)
+    for (const mutation of [
+      "update public.member_profiles set age_verified_at=null",
+      "delete from auth.identities",
+      "update auth.identities set provider_id='999999'",
+      "update public.website_capper_roster set discord_user_ids=array['111']",
+    ]) {
+      await db.exec('begin')
+      inTransaction = true
+      try {
+        await db.exec(mutation)
+        assert.notEqual((await access()).state, 'active')
+        await denied()
+      } finally { await db.exec('rollback'); inTransaction = false }
+    }
+    await db.exec("update public.whop_trial_memberships set status='revoked'")
+    await db.exec('update public.website_membership_config set enabled=true')
+    assert.equal((await access()).kind, 'operator')
+    await db.exec("update public.website_capper_roster set verified_at=now()-interval '16 minutes'")
+    await assert.rejects(access(), /unavailable or stale/)
+    await assert.rejects(call('select * from public.member_current_picks()'), /unavailable or stale/)
+  })
+  await t.test('OPERATOR team HIGHROLLER includes stats/vault and member reconciliation without payment; removal preserves independent entitlements', async () => {
+    await load('../../supabase/migrations/20261008040000_operator_highroller_benefits.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['123456789'])", 'service_role')
+    await db.exec("update public.whop_trial_memberships set status='revoked'; update public.website_membership_config set enabled=false")
+    const vault = async () => (await call("select public.discord_has_paid_access('123456789') as allowed", 'service_role'))[0].allowed
+    const stats = async (seller = 'biz_rCNwfXRlnl0bFU') => (await call(`select public.discord_has_paid_plan_access('123456789','${seller}',array['historical-paid']) as allowed`, 'service_role'))[0].allowed
+    assert.equal(await vault(), true)
+    assert.equal(await stats(), true)
+    assert.equal(await stats('wrong-seller'), false)
+    assert.ok((await call('select * from public.paid_discord_member_ids()', 'service_role')).some((row) => row.discord_user_id === '123456789'))
+    assert.equal((await access()).kind, 'operator')
+    assert.equal((await access()).expires_at, null)
+    assert.equal((await db.query("select paid from public.whop_memberships where discord_user_id='123456789'")).rows[0].paid, false)
+    await assert.rejects(call("select * from public.team_highroller_ids('biz_rCNwfXRlnl0bFU')"), /permission denied/)
+    for (const mutation of [
+      "update public.website_capper_roster set discord_user_ids=array[]::text[]",
+      "update public.website_capper_roster set verified_at=now()-interval '16 minutes'",
+      "update public.website_capper_roster set role_id='999'",
+    ]) {
+      await db.exec('begin')
+      inTransaction = true
+      try {
+        await db.exec(mutation)
+        assert.equal(await vault(), false)
+        assert.equal(await stats(), false)
+        assert.ok(!(await call('select * from public.paid_discord_member_ids()', 'service_role')).some((row) => row.discord_user_id === '123456789'))
+      } finally { await db.exec('rollback'); inTransaction = false }
+    }
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array[]::text[])", 'service_role')
+    await db.exec('update public.whop_memberships set paid=true')
+    assert.equal(await vault(), true)
+    assert.equal(await stats(), true)
+    await db.exec("update public.whop_memberships set paid=false; update public.whop_trial_memberships set status='active'")
+    assert.equal((await call("select public.discord_has_trial_access('123456789','biz_rCNwfXRlnl0bFU',array['plan_R7H8Sx7MEKzh0']) as allowed", 'service_role'))[0].allowed, true)
   })
 })
 }

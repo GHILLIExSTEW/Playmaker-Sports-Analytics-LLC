@@ -80,6 +80,24 @@ document verification service.
 
 ## Current Picks and Verified Website Access
 
+Apply `20261008030000_operator_website_access.sql` after the owner-preview
+migration and deploy the matching frontend to allow age-verified OPERATOR
+members to view picks while enrollment is closed. Access is resolved using
+provider-managed Discord identity and the fresh bot roster, not editable role
+metadata. Apply `20261008040000_operator_highroller_benefits.sql` to include
+stats/vault access and membership reconciliation. The UI displays complimentary
+HIGHROLLER team access, not paid access. Benefits have no scheduled expiry
+while the OPERATOR role remains verified; removing the role removes team access.
+Existing independent paid/trial/owner entitlements are preserved. No Whop
+payment or trial claim is fabricated.
+
+For owner-only prelaunch testing, apply
+`20261008020000_owner_website_preview.sql`. It permits only the verified owner
+Discord identity with completed age verification and a current seller-matched
+owner grant through the closed launch gate. Paid/trial enrollment remains
+closed; leave the membership config disabled. Current-picks access still
+requires a fresh OPERATOR roster. This does not substitute for live launch tests.
+
 Capper eligibility now follows the Discord OPERATOR/tracker role, not merely
 having published plays. Apply `20261008010000_operator_capper_roster.sql` after
 the member-picks migration and deploy the bot's five-minute roster sync.

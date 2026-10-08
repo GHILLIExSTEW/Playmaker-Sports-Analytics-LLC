@@ -5,7 +5,7 @@ from src.config import WHOP_ACCOUNT_ID, WHOP_PAID_PLAN_IDS, WHOP_TRIAL_PLAN_IDS
 
 
 class MembershipService:
-    """Read paid, verified trial, or owner access without treating trials as payment."""
+    """Read paid, trial, owner, or OPERATOR team access without fabricating payment."""
 
     def __init__(self, database=None) -> None:
         self.db = database or supabase_service

@@ -5,7 +5,7 @@ const picks = [
   { id: 1, created_at: '2026-10-07T19:00:00Z', sport: 'NFL', capper: 'First Capper', avatar_url: null, selection: 'First NFL selection', analysis: 'NFL analysis', odds: 110, units: 1 },
 ]
 
-async function mockApi(page: Page, options: { state?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string } = {}) {
+async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string } = {}) {
   const control = { state: options.state ?? 'active', feedRequests: 0, offsets: [] as number[], failAccess: options.accessError ?? false }
   await page.route('https://lhsevzucmmzetpshpffv.supabase.co/**', async (route) => {
     const rpc = new URL(route.request().url()).pathname.split('/').at(-1)
@@ -13,7 +13,7 @@ async function mockApi(page: Page, options: { state?: string; feedError?: boolea
       await route.fulfill({
         status: control.failAccess ? 500 : 200,
         json: control.failAccess ? { message: 'Access verification unavailable' }
-          : control.state === 'active' ? { state: 'active', kind: 'paid', expires_at: options.expiresAt ?? '2099-01-01T00:00:00Z' } : { state: control.state },
+          : control.state === 'active' ? { state: 'active', kind: options.kind ?? 'paid', expires_at: options.kind === 'operator' ? null : options.expiresAt ?? '2099-01-01T00:00:00Z' } : { state: control.state },
       })
     } else if (rpc === 'member_current_picks') {
       control.feedRequests += 1
@@ -61,6 +61,14 @@ test('filters by sport/capper and opens a current-only capper page', async ({ pa
   await expect(page.getByRole('heading', { name: 'New NHL selection' })).toBeVisible()
   await expect(page.getByText('No settled results yet.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'First NFL selection' })).toHaveCount(0)
+})
+
+test('OPERATOR access renders the picks board without claiming paid membership', async ({ page }) => {
+  await mockApi(page, { kind: 'operator' })
+  await page.goto('/picks')
+  await expect(page.getByText('HIGHROLLER team access', { exact: false })).toBeVisible()
+  await expect(page.getByRole('article')).toHaveCount(2)
+  await expect(page.getByText('HIGHROLLER paid access', { exact: false })).toHaveCount(0)
 })
 
 for (const [state, message] of [

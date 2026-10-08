@@ -6,12 +6,12 @@ import { MemberAccessContext, useMemberAccess, type MemberAccess, type AccessSna
 function parseAccess(value: unknown): MemberAccess {
   if (!value || typeof value !== 'object' || !('state' in value)) throw new Error('Unexpected membership response.')
   if (value.state === 'active') {
-    if (!('kind' in value) || !['paid', 'trial', 'owner'].includes(String(value.kind))
+    if (!('kind' in value) || !['paid', 'trial', 'owner', 'operator'].includes(String(value.kind))
       || !('expires_at' in value) || (value.expires_at !== null
         && (typeof value.expires_at !== 'string' || !Number.isFinite(Date.parse(value.expires_at))))) {
       throw new Error('Unexpected membership response.')
     }
-    if (value.kind !== 'paid' && value.kind !== 'trial' && value.kind !== 'owner') throw new Error('Unexpected membership kind.')
+    if (value.kind !== 'paid' && value.kind !== 'trial' && value.kind !== 'owner' && value.kind !== 'operator') throw new Error('Unexpected membership kind.')
     return { state: 'active', kind: value.kind, expires_at: value.expires_at }
   }
   switch (value.state) {
@@ -76,7 +76,7 @@ export function MemberAccessNotice() {
     case 'age-required': return <p className="account-state"><Link to="/account">Complete age verification</Link> before accessing current picks. Members must be 21+ or the higher local legal age.</p>
     case 'discord-required': return <p className="account-state">A verified Discord sign-in is required. <Link to="/account">Sign out and continue with Discord</Link> using the account linked to your Whop membership.</p>
     case 'launch-pending': return <p className="account-state">Website premium access is awaiting launch validation. Checkout remains closed. <Link to="/membership">View membership details</Link>.</p>
-    case 'membership-required': return <p className="account-state">No current verified HIGHROLLER access was found. Use the same Discord account linked in Whop. Paid passes and eligible trials need a fresh membership sync; roles alone do not grant website access. <Link to="/membership">Membership details</Link> or <a href="mailto:support@playmakersportsanalytics.com">contact support</a>.</p>
-    case 'active': return <p className="account-state">HIGHROLLER {access.kind === 'owner' ? 'owner access' : access.kind === 'trial' ? 'trial access' : 'paid access'}{access.expires_at ? ` through ${new Date(access.expires_at).toLocaleString()}` : ''}. <Link to="/picks">Browse current picks</Link>.</p>
+    case 'membership-required': return <p className="account-state">No current verified HIGHROLLER access was found. Use the same Discord account linked in Whop. Paid passes and eligible trials need a fresh membership sync. OPERATOR picks access requires the bot to verify your role membership. <Link to="/membership">Membership details</Link> or <a href="mailto:support@playmakersportsanalytics.com">contact support</a>.</p>
+    case 'active': return <p className="account-state">{access.kind === 'operator' ? 'HIGHROLLER team access — complimentary, with no scheduled expiry while you hold the OPERATOR role' : `HIGHROLLER ${access.kind === 'owner' ? 'owner access' : access.kind === 'trial' ? 'trial access' : 'paid access'}`}{access.expires_at ? ` through ${new Date(access.expires_at).toLocaleString()}` : ''}. <Link to="/picks">Browse current picks</Link>.</p>
   }
 }

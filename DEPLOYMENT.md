@@ -1,5 +1,52 @@
 # Proxmox deployment guide
 
+## Complimentary OPERATOR team HIGHROLLER access
+
+Apply `20261008020000_owner_website_preview.sql` first, then
+`supabase/migrations/20261008030000_operator_website_access.sql`. Deploy the
+updated frontend to recognize `operator` access. Also apply
+`supabase/migrations/20261008040000_operator_highroller_benefits.sql` for
+Discord stats, vault authorization, and membership reconciliation. Every verified Discord member
+in the bot's fresh OPERATOR roster (role `1328120848992960543`) can view `/picks`
+after age verification, even with website enrollment disabled and without a
+paid pass. Other roles do not qualify. Team members have complimentary
+HIGHROLLER benefits with no scheduled expiry while holding the OPERATOR role;
+this is not a permanent grant after leaving the team, a payment, or a trial.
+Owner access is retained.
+Role removals take effect after the next five-minute bot sync and browser
+access recheck; a roster older than 15 minutes fails explicitly. Checkout and
+general enrollment stay closed. Keep `website_membership_config.enabled=false`.
+The benefits migration preserves independent paid/trial/owner authorization.
+It changes no Whop payment snapshots or offers. Team authorization expires
+if roster verification stops for 15 minutes and is removed on the next sync
+after role removal. Configure the exact OPERATOR role, not a moderator role.
+The existing optional dedicated bot-managed membership role reconciler includes
+team identities automatically; do not let it manage a Whop-owned role or enable
+it without reviewing its existing role-safety requirements. Whop-managed
+HIGHROLLER role assignment for complimentary team members must be configured
+separately in Discord/Whop; these migrations do not themselves assign Discord
+roles or charge anyone.
+
+## Owner-only website preview while enrollment is closed
+
+Apply `supabase/migrations/20261008020000_owner_website_preview.sql` after the
+member-picks and OPERATOR-roster migrations. Leave
+`website_membership_config.enabled=false`. The one verified owner Discord
+identity `761388542965448767` can preview current picks with a current,
+seller-matched HIGHROLLER owner grant and completed age verification.
+Editable metadata, other grants, roles, paid passes, and trials cannot bypass
+the closed launch gate. Revoked/expired/future owner grants cannot preview.
+The OPERATOR roster must still be fresh for current picks.
+
+After applying, click **Recheck membership access** on the account page. It
+should show HIGHROLLER owner access; `/picks` should load current OPERATOR
+plays. This is a database-only change, with no bot restart or frontend build
+required. Checkout and general website membership access stay closed.
+The original membership decision remains a private function; browser callers
+can only use the new wrapper. To stop owner preview, revoke the owner grant
+(this also removes its other granted benefits) or restore the original
+closed-gate function through a reviewed migration.
+
 ## Sports startup cache disconnect recovery
 
 The multi-sport service now uses the existing Supabase three-attempt transport
