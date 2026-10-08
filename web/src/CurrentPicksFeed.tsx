@@ -45,21 +45,24 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
   const [sport, setSport] = useState('All')
   const [author, setAuthor] = useState('All')
   const [visibleCount, setVisibleCount] = useState(50)
-  const [owner, setOwner] = useState<{ access: typeof access; name: string | null; error: string } | null>(null)
+  const [owner, setOwner] = useState<{ access: typeof access; name: string | null; all: boolean; error: string } | null>(null)
 
   useEffect(() => {
     if (access?.state !== 'active') return
     let cancelled = false
     void (async () => {
       try {
-        const { data, error: ownerError } = await supabase.rpc('owned_capper_page')
+        const [{ data, error: ownerError }, adminResult] = await Promise.all([
+          supabase.rpc('owned_capper_page'), supabase.rpc('website_can_edit_all_cappers'),
+        ])
         if (ownerError) throw ownerError
+        if (adminResult.error) throw adminResult.error
         if (data !== null && typeof data !== 'string') throw new Error('Unexpected page ownership response.')
-        if (!cancelled) setOwner({ access, name: data, error: '' })
+        if (!cancelled) setOwner({ access, name: data, all: adminResult.data === true, error: '' })
       } catch (failure) {
         const detail = failure && typeof failure === 'object' && 'message' in failure && typeof failure.message === 'string'
           ? ` ${failure.message}` : ''
-        if (!cancelled) setOwner({ access, name: null, error: `Insight editing could not be checked.${detail}` })
+        if (!cancelled) setOwner({ access, name: null, all: false, error: `Insight editing could not be checked.${detail}` })
       }
     })()
     return () => { cancelled = true }
@@ -129,7 +132,7 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
             <summary>Capper insight</summary>
             <p className="current-pick-analysis">{pick.analysis}</p>
           </details>}
-          {owner?.access === access && owner.name === pick.capper && <PickInsightEditor
+          {owner?.access === access && (owner.all || owner.name === pick.capper) && <PickInsightEditor
             key={pick.id} playId={pick.id} insight={pick.analysis}
             onSaved={(value) => setLoaded((current) => current && current.access === access
               ? { ...current, picks: current.picks.map((item) => item.id === pick.id ? { ...item, analysis: value } : item) }

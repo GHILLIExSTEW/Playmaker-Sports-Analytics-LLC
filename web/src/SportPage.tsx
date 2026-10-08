@@ -144,6 +144,7 @@ function SportPageContent({ sport, results, loadState }: { sport: (typeof sports
       <p>Schedules, scores, and the official settled-play record for {sport.name}.</p>
     </header>
     {sport.slug === 'american-football' && <Link className="sport-feature-link" to="/nfl">Open NFL schedule, scores &amp; standings <ArrowRight size={16} /></Link>}
+    {sport.feed === 'nfl' && <Link className="sport-feature-link" to="/nfl/lab">Open NFL matchup lab &amp; odds calculator <ArrowRight size={16} /></Link>}
     <section className="sport-api-events">
       <div className="profile-section-heading"><p className="eyebrow">Schedule & scores</p><h2>{sport.name} events.</h2></div>
       {eventState === 'loading' && <p className="results-empty">Loading {sport.name} schedule…</p>}

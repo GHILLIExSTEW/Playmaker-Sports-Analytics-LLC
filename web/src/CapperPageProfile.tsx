@@ -1,23 +1,18 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from './supabaseClient'
+import { parseAppearance, safeImageUrl, sectionLabels, type CapperAppearance, type CapperTheme } from './capperAppearance'
 
 const socialLabels = { website: 'Website', x: 'X', instagram: 'Instagram', discord: 'Discord' }
 type SocialKey = keyof typeof socialLabels
-type Profile = { name: string; accent_color: string; bio: string; avatar_url: string | null; social_links: Partial<Record<SocialKey, string>> }
-
-function httpsUrl(value: string) {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && !url.username && !url.password && !/\s/.test(value)
-  } catch { return false }
-}
+type Profile = CapperTheme & { name: string; bio: string; avatar_url: string | null; social_links: Partial<Record<SocialKey, string>> }
 
 function parseProfile(value: unknown): Profile {
   if (!value || typeof value !== 'object'
     || !('name' in value) || typeof value.name !== 'string'
     || !('accent_color' in value) || typeof value.accent_color !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.accent_color)
+    || !('background_color' in value) || typeof value.background_color !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.background_color)
     || !('bio' in value) || typeof value.bio !== 'string'
-    || !('avatar_url' in value) || (value.avatar_url !== null && (typeof value.avatar_url !== 'string' || !httpsUrl(value.avatar_url)))
+    || !('avatar_url' in value) || (value.avatar_url !== null && (typeof value.avatar_url !== 'string' || !safeImageUrl(value.avatar_url)))
     || !('social_links' in value) || !value.social_links || typeof value.social_links !== 'object' || Array.isArray(value.social_links)) {
     throw new Error('Unexpected capper page settings.')
   }
@@ -25,11 +20,12 @@ function parseProfile(value: unknown): Profile {
   for (const key of Object.keys(socialLabels) as SocialKey[]) {
     if (key in value.social_links) {
       const link: unknown = Reflect.get(value.social_links, key)
-      if (typeof link !== 'string' || !httpsUrl(link)) throw new Error('Unexpected capper social link.')
+      if (typeof link !== 'string' || !safeImageUrl(link)) throw new Error('Unexpected capper social link.')
       links[key] = link
     }
   }
-  return { name: value.name, accent_color: value.accent_color, bio: value.bio, avatar_url: value.avatar_url, social_links: links }
+  return { name: value.name, accent_color: value.accent_color, background_color: value.background_color,
+    appearance: parseAppearance(Reflect.get(value, 'appearance')), bio: value.bio, avatar_url: value.avatar_url, social_links: links }
 }
 
 function errorMessage(error: unknown) {
@@ -37,13 +33,13 @@ function errorMessage(error: unknown) {
     ? error.message : 'Please retry.'
 }
 
-async function avatarBlob(file: File): Promise<Blob> {
+async function imageBlob(file: File, maxSize: number): Promise<Blob> {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
     throw new Error('Choose a PNG, JPEG or WebP image under 10 MB.')
   }
   const image = await createImageBitmap(file)
   try {
-    const scale = Math.min(1, 512 / Math.max(image.width, image.height))
+    const scale = Math.min(1, maxSize / Math.max(image.width, image.height))
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(image.width * scale))
     canvas.height = Math.max(1, Math.round(image.height * scale))
@@ -56,7 +52,7 @@ async function avatarBlob(file: File): Promise<Blob> {
   } finally { image.close() }
 }
 
-export default function CapperPageProfile({ name, onSaved }: { name: string; onSaved: () => void }) {
+export default function CapperPageProfile({ name, onSaved, onAppearance }: { name: string; onSaved: () => void; onAppearance: (name: string, theme: CapperTheme) => void }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [draft, setDraft] = useState<Profile | null>(null)
   const [owner, setOwner] = useState(false)
@@ -66,6 +62,7 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
   const [message, setMessage] = useState('')
   const [version, setVersion] = useState(0)
   const [imageFile, setImageFile] = useState<File | null>(null)
+  const [bannerFile, setBannerFile] = useState<File | null>(null)
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
       setOwner(false)
@@ -78,18 +75,21 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
     let cancelled = false
     void (async () => {
       try {
-        const [publicResult, ownerResult] = await Promise.all([
+        const [publicResult, ownerResult, adminResult] = await Promise.all([
           supabase.rpc('capper_page_profile', { p_capper: name }),
           supabase.rpc('owned_capper_page'),
+          supabase.rpc('website_can_edit_all_cappers'),
         ])
         if (cancelled) return
         if (publicResult.error) throw publicResult.error
         if (publicResult.data === null) throw new Error('This capper page is no longer available.')
         const next = parseProfile(publicResult.data)
         setProfile(next)
+        onAppearance(name, next)
         setDraft(next)
-        setOwner(!ownerResult.error && ownerResult.data === name)
-        setError(ownerResult.error ? `Page editing could not be checked. ${ownerResult.error.message}` : '')
+        setOwner((!ownerResult.error && ownerResult.data === name) || (!adminResult.error && adminResult.data === true))
+        const editError = adminResult.error ?? ownerResult.error
+        setError(editError ? `Page editing could not be checked. ${editError.message}` : '')
       } catch (failure) {
         if (cancelled) return
         setProfile(null)
@@ -98,7 +98,7 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
       }
     })()
     return () => { cancelled = true }
-  }, [name, version])
+  }, [name, version, onAppearance])
 
   async function save(event: FormEvent) {
     event.preventDefault()
@@ -106,8 +106,7 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
     setBusy(true)
     setError('')
     setMessage('')
-    let uploadedPath: string | null = null
-    let previousPath: string | null = null
+    const uploadedPaths: string[] = []
     let saved = false
     try {
       let avatarUrl = draft.avatar_url ?? ''
@@ -117,39 +116,52 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
       if (!userId) throw new Error('Sign in through Discord before editing your page.')
       const bucket = supabase.storage.from('website-assets')
       const prefix = bucket.getPublicUrl(`capper-avatars/${userId}/`).data.publicUrl
-      if (profile?.avatar_url?.startsWith(prefix)) {
-        const filename = profile.avatar_url.slice(prefix.length)
-        if (/^[0-9a-f-]{36}\.webp$/.test(filename)) previousPath = `capper-avatars/${userId}/${filename}`
+      const managedPath = (url: string | null) => {
+        if (!url?.startsWith(prefix)) return null
+        const filename = url.slice(prefix.length)
+        return /^[0-9a-f-]{36}\.webp$/.test(filename) ? `capper-avatars/${userId}/${filename}` : null
       }
-      if (imageFile) {
-        const blob = await avatarBlob(imageFile)
+      const upload = async (file: File, size: number) => {
+        const blob = await imageBlob(file, size)
         const path = `capper-avatars/${userId}/${crypto.randomUUID()}.webp`
         const { error: uploadError } = await bucket.upload(path, blob, { contentType: 'image/webp', upsert: false })
         if (uploadError) throw uploadError
-        uploadedPath = path
-        avatarUrl = bucket.getPublicUrl(path).data.publicUrl
+        uploadedPaths.push(path)
+        return bucket.getPublicUrl(path).data.publicUrl
       }
+      if (imageFile) avatarUrl = await upload(imageFile, 512)
+      const appearance = { ...draft.appearance }
+      if (bannerFile) appearance.banner_url = await upload(bannerFile, 1600)
       const { data, error: saveError } = await supabase.rpc('save_capper_page', {
         p_accent_color: draft.accent_color, p_bio: draft.bio,
         p_avatar_url: avatarUrl, p_social_links: draft.social_links,
+        p_capper: name,
+        p_background_color: draft.background_color,
+        p_appearance: appearance,
       })
       if (saveError) throw saveError
       saved = true
       const next = parseProfile(data)
       setProfile(next)
+      onAppearance(name, next)
       setDraft(next)
       setEditing(false)
       setImageFile(null)
+      setBannerFile(null)
       setMessage('Capper page saved.')
       onSaved()
-      if (previousPath && avatarUrl !== profile?.avatar_url) {
-        const { error: cleanupError } = await bucket.remove([previousPath])
-        if (cleanupError) setError(`Your page was saved, but the previous uploaded image could not be removed. ${cleanupError.message}`)
+      const kept = new Set([avatarUrl, appearance.banner_url])
+      const previousPaths = [...new Set([profile?.avatar_url, profile?.appearance.banner_url]
+        .filter((url): url is string => Boolean(url) && !kept.has(url ?? null))
+        .map(managedPath).filter((path): path is string => path !== null))]
+      if (previousPaths.length) {
+        const { error: cleanupError } = await bucket.remove(previousPaths)
+        if (cleanupError) setError(`Your page was saved, but previous uploaded images could not be removed. ${cleanupError.message}`)
       }
     } catch (failure) {
       let detail = errorMessage(failure)
-      if (uploadedPath && !saved) {
-        const { error: cleanupError } = await supabase.storage.from('website-assets').remove([uploadedPath])
+      if (uploadedPaths.length && !saved) {
+        const { error: cleanupError } = await supabase.storage.from('website-assets').remove(uploadedPaths)
         if (cleanupError) detail += ` The unused upload could not be removed: ${cleanupError.message}`
       }
       setError(`${saved ? 'Page saved, but its updated display could not be loaded.' : 'Page was not saved.'} ${detail}`)
@@ -167,9 +179,37 @@ export default function CapperPageProfile({ name, onSaved }: { name: string; onS
           ? <a key={key} href={profile.social_links[key]} target="_blank" rel="noopener noreferrer">{socialLabels[key]}</a> : null)}
       </nav>}
     </>}
-    {owner && draft && <button type="button" disabled={busy} className="account-secondary-button" onClick={() => { setEditing(!editing); setDraft(profile); setImageFile(null); setMessage('') }}> {editing ? 'Cancel editing' : 'Edit your capper page'}</button>}
+    {owner && draft && <button type="button" disabled={busy} className="account-secondary-button" onClick={() => { setEditing(!editing); setDraft(profile); setImageFile(null); setBannerFile(null); setMessage('') }}> {editing ? 'Cancel editing' : 'Edit your capper page'}</button>}
     {owner && editing && draft && <form className="capper-page-editor" onSubmit={save}>
       <label>Accent color<input type="color" value={draft.accent_color} onChange={(event) => setDraft({ ...draft, accent_color: event.target.value })} /></label>
+      <label>Page background color<input type="color" value={draft.background_color} onChange={(event) => setDraft({ ...draft, background_color: event.target.value })} /></label>
+      {(['name_color', 'link_color', 'text_color'] as const).map((key) => <fieldset key={key}>
+        <legend>{{ name_color: 'Display name color', link_color: 'Link color', text_color: 'Body text color' }[key]}</legend>
+        <label><input type="checkbox" checked={draft.appearance[key] === null} onChange={(event) => setDraft({
+          ...draft, appearance: { ...draft.appearance, [key]: event.target.checked ? null : '#ffffff' },
+        })} /> Automatic color</label>
+        {draft.appearance[key] !== null && <label>Custom {key === 'name_color' ? 'name' : key === 'link_color' ? 'link' : 'text'} color<input type="color" value={draft.appearance[key] ?? '#ffffff'} onChange={(event) => setDraft({ ...draft, appearance: { ...draft.appearance, [key]: event.target.value } })} /></label>}
+      </fieldset>)}
+      <p>Automatic colors adapt to your background. For custom colors, choose contrasting shades so members can read your page.</p>
+      <label>Heading font<select value={draft.appearance.heading_font} onChange={(event) => {
+        const font = event.target.value
+        if (font === 'barlow' || font === 'ibm' || font === 'georgia') setDraft({ ...draft, appearance: { ...draft.appearance, heading_font: font } })
+      }}><option value="barlow">Barlow Condensed</option><option value="ibm">IBM Plex Sans</option><option value="georgia">Georgia</option></select></label>
+      <label>Upload banner image<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => setBannerFile(event.target.files?.[0] ?? null)} /></label>
+      <label>Banner image URL<input type="url" maxLength={2048} value={draft.appearance.banner_url ?? ''} onChange={(event) => setDraft({ ...draft, appearance: { ...draft.appearance, banner_url: event.target.value || null } })} /></label>
+      <p>Optional banner: PNG/JPEG/WebP up to 10 MB, resized to at most 1600px. Clear its upload and URL to remove it.</p>
+      <fieldset><legend>Page section order</legend>
+        {draft.appearance.section_order.map((section, index) => <div className="capper-section-order" key={section}>
+          <span>{sectionLabels[section]}</span>
+          {([-1, 1] as const).map((step) => <button type="button" key={step} disabled={busy || index + step < 0 || index + step >= 4}
+            aria-label={`Move ${sectionLabels[section]} ${step < 0 ? 'up' : 'down'}`} onClick={() => {
+              const order: CapperAppearance['section_order'] = [...draft.appearance.section_order]
+              const target = index + step
+              ;[order[index], order[target]] = [order[target], order[index]]
+              setDraft({ ...draft, appearance: { ...draft.appearance, section_order: order } })
+            }}>{step < 0 ? 'Up' : 'Down'}</button>)}
+        </div>)}
+      </fieldset>
       <label>Bio / description<textarea maxLength={2000} value={draft.bio} onChange={(event) => setDraft({ ...draft, bio: event.target.value })} /></label>
       <label>Upload profile image<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /></label>
       <p>PNG, JPEG or WebP, up to 10 MB. Uploads are resized to at most 512 pixels and saved publicly when you save the page.</p>

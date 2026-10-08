@@ -45,14 +45,21 @@ export type NflStanding = {
 
 export type NflSyncStatus = { sync_key: string; last_success_at: string | null; success: boolean }
 
-async function fetchRpc<T>(name: string): Promise<T[]> {
-  const { data, error } = await supabase.rpc(name)
-  if (error) throw error
-  return (data ?? []) as T[]
+async function fetchRpc<T>(name: string, orderColumns: string[] = []): Promise<T[]> {
+  const rows: T[] = []
+  for (let offset = 0; ; offset += 1000) {
+    let query = supabase.rpc(name)
+    for (const column of orderColumns) query = query.order(column)
+    const { data, error } = await query.range(offset, offset + 999)
+    if (error) throw error
+    if (!Array.isArray(data)) throw new Error(`Unexpected ${name} response.`)
+    rows.push(...data as T[])
+    if (data.length < 1000) return rows
+  }
 }
 
 export async function fetchNflGames(): Promise<NflGame[]> {
-  return fetchRpc<NflGame>('public_nfl_games')
+  return fetchRpc<NflGame>('public_nfl_games', ['kickoff_at', 'game_id'])
 }
 
 export async function fetchNflStandings(): Promise<NflStanding[]> {

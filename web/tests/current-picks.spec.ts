@@ -4,6 +4,8 @@ const picks = [
   { id: 2, created_at: '2026-10-07T20:00:00Z', sport: 'NHL', capper: 'New Capper', avatar_url: null, selection: 'New NHL selection', analysis: 'NHL analysis', odds: -120, units: 2 },
   { id: 1, created_at: '2026-10-07T19:00:00Z', sport: 'NFL', capper: 'First Capper', avatar_url: null, selection: 'First NFL selection', analysis: 'NFL analysis', odds: 110, units: 1 },
 ]
+const defaultAppearance = { name_color: null, link_color: null, text_color: null, heading_font: 'barlow',
+  banner_url: null, section_order: ['stats', 'picks', 'charts', 'results'] }
 
 test('insight stays collapsed and missing insight has no reveal control', async ({ page }) => {
   await mockApi(page, { dataset: [{ ...picks[0], analysis: '' }, picks[1]] })
@@ -18,8 +20,8 @@ test('insight stays collapsed and missing insight has no reveal control', async 
   await expect(withInsight.getByText('NFL analysis', { exact: true })).not.toBeVisible()
 })
 
-async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string; pageOwner?: string; pageSaveError?: boolean } = {}) {
-  if (options.pageOwner) await page.addInitScript(() => {
+async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string; pageOwner?: string; pageSaveError?: boolean; editAll?: boolean } = {}) {
+  if (options.pageOwner || options.editAll) await page.addInitScript(() => {
     const userId = '11111111-1111-1111-1111-111111111111'
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
     const token = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({ sub: userId, exp: expiresAt, aud: 'authenticated', role: 'authenticated' }))}.test-signature`
@@ -30,7 +32,7 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     }))
   })
   const control = { state: options.state ?? 'active', feedRequests: 0, offsets: [] as number[], failAccess: options.accessError ?? false }
-  const profiles = new Map<string, { name: string; accent_color: string; bio: string; avatar_url: string | null; social_links: Record<string, string> }>()
+  const profiles = new Map<string, { name: string; accent_color: string; background_color: string; appearance: typeof defaultAppearance; bio: string; avatar_url: string | null; social_links: Record<string, string> }>()
   await page.route('https://lhsevzucmmzetpshpffv.supabase.co/**', async (route) => {
     const rpc = new URL(route.request().url()).pathname.split('/').at(-1)
     if (rpc === 'website_member_access') {
@@ -51,15 +53,17 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
         json: options.feedError ? { message: 'Feed unavailable' } : matching.slice(offset, offset + limit) })
     } else if (rpc === 'capper_page_profile') {
       const name = route.request().postDataJSON().p_capper
-      await route.fulfill({ json: profiles.get(name) ?? { name, accent_color: '#96d38d', bio: '', avatar_url: null, social_links: {} } })
+      await route.fulfill({ json: profiles.get(name) ?? { name, accent_color: '#96d38d', background_color: '#040916', appearance: defaultAppearance, bio: '', avatar_url: null, social_links: {} } })
     } else if (rpc === 'owned_capper_page') {
       await route.fulfill({ json: options.pageOwner ?? null })
+    } else if (rpc === 'website_can_edit_all_cappers') {
+      await route.fulfill({ json: options.editAll ?? false })
     } else if (rpc === 'save_my_pick_insight') {
       await route.fulfill({ json: true })
     } else if (rpc === 'save_capper_page') {
       const body = route.request().postDataJSON()
-      const next = { name: options.pageOwner ?? '', accent_color: body.p_accent_color,
-        bio: body.p_bio, avatar_url: body.p_avatar_url || null, social_links: body.p_social_links }
+      const next = { name: body.p_capper, accent_color: body.p_accent_color,
+        background_color: body.p_background_color, appearance: body.p_appearance, bio: body.p_bio, avatar_url: body.p_avatar_url || null, social_links: body.p_social_links }
       if (!options.pageSaveError) profiles.set(next.name, next)
       await route.fulfill({ status: options.pageSaveError ? 403 : 200,
         json: options.pageSaveError ? { message: 'Verified original OPERATOR page owner required.' } : next })
@@ -90,6 +94,7 @@ test('owner customizes capper bio, color, avatar and links with persistent publi
   await page.getByRole('button', { name: 'Edit your capper page' }).click()
   await page.getByLabel('Bio / description').fill('My approach to finding value.')
   await page.getByLabel('Accent color').fill('#123abc')
+  await page.getByLabel('Page background color').fill('#f0e0cc')
   await page.getByLabel('Profile image URL').fill('https://images.example/avatar.png')
   await page.getByLabel('X URL', { exact: true }).fill('https://x.com/newcapper')
   await page.getByRole('button', { name: 'Save capper page', exact: true }).click()
@@ -98,9 +103,14 @@ test('owner customizes capper bio, color, avatar and links with persistent publi
   await expect(page.getByRole('img', { name: 'New Capper avatar' })).toHaveAttribute('src', 'https://images.example/avatar.png')
   await expect(page.getByRole('navigation', { name: 'New Capper social links' }).getByRole('link', { name: 'X', exact: true })).toHaveAttribute('href', 'https://x.com/newcapper')
   await expect(page.locator('.capper-custom-profile')).toHaveCSS('border-top-color', 'rgb(18, 58, 188)')
+  await expect(page.locator('.capper-home')).toHaveCSS('background-color', 'rgb(240, 224, 204)')
+  await expect(page.locator('.capper-home')).toHaveCSS('color', 'rgb(17, 17, 17)')
   await page.reload()
   await expect(page.getByText('My approach to finding value.', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Edit your capper page' })).toBeVisible()
+  await expect(page.locator('.capper-home')).toHaveCSS('background-color', 'rgb(240, 224, 204)')
+  await page.goto('/')
+  await expect(page.locator('.site-header')).toHaveCSS('background-color', 'rgba(4, 9, 22, 0.96)')
 })
 
 test('another capper cannot see editing controls and failed saves remain explicit', async ({ page }) => {
@@ -170,6 +180,47 @@ test('invalid image file does not upload or save', async ({ page }) => {
   await expect(page.getByText('Capper page saved.', { exact: true })).toHaveCount(0)
 })
 
+test('banner upload is resized to 1600px and displayed from the saved public URL', async ({ page }) => {
+  await mockApi(page, { pageOwner: 'New Capper' })
+  const uploads: Buffer[] = []
+  let path = ''
+  await page.route('**/storage/v1/object/website-assets/**', async (route) => {
+    const upload = route.request().postDataBuffer()
+    if (upload) uploads.push(upload)
+    path = new URL(route.request().url()).pathname
+    await route.fulfill({ json: { Key: 'uploaded' } })
+  })
+  await page.route('**/storage/v1/object/public/website-assets/**', (route) => route.fulfill({
+    contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="30"/>',
+  }))
+  await page.goto('/cappers/new-capper')
+  await page.getByRole('button', { name: 'Edit your capper page' }).click()
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 3200; canvas.height = 1200
+    canvas.getContext('2d')!.fillRect(0, 0, 3200, 1200)
+    return canvas.toDataURL('image/png').split(',')[1]
+  })
+  await page.getByLabel('Upload banner image').setInputFiles({ name: 'banner.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+  await page.getByRole('button', { name: 'Save capper page', exact: true }).click()
+  await expect(page.getByText('Capper page saved.', { exact: true })).toBeVisible()
+  expect(path).toContain('/website-assets/capper-avatars/11111111-1111-1111-1111-111111111111/')
+  const body = uploads[0]
+  expect(uploads).toHaveLength(1)
+  if (!body) throw new Error('Expected banner upload.')
+  const start = body.indexOf(Buffer.from('RIFF'))
+  const size = body.readUInt32LE(start + 4) + 8
+  const dimensions = await page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/webp' }))
+    const result = [bitmap.width, bitmap.height]
+    bitmap.close()
+    return result
+  }, body.subarray(start, start + size).toString('base64'))
+  expect(dimensions).toEqual([1600, 600])
+  await expect(page.getByRole('img', { name: 'New Capper banner' })).toHaveAttribute('src', /\/object\/public\/website-assets\/capper-avatars\/.*\.webp$/)
+})
+
 test('capper can edit own pick insight on the board but not another authors pick', async ({ page }) => {
   await mockApi(page, { pageOwner: 'New Capper' })
   await page.goto('/picks')
@@ -195,6 +246,54 @@ test('capper can add missing insight on their page and failed changes remain exp
   await page.getByRole('button', { name: 'Save insight', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('Insight was not saved.')
   await expect(page.getByText('Capper insight', { exact: true })).toHaveCount(0)
+})
+
+test('Owner role editor can customize another capper page and edit every open insight', async ({ page }) => {
+  await mockApi(page, { editAll: true, kind: 'owner' })
+  await page.goto('/cappers/new-capper')
+  await page.getByRole('button', { name: 'Edit your capper page' }).click()
+  await page.getByLabel('Bio / description').fill('Updated by site Owner')
+  await page.getByRole('button', { name: 'Save capper page', exact: true }).click()
+  await expect(page.getByText('Updated by site Owner', { exact: true })).toBeVisible()
+  await page.goto('/picks')
+  await expect(page.getByRole('button', { name: 'Edit your insight' })).toHaveCount(2)
+  const pick = page.getByRole('article').filter({ hasText: 'First NFL selection' })
+  await pick.getByRole('button', { name: 'Edit your insight' }).click()
+  await pick.getByLabel('Your reasoning for this pick').fill('Owner-assisted reasoning')
+  await pick.getByRole('button', { name: 'Save insight', exact: true }).click()
+  await expect(pick.getByText('Insight saved.', { exact: true })).toBeVisible()
+})
+
+test('custom colors, font, banner and section order persist and render in DOM order', async ({ page }) => {
+  await mockApi(page, { pageOwner: 'New Capper' })
+  await page.route('https://images.example/banner.png', (route) => route.fulfill({
+    contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="30"><rect width="100" height="30" fill="blue"/></svg>',
+  }))
+  await page.goto('/cappers/new-capper')
+  await page.getByRole('button', { name: 'Edit your capper page' }).click()
+  await page.getByRole('group', { name: 'Display name color' }).getByLabel('Automatic color').uncheck()
+  await page.getByLabel('Custom name color').fill('#ffcc00')
+  await page.getByRole('group', { name: 'Link color' }).getByLabel('Automatic color').uncheck()
+  await page.getByLabel('Custom link color').fill('#99ddff')
+  await page.getByRole('group', { name: 'Body text color' }).getByLabel('Automatic color').uncheck()
+  await page.getByLabel('Custom text color').fill('#eeeeee')
+  await page.getByLabel('Heading font').selectOption('georgia')
+  await page.getByLabel('Banner image URL').fill('https://images.example/banner.png')
+  await page.getByLabel('Website URL', { exact: true }).fill('https://example.com')
+  await page.getByRole('button', { name: 'Move Current picks up' }).click()
+  await page.getByRole('button', { name: 'Save capper page', exact: true }).click()
+  await expect(page.getByText('Capper page saved.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'New Capper', exact: true })).toHaveCSS('color', 'rgb(255, 204, 0)')
+  await expect(page.getByRole('heading', { name: 'New Capper', exact: true })).toHaveCSS('font-family', 'Georgia, serif')
+  await expect(page.getByRole('navigation', { name: 'New Capper social links' }).getByRole('link', { name: 'Website' })).toHaveCSS('color', 'rgb(153, 221, 255)')
+  await expect(page.locator('.capper-home')).toHaveCSS('color', 'rgb(238, 238, 238)')
+  await expect(page.getByRole('img', { name: 'New Capper banner' })).toBeVisible()
+  expect(await page.locator('[data-capper-section]').evaluateAll((elements) => elements.map((element) => element.getAttribute('data-capper-section')))).toEqual(['picks', 'stats', 'charts', 'results'])
+  await page.reload()
+  await expect(page.getByRole('img', { name: 'New Capper banner' })).toBeVisible()
+  expect(await page.locator('[data-capper-section]').evaluateAll((elements) => elements.map((element) => element.getAttribute('data-capper-section')))).toEqual(['picks', 'stats', 'charts', 'results'])
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
 test('filters by sport/capper and opens a current-only capper page', async ({ page }) => {

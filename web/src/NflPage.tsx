@@ -73,6 +73,7 @@ export default function NflPage() {
       <h1>Scores, schedule,<br />standings.</h1>
       <p className="nfl-page-intro">Follow upcoming games, final scores, and conference standings for the season.</p>
       <p className="nfl-last-sync">Last updated: <strong>{formatUpdated(newestSync?.last_success_at)}</strong></p>
+      <Link to="/nfl/lab" className="account-secondary-button">NFL matchup lab & odds calculator</Link>
     </header>
 
     <nav className="nfl-tabs" aria-label="NFL data views">

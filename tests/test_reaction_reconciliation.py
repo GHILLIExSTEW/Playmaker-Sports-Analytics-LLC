@@ -54,10 +54,10 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch):
     assert message.edited["embed"].title == "Play #42 • Win"
 
 
-def test_reconcile_settles_operator_reaction_on_another_users_play(monkeypatch):
+def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch):
     operator = SimpleNamespace(
         id=555,
-        roles=[SimpleNamespace(id=4242)],
+        roles=[SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)],
         guild_permissions=SimpleNamespace(manage_guild=False),
     )
     guild = SimpleNamespace(get_member=lambda user_id: operator if user_id == 555 else None)
@@ -110,3 +110,17 @@ def test_reconcile_ignores_reaction_from_unrelated_member(monkeypatch):
     )
 
     assert settled_count == 0
+
+
+def test_operator_or_server_manager_cannot_react_to_settle_someone_elses_pick(monkeypatch):
+    for roles, manager in [([bot_module.TRACKER_ROLE_ID], False), ([4242], False), ([], True)]:
+        member = SimpleNamespace(id=555, roles=[SimpleNamespace(id=role) for role in roles],
+                                 guild_permissions=SimpleNamespace(manage_guild=manager))
+        guild = SimpleNamespace(get_member=lambda user_id: member)
+        monkeypatch.setattr(bot_module, "OPERATOR_ROLE_IDS", {4242, bot_module.TRACKER_ROLE_ID})
+        assert not bot_module.user_can_settle(member, "123", guild)
+        assert bot_module.user_can_settle(member, "555", guild)
+
+
+def test_bot_cannot_settle_even_as_author():
+    assert not bot_module.user_can_settle(SimpleNamespace(id=123, bot=True), "123", None)

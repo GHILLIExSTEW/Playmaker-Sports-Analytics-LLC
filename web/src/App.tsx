@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   ArrowRight, Menu,
   MessageCircle, X,
@@ -6,6 +6,7 @@ import {
 import { BrowserRouter, Link, useLocation } from 'react-router-dom'
 import { getCapperAvatarUrl } from './capperAvatars'
 import { capperSlug } from './capperIdentity'
+import { headingFonts, type CapperTheme, type CapperSection } from './capperAppearance'
 import { MemberAccessProvider } from './MemberAccess'
 import { supabase } from './supabaseClient'
 import { sportsCatalog } from './sportsCatalog'
@@ -37,6 +38,7 @@ const heroArtUrl = 'https://lhsevzucmmzetpshpffv.supabase.co/storage/v1/object/p
 const CapperAnalyticsCharts = lazy(() => import('./CapperAnalyticsCharts'))
 const AllResultsPage = lazy(() => import('./AllResultsPage'))
 const NflPage = lazy(() => import('./NflPage'))
+const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
 const NflHomePreview = lazy(() => import('./NflHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
 const MemberPublicPage = lazy(() => import('./MemberPublicPage'))
@@ -95,6 +97,34 @@ function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]):
     summaries.set(result.capper, summary)
   }
   return [...summaries.values()].sort((first, second) => second.net_units - first.net_units)
+}
+
+function capperBackgroundStyle(theme: CapperTheme): CSSProperties {
+  const color = theme.background_color
+  const channels = [1, 3, 5].map((start) => {
+    const value = parseInt(color.slice(start, start + 2), 16) / 255
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+  const light = luminance > 0.179
+  const ink = theme.appearance.text_color ?? (light ? '#111111' : '#ffffff')
+  return { backgroundColor: color, color: ink,
+    '--ink': ink, '--muted': ink,
+    '--capper-name': theme.appearance.name_color ?? ink,
+    '--capper-link': theme.appearance.link_color ?? ink,
+    '--display': headingFonts[theme.appearance.heading_font],
+    '--capper-accent': theme.accent_color,
+    '--line': light ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.25)' } as CSSProperties
+}
+
+function CapperSections({ order, sections }: { order: CapperSection[]; sections: Record<CapperSection, ReactNode> }) {
+  return <div className="capper-sections">{order.map((section) => <div key={section} data-capper-section={section}>{sections[section]}</div>)}</div>
+}
+
+function CapperBanner({ url, name }: { url: string; name: string }) {
+  const [failed, setFailed] = useState(false)
+  return failed ? <p role="status">The banner image is unavailable.</p>
+    : <img className="capper-banner" src={url} alt={`${name} banner`} onError={() => setFailed(true)} />
 }
 
 function generatedAvatarUrl(name: string): string {
@@ -177,6 +207,8 @@ function App() {
 }
 
 function Website() {
+  const [capperBackground, setCapperBackground] = useState<{ name: string; theme: CapperTheme } | null>(null)
+  const updateCapperBackground = useCallback((name: string, theme: CapperTheme) => setCapperBackground({ name, theme }), [])
   const location = useLocation()
   const routePath = location.pathname.replace(/\/+$/, '') || '/'
   const policyKind: PolicyKind | null = routePath === '/terms' ? 'terms' : routePath === '/privacy' ? 'privacy' : routePath === '/refunds' ? 'refunds' : null
@@ -321,6 +353,8 @@ function Website() {
           <Suspense fallback={<p className="account-state">Loading expert picks...</p>}>
             <CurrentPicksFeed />
           </Suspense>
+        ) : routePath === '/nfl/lab' ? (
+          <Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
             <SportPage slug={sportRouteSlug} results={results} loadState={loadState} />
@@ -342,7 +376,8 @@ function Website() {
             />
           </Suspense>
         ) : selectedCapper ? (
-          <section className="capper-home">
+          <section className="capper-home" style={capperBackground?.name === selectedCapper.name ? capperBackgroundStyle(capperBackground.theme) : undefined}>
+            {capperBackground?.name === selectedCapper.name && capperBackground.theme.appearance.banner_url && <CapperBanner key={capperBackground.theme.appearance.banner_url} url={capperBackground.theme.appearance.banner_url} name={selectedCapper.name} />}
             <div className="capper-profile-heading">
               <Link to="/#cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
               <div className="capper-identity">
@@ -351,23 +386,24 @@ function Website() {
               </div>
             </div>
             <Suspense fallback={<p className="account-state">Loading capper profile...</p>}>
-              <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onSaved={() => setRetryCount((count) => count + 1)} />
+              <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onAppearance={updateCapperBackground} onSaved={() => setRetryCount((count) => count + 1)} />
             </Suspense>
-            <div className="capper-profile-metrics">
+            <CapperSections order={capperBackground?.name === selectedCapper.name ? capperBackground.theme.appearance.section_order : ['stats', 'picks', 'charts', 'results']} sections={{
+            stats: <div className="capper-profile-metrics">
               <div><span>Settled plays</span><strong>{selectedCapper.plays}</strong></div>
               <div><span>Record</span><strong>{selectedCapper.wins}-{selectedCapper.losses}</strong></div>
               <div><span>Win rate</span><strong>{capperDecisions ? `${Math.round(capperWins / capperDecisions * 100)}%` : '—'}</strong></div>
               <div><span>Net units</span><strong className={selectedCapper.net_units > 0 ? 'net-positive' : selectedCapper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(selectedCapper.net_units)}</strong></div>
-            </div>
-            <Suspense fallback={<p className="account-state">Loading current picks...</p>}>
+            </div>,
+            picks: <Suspense fallback={<p className="account-state">Loading current picks...</p>}>
               <CurrentPicksFeed key={selectedCapper.name} capper={selectedCapper.name} />
-            </Suspense>
-            <div className="capper-analytics-grid">
+            </Suspense>,
+            charts: <div className="capper-analytics-grid">
               <Suspense fallback={<div className="results-empty">Loading analytics graphs…</div>}>
                 <CapperAnalyticsCharts trend={capperAnalytics.trend} bySport={capperAnalytics.bySport} />
               </Suspense>
-            </div>
-            <section className="capper-profile-results" id="capper-results">
+            </div>,
+            results: <section className="capper-profile-results" id="capper-results">
               <div className="profile-section-heading"><p className="eyebrow">Verified history</p><h2>Every settled play.</h2></div>
               <div className="results-toolbar">
                 <div className="filter-group" aria-label="Filter this capper's results by sport">
@@ -390,7 +426,8 @@ function Website() {
                 {loadState === 'error' && <div className="results-empty">The public record could not be loaded. Return to the homepage and retry.</div>}
                 {loadState === 'ready' && visibleCapperResults.length === 0 && <div className="results-empty">No settled results{sport !== 'All' ? ` for ${sport}` : ''} yet.</div>}
               </div>
-            </section>
+            </section>,
+            }} />
           </section>
         ) : profileSlug ? (
           <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry capper directory</button>}<Link to="/#cappers">Return to all cappers <ArrowRight size={16} /></Link></section>

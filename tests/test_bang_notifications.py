@@ -51,7 +51,9 @@ def test_bang_uploads_slip_to_both_channels_with_only_correct_role_mentions(monk
     asyncio.run(bot_module.send_bang_notifications(message, 7))
     for channel_id, role_id in [(101, bot_module.HIGHROLLER_ROLE_ID), (202, bot_module.ROOKIE_ROLE_ID)]:
         kwargs = channels[channel_id].send.call_args.kwargs
-        assert kwargs["content"] == f"BANG! <@&{role_id}>"
+        assert kwargs["content"] == f"## 💰 BANG! 💸 🤑\n<@&{role_id}>"
+        assert "💰 BANG!" in kwargs["embed"].title
+        assert "Official play WIN" in kwargs["embed"].footer.text
         assert kwargs["embed"].image.url == "attachment://slip.png"
         assert kwargs["file"].filename == "slip.png"
         assert [role.id for role in kwargs["allowed_mentions"].roles] == [role_id]

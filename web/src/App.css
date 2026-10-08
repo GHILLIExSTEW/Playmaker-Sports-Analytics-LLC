@@ -1,4 +1,14 @@
 #root { min-height: 100vh; }
+.nfl-lab-teams, .nfl-lab-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 20px; margin: 24px 0; }
+.nfl-lab-team { padding: 24px; border: 1px solid var(--line); background: var(--white); }
+.nfl-lab-team dl { display: grid; grid-template-columns: 1fr auto; gap: 14px; }
+.nfl-lab-team dd { margin: 0; text-align: right; }
+.nfl-lab-input { display: grid; gap: 10px; }
+.nfl-lab-input input, .nfl-lab-input select { min-width: 0; max-width: 100%; padding: 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); }
+.nfl-lab-actions { display: flex; flex-wrap: wrap; gap: 16px; }
+.nfl-matchup-lab button { padding: 12px 16px; color: var(--ink); background: var(--white); border: 1px solid var(--line); cursor: pointer; }
+.nfl-lab-calculator { margin: 48px 0; padding-top: 32px; border-top: 1px solid var(--line); }
+.nfl-matchup-lab p { line-height: 1.7; }
 .capper-custom-profile { border-top: 4px solid var(--green); padding: 24px 0; }
 .capper-bio { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
 .capper-social-links { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }
@@ -337,6 +347,15 @@
 .capper-card a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; text-decoration: none; }
 
 .capper-home { padding: 76px clamp(20px, 7vw, 108px) 110px; background: var(--paper); }
+.capper-home .current-pick-card, .capper-home input, .capper-home textarea, .capper-home select { --ink: #f2f1f7; --muted: #a7a8b3; }
+.capper-home .capper-back-link, .capper-home .eyebrow { color: var(--ink); }
+.capper-home a { color: var(--capper-link, var(--ink)); }
+.capper-home .capper-identity h1 { color: var(--capper-name, var(--ink)); }
+.capper-home .capper-custom-profile { border-color: var(--capper-accent); }
+.capper-banner { display: block; width: 100%; max-height: 360px; object-fit: cover; margin-bottom: 32px; border-radius: 8px; }
+.capper-section-order { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0; }
+.capper-section-order span { flex: 1; min-width: 140px; }
+.capper-page-editor select { padding: 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); }
 .capper-profile-heading { padding-bottom: 48px; border-bottom: 1px solid var(--line); }
 .capper-back-link { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 38px; color: var(--green); font-size: 13px; font-weight: 600; text-decoration: none; }
 .capper-back-link svg { transform: rotate(180deg); }

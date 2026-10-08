@@ -27,7 +27,7 @@ from src.services.play_features_service import (
     vault_leaderboard,
 )
 from src.services.supabase_service import supabase_service
-from src.services.website_capper_service import sync_website_capper_roster
+from src.services.website_capper_service import WEBSITE_OWNER_ROLE_ID, sync_website_capper_roster, sync_website_owner_roster
 from src.services.team_ranking_service import TeamRankingService
 from src.services.play_service import PlayService
 from src.services.image_play_service import image_play_service
@@ -241,14 +241,14 @@ def settlement_channel_settings() -> list[tuple[str, int | None]]:
 
 
 def user_can_settle(user, owner_id: str, guild: discord.Guild | None) -> bool:
+    if getattr(user, "bot", False):
+        return False
     if str(user.id) == str(owner_id):
         return True
     member = user if isinstance(user, discord.Member) else (guild.get_member(user.id) if guild else None)
     if member is None:
         return False
-    if any(role.id in OPERATOR_ROLE_IDS for role in getattr(member, "roles", [])):
-        return True
-    return bool(getattr(member.guild_permissions, "manage_guild", False))
+    return any(role.id == WEBSITE_OWNER_ROLE_ID for role in getattr(member, "roles", []))
 
 
 async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], channels: list) -> int:
@@ -510,6 +510,21 @@ async def website_capper_sync() -> None:
     except Exception as exc:
         logger.exception("website_capper_sync_failed")
         await send_staff_alert("website_cappers", f"Website capper roster sync failed: `{str(exc)[:1500]}`")
+    try:
+        guild = bot.get_guild(GUILD_ID) if GUILD_ID else None
+        if guild is None:
+            raise RuntimeError("Cannot verify Owner roster: configured guild is unavailable.")
+        if not guild.chunked:
+            await guild.chunk(cache=True)
+        role = guild.get_role(WEBSITE_OWNER_ROLE_ID)
+        if role is None:
+            raise RuntimeError("Configured website Owner role is missing.")
+        owner_ids = {member.id for member in role.members}
+        await asyncio.to_thread(sync_website_owner_roster, guild.id, owner_ids)
+        logger.info("website_owner_sync_complete members=%s", len(owner_ids))
+    except Exception as exc:
+        logger.exception("website_owner_sync_failed")
+        await send_staff_alert("website_owners", f"Website Owner roster sync failed: `{str(exc)[:1500]}`")
 
 
 @website_capper_sync.before_loop
@@ -1501,7 +1516,11 @@ def is_official(user) -> bool:
 
 
 def can_manage_plays(user, guild: discord.Guild | None) -> bool:
-    return is_official(user) or user_can_settle(user, "", guild)
+    member = user if isinstance(user, discord.Member) else (guild.get_member(user.id) if guild else None)
+    return is_official(user) or bool(member and (
+        any(role.id in OPERATOR_ROLE_IDS or role.id == WEBSITE_OWNER_ROLE_ID for role in getattr(member, "roles", []))
+        or getattr(member.guild_permissions, "manage_guild", False)
+    ))
 
 
 PLAY_PICKER_PAGE_SIZE = 10
@@ -1784,7 +1803,8 @@ async def send_bang_notifications(source: discord.Message, play_id: int) -> None
             channel = await resolve_channel(channel_id, name, required=True)
             if channel is None:
                 raise RuntimeError(f"{name} is unavailable.")
-            embed = discord.Embed(title=f"BANG! Play #{play_id} won", color=discord.Color.green())
+            embed = discord.Embed(title=f"💰 BANG! 💸 Play #{play_id} won 🤑", color=discord.Color.green())
+            embed.set_footer(text="💵 Playmaker Picks • Official play WIN ✅")
             embed.description = f"[Original play]({source.jump_url})"
             if source.embeds and source.embeds[0].author.name:
                 embed.set_author(
@@ -1802,7 +1822,7 @@ async def send_bang_notifications(source: discord.Message, play_id: int) -> None
             if not await asyncio.to_thread(bang_service.claim, play_id, channel.id):
                 continue
             sent = await channel.send(
-                content=f"BANG! <@&{role_id}>" if role_id else "BANG!",
+                content=f"## 💰 BANG! 💸 🤑\n<@&{role_id}>" if role_id else "## 💰 BANG! 💸 🤑",
                 embed=embed, **files,
                 allowed_mentions=discord.AllowedMentions(
                     roles=[discord.Object(id=role_id)] if role_id else False,

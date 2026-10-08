@@ -454,5 +454,89 @@ test(`website member access and current picks enforce server authorization (${ha
     await call("select public.sync_website_capper_roster('123','1328120848992960543',array['222'])", 'service_role')
     await assert.rejects(call("select public.save_my_pick_insight(1,'Removed role')"), /active OPERATOR/)
   })
+  await t.test('fresh Owner-role identity edits all capper pages and insights; role removal and spoofing deny', async () => {
+    await load('../../supabase/migrations/20261008100000_owner_role_page_editing.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','222'])", 'service_role')
+    await db.exec("update auth.identities set provider_id='999'; update public.plays set status='open',settled_at=null where id=1")
+    const admin = async () => (await call('select public.website_can_edit_all_cappers() as allowed'))[0].allowed
+    const save = "select public.save_capper_page('#abcdef','Owner edited bio','','{}','New Capper')"
+    assert.equal(await admin(), false)
+    await assert.rejects(call("select public.sync_website_owner_roster('123','1347741218158678097',array['999'])"), /permission denied/)
+    await assert.rejects(call("select public.sync_website_owner_roster('123','123',array['999'])", 'service_role'), /check constraint/)
+    await call("select public.sync_website_owner_roster('123','1347741218158678097',array['999'])", 'service_role')
+    assert.equal(await admin(), true)
+    assert.equal((await access()).kind, 'owner')
+    assert.equal((await call('select public.owned_capper_page() as name'))[0].name, null)
+    await call(save)
+    assert.equal((await call("select public.capper_page_profile('New Capper') as profile", 'anon', ''))[0].profile.bio, 'Owner edited bio')
+    await call("select public.save_my_pick_insight(1,'Owner insight')")
+    assert.equal((await call('select * from public.member_current_picks()')).find((row) => row.id === 1).analysis, 'Owner insight')
+    await call("select public.save_my_pick_insight(2,'Owner other insight')")
+    assert.equal((await call("select public.can_manage_capper_avatar('website-assets','capper-avatars/" + memberId + "/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp') as allowed"))[0].allowed, true)
+    for (const mutation of [
+      "update public.website_owner_roster set discord_user_ids=array[]::text[]",
+      "update public.website_owner_roster set verified_at=now()-interval '16 minutes'",
+      "update public.website_owner_roster set verified_at=now()+interval '1 minute'",
+      "update public.website_owner_roster set guild_id='456'",
+      "update auth.identities set provider_id='888'",
+      "delete from auth.identities",
+    ]) {
+      await db.exec('begin'); inTransaction = true
+      try {
+        await db.exec(mutation)
+        assert.equal(await admin(), false)
+        await assert.rejects(call(save), /OPERATOR page owner|Owner role/)
+        await assert.rejects(call("select public.save_my_pick_insight(1,'No permission')"), /OPERATOR page owner|Owner role/)
+      } finally { await db.exec('rollback'); inTransaction = false }
+    }
+    await assert.rejects(call('select * from public.website_owner_roster'), /permission denied/)
+    await assert.rejects(call("select public.write_capper_page_settings(1,'#ffffff','','','{}')"), /permission denied/)
+    await assert.rejects(call(save, 'anon', ''), /permission denied/)
+    assert.equal((await call('select public.website_can_edit_all_cappers() as allowed', 'anon', ''))[0].allowed, false)
+    await db.exec("update public.plays set status='win',settled_at=now() where id=1")
+    await assert.rejects(call("select public.save_my_pick_insight(1,'Closed')"), /original current OPERATOR/)
+    await db.exec("update auth.identities set provider_id='111'")
+    await assert.rejects(call(save), /OPERATOR page owner/)
+    await call("select public.save_capper_page('#123abc','Own page only','','{}','First Capper')")
+  })
+  await t.test('background colors persist per capper with existing Owner and author checks', async () => {
+    await load('../../supabase/migrations/20261008110000_capper_background_color.sql')
+    const profile = async (name) => (await call(`select public.capper_page_profile('${name}') as profile`, 'anon', ''))[0].profile
+    assert.equal((await profile('First Capper')).background_color, '#040916')
+    await call("select public.save_capper_page('#123abc','My color','','{}','First Capper','#F0E0CC')")
+    assert.equal((await profile('First Capper')).background_color, '#f0e0cc')
+    assert.equal((await profile('New Capper')).background_color, '#040916')
+    await assert.rejects(call("select public.save_capper_page('#123abc','','','{}','First Capper','red')"), /six-digit/)
+    await assert.rejects(call("select public.save_capper_page('#123abc','','','{}','New Capper','#ffffff')"), /OPERATOR page owner/)
+    await call("select public.save_capper_page('#123abc','Legacy save preserves color','','{}','First Capper')")
+    assert.equal((await profile('First Capper')).background_color, '#f0e0cc')
+    await db.exec("update auth.identities set provider_id='999'")
+    await call("select public.save_capper_page('#123abc','Owner color','','{}','New Capper','#112233')")
+    assert.equal((await profile('New Capper')).background_color, '#112233')
+    await assert.rejects(call("select public.save_capper_page_before_background('#123abc','','','{}','New Capper')"), /permission denied/)
+    await assert.rejects(call("select public.capper_page_profile_before_background('New Capper')"), /permission denied/)
+  })
+  await t.test('extended appearance uses safe values and preserves access and existing settings', async () => {
+    await load('../../supabase/migrations/20261008120000_capper_full_appearance.sql')
+    const appearance = { name_color: '#ffcc00', link_color: '#99ddff', text_color: '#eeeeee',
+      heading_font: 'georgia', banner_url: 'https://images.example/banner.webp', section_order: ['picks','stats','charts','results'] }
+    const save = (value, name = 'New Capper') => call(`select public.save_capper_page('#123abc','Styled bio','','{}','${name}',null,'${JSON.stringify(value)}') as profile`)
+    const saved = (await save(appearance))[0].profile
+    assert.deepEqual(saved.appearance, appearance)
+    assert.equal(saved.background_color, '#112233')
+    assert.equal((await call("select public.capper_page_profile('New Capper') as profile", 'anon', ''))[0].profile.appearance.banner_url, appearance.banner_url)
+    for (const value of [
+      { ...appearance, name_color: 'red' }, { ...appearance, text_color: 'url(https://evil)' },
+      { ...appearance, heading_font: 'unknown' }, { ...appearance, banner_url: 'javascript:alert(1)' },
+      { ...appearance, section_order: ['stats','stats','charts','results'] },
+      { ...appearance, section_order: 'stats' }, { ...appearance, css: 'display:none' }, {},
+    ]) await assert.rejects(save(value), /appearance|Appearance|font|Banner|section|Section/)
+    await call("select public.save_capper_page('#123abc','Legacy preserves appearance','','{}','New Capper')")
+    assert.deepEqual((await call("select public.capper_page_profile('New Capper') as profile", 'anon', ''))[0].profile.appearance, appearance)
+    await db.exec("update auth.identities set provider_id='111'")
+    await assert.rejects(save(appearance), /OPERATOR page owner/)
+    await save({ ...appearance, banner_url: null }, 'First Capper')
+    await assert.rejects(call("select public.save_capper_page_before_appearance('#ffffff','','','{}','New Capper',null)"), /permission denied/)
+  })
 })
 }

@@ -1,5 +1,70 @@
 # Proxmox deployment guide
 
+## NFL matchup lab
+
+Deploy the frontend for `/nfl/lab`; it needs only the existing NFL public-data
+migration and bot cache sync. No new paid provider calls, model or bot command
+are introduced. The lab is public like the existing NFL pages, reachable from
+the Sports dropdown and NFL scores page. Confirm provider display/export rights
+before deploying publicly. Verify a synced upcoming matchup, scoring samples,
+missing-cache/retry states, calculator values and CSV downloads.
+Injuries/weather/live odds are not provided; calculations use manual prices.
+
+## Extended capper appearance
+
+Apply `20261008120000_capper_full_appearance.sql` after background colors
+and deploy the frontend. Authors and Owner-role editors can set separate
+display-name, link and body-text colors; choose Barlow Condensed, IBM Plex Sans
+or Georgia for headings; add an HTTPS banner or upload PNG/JPEG/WebP up to
+10 MB; and move stats, picks, charts and settled results up/down. All four
+sections remain present and use matching DOM/visual order for keyboard access.
+Uploads use the existing owner-only image folder; banners resize to 1600px,
+avatars to 512px. Replaced owned uploads are cleaned up after saving.
+
+Automatic foreground colors adapt to the background. Custom colors require
+the editor to choose readable contrast; the form explains this. Site header,
+footer, navigation and official records remain protected. No arbitrary fonts,
+CSS or HTML are accepted. Existing API saves omitting appearance preserve it.
+
+## Capper page backgrounds and BANG presentation
+
+Apply `20261008110000_capper_background_color.sql` after Owner-role editing
+and deploy the frontend. Each capper page can have its own hex background
+color; authors and current Owner-role editors use **Page background color**.
+The setting is public and persistent; old saves that omit it preserve the
+chosen color. Text switches between light/dark for contrast. The global
+header, navigation and other pages keep their existing backgrounds.
+
+Deploy/restart the bot for the money-emoji BANG heading and win footer.
+Notifications still re-upload the original slip attachment separately into
+VIP and FREE, or use the source embed image when no attachment exists.
+The new presentation does not change mention targets or author/Owner-only
+reaction permissions. Disable the other bot's BANG rule to avoid duplicates.
+
+## Discord Owner-role capper editors
+
+Apply `supabase/migrations/20261008100000_owner_role_page_editing.sql` after
+the page-settings/avatar/website-insight migrations. Deploy the bot and frontend,
+then restart the bot. The existing five-minute roster loop separately syncs
+Owner role `1347741218158678097`; confirm `website_owner_sync_complete` in logs.
+Missing roles/guilds fail with staff alerts, not empty verified rosters.
+
+Every verified Discord identity in the fresh Owner-role roster can edit all
+current capper pages and open-pick insights. No OPERATOR role is required for
+this administrative permission. The capper and Owner rosters must belong to
+the same guild and be less than 15 minutes old. Role removal is enforced on
+the next sync; a stale roster denies the override. Owners have picks-board
+access after the existing age confirmation, even while enrollment is closed;
+this does not create paid/trial records or grant unrelated Discord benefits.
+Regular OPERATORs retain own-page/own-insight editing only. Public profile,
+link/image validation and settled-pick protections remain unchanged.
+
+Owner uploads still use their own auth UUID avatar folder, not another user's
+folder; only their own uploaded files can be cleaned up by their browser.
+The private storage bucket and brand files stay untouched. Homepage/policy
+editing is not included. Test an Owner without OPERATOR, a regular OPERATOR
+attempting a cross-page save, and role removal while an editor is open.
+
 ## Owner-customizable capper pages
 
 Apply `20261008090000_website_capper_insight_editing.sql` after the capper insight
@@ -49,11 +114,13 @@ cannot edit it, and an expired/removed role cannot save an already-open form.
 
 Disable the other bot's green-check BANG rule before enabling this replacement.
 Apply `supabase/migrations/20261008060000_bang_notifications.sql`, then deploy
-and restart this bot. An original author's or authorized settlement staff's
+and restart this bot. An original author's or Discord Owner-role member's
 green-check reaction to an open/regraded tracked official pick still settles
 it as a win, and now sends BANG to both `VIP_CHAT_CHANNEL_ID` and
 `FREE_CHAT_CHANNEL_ID`. VIP mentions HIGHROLLER; FREE mentions ROOKIE. Ordinary
-members and bots do not trigger it. Offline reaction reconciliation also
+members, other OPERATORs, server managers without Owner role, and bots do not
+trigger it on someone else's pick. The only cross-author reaction override is
+Owner role `1347741218158678097`. Offline reaction reconciliation also
 handles wins; slash-command/manual settlements do not trigger BANG.
 
 Each destination receives the slip attachment re-uploaded directly when

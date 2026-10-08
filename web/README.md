@@ -1,5 +1,25 @@
 # React + TypeScript + Vite
 
+## NFL Matchup Lab
+
+Visit `/nfl/lab` from the Sports dropdown or NFL scores page. The lab reuses
+the existing public API-Sports NFL cache; no new provider calls, paid feed,
+prediction model or database migration are added. All RPC pages are fetched
+before deriving a team's same-season/same-stage completed-game record,
+home/away splits, last-five results, scoring averages and days between kickoffs.
+Only FT/AOT games strictly before the selected kickoff with both scores count.
+Source sync timestamps, sample sizes, empty data and failures are displayed.
+Historical views are not point-in-time backtests.
+
+The calculator accepts manually entered American odds/stake and an optional
+user-estimated probability. It shows implied/break-even probability, payout,
+and expected profit conditional on that estimate; no no-vig or model forecast
+is claimed. CSV downloads include matchup summaries, season game rows and
+calculator inputs/outputs; exported string formulas are neutralized for Excel.
+Injuries, weather, live prices and player projections are explicitly unavailable.
+Confirm API-Sports licensing allows this data's public display/download before
+production rollout. No live provider/licensing approval is claimed here.
+
 ## Live Results Setup
 
 The public site reads settled play records through the restricted Supabase
@@ -36,6 +56,25 @@ The homepage hero uses the transparent arched artwork derived from
 fallback at `web/public/playmaker-arch-transparent.webp`.
 
 ## Capper Pages
+
+Apply `20261008120000_capper_full_appearance.sql` after background colors for
+separate name/link/body colors, heading-font choices, an optional banner image
+and section ordering. Uploads support banners (1600px) and avatars (512px);
+both use the existing owner-restricted Supabase folder. Colors default to
+automatic contrast unless customized. The four record/content sections remain
+present, and rearranging them also rearranges keyboard/DOM order.
+
+Apply `20261008110000_capper_background_color.sql` after Owner-role editing
+for persistent per-capper background colors. The page editor includes **Page
+background color**; header/navigation and other pages keep the site-wide theme.
+Foreground text adjusts for light/dark backgrounds, while pick cards retain
+their readable dark surfaces.
+
+Apply `20261008100000_owner_role_page_editing.sql` and deploy/restart the bot
+for Discord Owner role `1347741218158678097` to edit every capper's page
+settings and open-pick insights. Ownership is checked against the fresh
+bot-synced role roster, not editable auth metadata. Ordinary OPERATORs still
+edit only their own content. Owner uploads stay in their own avatar folder.
 
 Apply `20261008090000_website_capper_insight_editing.sql` after the insight
 and page-settings migrations for **Add your insight / Edit your insight**
