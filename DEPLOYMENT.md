@@ -7,6 +7,10 @@ Apply `20261008130000_owner_team_api_cache.sql` after the NFL/event cache and
 budget migration `20261003050000_api_request_budget.sql` and activate
 `API_SPORTS_BUDGET_ENABLED=true` before using this command. Deploy/restart the
 bot to register lowercase `/api` (Discord does not allow uppercase slash names).
+The key and budget flag are independent settings loaded at process startup.
+Picker errors identify which setting the running bot did not load. Restart
+after environment changes; existing process environment variables take
+precedence over `.env` values. Never paste provider keys into support messages.
 
 Only exact Discord Owner role `1347741218158678097` in the configured guild
 can execute the command or use its private dropdowns. Example:
@@ -26,11 +30,14 @@ Split seasons such as `2026-2027` must match the provider's format.
 
 NFL/NCAA, soccer, basketball, baseball, hockey, rugby, handball and volleyball
 have team-based refresh adapters. Refresh stores the provider's full raw season
-team summary and all selected-team season schedule records, with timestamps,
+team summary where supported and all selected-team season schedule records, with timestamps,
 in private service-role caches. It updates the existing schedule tables.
 NFL/NCAA, soccer and basketball additionally refresh team and player stats
 for each started, non-canceled season game; player snapshots use the existing
 player-game cache. Every returned field is preserved, including missing values.
+The American-football provider rejects `/teams/statistics` as nonexistent:
+NFL/NCAA skip that endpoint and explicitly report season summaries unavailable.
+They still refresh schedule and per-game team/player statistics for the season.
 Other sports explicitly report unsupported player-stat coverage; no zero
 values, derived player season totals or unverified endpoints are substituted.
 F1/MMA need constructor/driver/fighter-specific tools and are not offered as

@@ -73,14 +73,15 @@ def fixture_service(monkeypatch, responses=None):
 
 
 def test_refresh_preserves_all_fields_and_updates_existing_schedule_player_caches(monkeypatch):
-    service, db, calls = fixture_service(monkeypatch)
+    service, db, calls = fixture_service(monkeypatch, {"teams/statistics": RuntimeError("This endpoint do not exist.")})
     report = service.refresh("nfl", "1", "10", "2026", 1)
-    assert report["complete"] and report["requests"] == 5
+    assert report["complete"] and report["requests"] == 4
     assert report["games"] == 3 and report["player_games"] == 1
-    assert [endpoint for endpoint, _ in calls] == ["teams", "teams/statistics", "games", "games/statistics/teams", "games/statistics/players"]
+    assert [endpoint for endpoint, _ in calls] == ["teams", "games", "games/statistics/teams", "games/statistics/players"]
     snapshots = [row for table, row, _ in db.writes if table == "api_sports_team_stats_cache"]
-    assert snapshots[0]["payload"]["touchdowns"] == {"passing": 5}
-    assert snapshots[0]["payload"]["missing"] is None
+    assert snapshots[0]["stat_kind"] == "season_schedule"
+    assert snapshots[1]["payload"][0]["statistics"] == [{"name": "yards", "value": "250"}]
+    assert report["season_summary_supported"] is False
     assert {table for table, _, _ in db.writes} >= {"api_sports_nfl_games", "api_sports_player_game_stats"}
 
 
@@ -113,7 +114,7 @@ def test_quota_failure_reports_partial_and_keeps_previous_saved_components(monke
     def reserve(_base):
         nonlocal count
         count += 1
-        if count == 5:
+        if count == 4:
             raise ApiBudgetDenied("System daily allowance exhausted")
 
     monkeypatch.setattr(module, "reserve_request", reserve)
@@ -121,7 +122,7 @@ def test_quota_failure_reports_partial_and_keeps_previous_saved_components(monke
         service.refresh("nfl", "1", "10", "2026", 1)
     report = result.value.report
     assert not report["complete"] and report["quota_denied"]
-    assert report["requests"] == 4 and report["player_games"] == 0
+    assert report["requests"] == 3 and report["player_games"] == 0
     assert any(table == "api_sports_nfl_games" for table, _, _ in db.writes)
     assert not any(table == "api_sports_player_game_stats" for table, _, _ in db.writes)
     assert not module.refresh_lock.locked()
@@ -184,6 +185,11 @@ def test_other_team_sports_route_to_correct_cache_and_report_player_coverage(mon
     assert result["player_supported"] == (sport in module.PLAYER_SUPPORTED)
     player_calls = [endpoint for endpoint, _ in calls if "players" in endpoint]
     assert len(player_calls) == (1 if sport in module.PLAYER_SUPPORTED else 0)
+    assert ("teams/statistics" in [endpoint for endpoint, _ in calls]) == (sport != "ncaa")
+    if sport != "ncaa":
+        summary = next(row for table, row, _ in db.writes if table == "api_sports_team_stats_cache" and row["stat_kind"] == "season_team")
+        assert summary["payload"]["touchdowns"] == {"passing": 5}
+        assert summary["payload"]["missing"] is None
 
 
 def test_wrong_player_team_does_not_overwrite_existing_player_cache(monkeypatch):
@@ -206,7 +212,7 @@ def test_missing_schedule_date_is_not_replaced_with_sync_time(monkeypatch):
 def test_empty_player_data_is_counted_as_unavailable_not_zero(monkeypatch):
     service, _, _ = fixture_service(monkeypatch, {"games/statistics/players": [], "teams/statistics": []})
     report = service.refresh("nfl", "1", "10", "2026", 1)
-    assert report["empty_player_games"] == 1 and report["empty_team_summary"]
+    assert report["empty_player_games"] == 1 and report["season_summary_supported"] is False
 
 
 def test_budget_disabled_and_concurrent_refresh_are_explicit(monkeypatch):
@@ -256,6 +262,18 @@ def test_picker_loads_team_names_without_requiring_ids(monkeypatch):
     assert db.writes[0][0] == "api_sports_team_directory"
     with pytest.raises(ValueError):
         service.picker_directory("nfl", "2026-2027")
+
+
+def test_picker_configuration_errors_identify_the_failed_setting(monkeypatch):
+    service, _, calls = fixture_service(monkeypatch)
+    service.api_key = ""
+    with pytest.raises(ValueError, match="did not load API_SPORTS_KEY"):
+        service.picker_directory("nfl", "2026")
+    service.api_key = "test"
+    service.budget_enabled = False
+    with pytest.raises(ValueError, match="API_SPORTS_BUDGET_ENABLED as false"):
+        service.picker_directory("nfl", "2026")
+    assert not calls
 
 
 def test_provider_league_picker_and_nested_soccer_team_names(monkeypatch):

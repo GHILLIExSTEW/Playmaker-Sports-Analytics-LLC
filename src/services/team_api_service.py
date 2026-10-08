@@ -59,8 +59,10 @@ class TeamApiService:
             raise ValueError("A split season must use consecutive years.")
         if sport in {"nfl", "ncaa"} and "-" in season:
             raise ValueError("NFL/NCAA use a single-year season.")
-        if not self.budget_enabled or not self.api_key:
-            raise ValueError("Configure API_SPORTS_KEY and enable the shared API budget before loading league/team lists.")
+        if not self.api_key:
+            raise ValueError("The running bot did not load API_SPORTS_KEY. Check the bot's environment and restart it after configuration changes. Do not share the key.")
+        if not self.budget_enabled:
+            raise ValueError("The running bot sees API_SPORTS_BUDGET_ENABLED as false. It is separate from API_SPORTS_KEY. Check the bot's environment and restart it after configuration changes.")
         base = "https://v1.american-football.api-sports.io" if sport == "nfl" else DATE_PRODUCTS[sport][0]
         report = {"requests": 0, "deadline": monotonic() + 120}
         if league is None and sport in {"nfl", "ncaa"}:
@@ -191,6 +193,7 @@ class TeamApiService:
         report = {"requests": 0, "snapshots": 0, "games": 0, "player_games": 0, "empty_player_games": 0,
                   "owner_id": str(owner_id), "deadline": monotonic() + 720,
                   "empty_team_summary": False,
+                  "season_summary_supported": sport not in {"nfl", "ncaa"},
                   "complete": False, "error": None, "player_supported": sport in PLAYER_SUPPORTED}
         scope = {"sport_slug": sport, "league_id": league, "team_id": int(team), "season": season}
         base = "https://v1.american-football.api-sports.io" if sport == "nfl" else DATE_PRODUCTS[sport][0]
@@ -211,10 +214,11 @@ class TeamApiService:
                           "name": row.get("team", row)["name"], "synced_at": self.clock().isoformat()} for row in teams]
             if directory:
                 self.table("api_sports_team_directory").upsert(directory, on_conflict="sport_slug,league_id,team_id").execute()
-            summary = self.request(base, "teams/statistics", params, report, allow_object=True)
-            self.validate_stat_scope(summary, {team}, league, season)
-            report["empty_team_summary"] = not summary
-            self.snapshot(scope, "season_team", summary, report)
+            if report["season_summary_supported"]:
+                summary = self.request(base, "teams/statistics", params, report, allow_object=True)
+                self.validate_stat_scope(summary, {team}, league, season)
+                report["empty_team_summary"] = not summary
+                self.snapshot(scope, "season_team", summary, report)
             endpoint = "fixtures" if sport == "football" else "games"
             raw_games = self.request(base, endpoint, params, report)
             for row in raw_games:

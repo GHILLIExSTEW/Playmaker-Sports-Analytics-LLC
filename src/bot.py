@@ -1572,6 +1572,8 @@ async def run_api_refresh(interaction: discord.Interaction, sport: str, league: 
     )
     if report.get("empty_team_summary"):
         message += "\nNo season team summary was supplied by the provider; this is unavailable data, not zero."
+    if report.get("season_summary_supported") is False:
+        message += "\nNFL/NCAA provider season team summaries are unavailable. Team/player statistics are cached per game, not invented season totals."
     if report["complete"] and not report["games"]:
         message += "\nNo games were supplied for this scope; no per-game statistics were refreshed."
     if not report["complete"]:
