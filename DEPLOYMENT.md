@@ -1,5 +1,56 @@
 # Proxmox deployment guide
 
+## Owner /api team refresh
+
+Apply `20261008130000_owner_team_api_cache.sql` after the NFL/event cache and
+`20261003060000_player_game_stats.sql` migrations. Also apply the shared request
+budget migration `20261003050000_api_request_budget.sql` and activate
+`API_SPORTS_BUDGET_ENABLED=true` before using this command. Deploy/restart the
+bot to register lowercase `/api` (Discord does not allow uppercase slash names).
+
+Only exact Discord Owner role `1347741218158678097` in the configured guild
+can execute the command or use its private dropdowns. Example:
+`/api sport:nfl season:2026`.
+Select sport/season in the slash command, then choose league and team **by name**
+from private select menus; no provider IDs need to be entered. Next/Previous
+buttons page through lists longer than Discord's 25-option limit. Lists come
+from the provider, not just teams already cached. NFL/NCAA have fixed leagues;
+other sports load the provider league directory. Teams are scoped to the
+chosen league/season and cached for future tools. Each directory request/page
+uses the shared system budget, in addition to requests counted in the final
+refresh report. Empty lists and lookup failures are explicitly reported.
+Menus expire after three minutes; run `/api` again to reopen them. Every click
+rechecks the requesting user's Owner role and guild. The refresh also validates
+the team belongs to the selected league/season before storing statistics.
+Split seasons such as `2026-2027` must match the provider's format.
+
+NFL/NCAA, soccer, basketball, baseball, hockey, rugby, handball and volleyball
+have team-based refresh adapters. Refresh stores the provider's full raw season
+team summary and all selected-team season schedule records, with timestamps,
+in private service-role caches. It updates the existing schedule tables.
+NFL/NCAA, soccer and basketball additionally refresh team and player stats
+for each started, non-canceled season game; player snapshots use the existing
+player-game cache. Every returned field is preserved, including missing values.
+Other sports explicitly report unsupported player-stat coverage; no zero
+values, derived player season totals or unverified endpoints are substituted.
+F1/MMA need constructor/driver/fighter-specific tools and are not offered as
+league/team refreshes; cricket/cycling feeds are unavailable.
+
+This uses the shared **system** request allowance (80 per product per UTC day
+in the current budget), not the member five-request allowance. It can consume
+budget otherwise used by scheduled syncs. Pagination reserves one request per
+page; failed attempts also consume reservations. No budget bypass is allowed.
+One Owner refresh runs at a time per bot process; the database budget remains
+atomic across processes. At quota/provider/database failure or the 12-minute
+interaction limit, the private response explicitly reports PARTIAL / FAILED,
+counts what was saved, and leaves completed cache components intact. Bot logs
+contain the cause. Retrying re-fetches and consumes additional quota; it is not
+an automatic resume. Future/canceled games have schedule records only.
+
+Local tests use mocked provider responses and a real embedded PostgreSQL
+migration check; subscription coverage and production API payloads must still
+be verified. This command adds no public stats RPC or website player display.
+
 ## NFL matchup lab
 
 Deploy the frontend for `/nfl/lab`; it needs only the existing NFL public-data

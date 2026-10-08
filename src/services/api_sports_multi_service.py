@@ -43,7 +43,8 @@ def _timestamp(value: Any, fallback: datetime) -> str:
     if isinstance(value, dict):
         if value.get("timestamp"):
             return datetime.fromtimestamp(int(value["timestamp"]), timezone.utc).isoformat()
-        value = value.get("date")
+        day, clock = value.get("date"), value.get("time")
+        value = f"{day}T{clock}" if day and clock and "T" not in str(day) else day
     if value:
         parsed = parse_iso_datetime(str(value))
         if parsed.tzinfo is None:
