@@ -162,6 +162,14 @@ test('no published open picks has a distinct empty state', async ({ page }) => {
   await expect(page.getByText('0 open plays')).toBeVisible()
 })
 
+test('historical non-operators cannot become capper pages from settled records', async ({ page }) => {
+  await mockApi(page)
+  await page.route('**/rest/v1/rpc/public_capper_directory*', (route) => route.fulfill({ json: [{ name: 'New Capper', avatar_url: null }] }))
+  await page.goto('/cappers/first-capper')
+  await expect(page.getByRole('heading', { name: 'Profile not found' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Current picks.' })).toHaveCount(0)
+})
+
 for (const [name, expiresAt, elapsed] of [
   ['pass expiry', '2026-10-08T01:00:05Z', 5000],
   ['scheduled access recheck', '2099-01-01T00:00:00Z', 30_000],

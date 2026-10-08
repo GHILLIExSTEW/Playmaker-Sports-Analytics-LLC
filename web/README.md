@@ -80,6 +80,13 @@ document verification service.
 
 ## Current Picks and Verified Website Access
 
+Capper eligibility now follows the Discord OPERATOR/tracker role, not merely
+having published plays. Apply `20261008010000_operator_capper_roster.sql` after
+the member-picks migration and deploy the bot's five-minute roster sync.
+Role `1328120848992960543` is the configured default. A missing/stale roster
+produces an explicit error; it never lists all historical authors as cappers.
+Historical settled results are preserved independently.
+
 Apply `supabase/migrations/20261008000000_website_member_picks.sql` after the
 existing account, Whop paid, owner-grant, and full-trial migrations. It adds the
 optional `users.public_avatar_url` column if missing; the older public-avatar

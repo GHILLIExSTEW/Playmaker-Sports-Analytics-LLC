@@ -26,6 +26,7 @@ from src.services.play_features_service import (
     vault_leaderboard,
 )
 from src.services.supabase_service import supabase_service
+from src.services.website_capper_service import sync_website_capper_roster
 from src.services.team_ranking_service import TeamRankingService
 from src.services.play_service import PlayService
 from src.services.image_play_service import image_play_service
@@ -491,6 +492,26 @@ async def before_hourly_tracker_update() -> None:
     await bot.wait_until_ready()
 
 
+@tasks.loop(minutes=5)
+async def website_capper_sync() -> None:
+    try:
+        if not GUILD_ID or not TRACKER_ROLE_ID:
+            raise RuntimeError("Website capper sync requires GUILD_ID and TRACKER_ROLE_ID.")
+        member_ids = await tracked_operator_ids()
+        if member_ids is None:
+            raise RuntimeError("Cannot verify the Discord OPERATOR roster.")
+        await asyncio.to_thread(sync_website_capper_roster, GUILD_ID, TRACKER_ROLE_ID, member_ids)
+        logger.info("website_capper_sync_complete members=%s", len(member_ids))
+    except Exception as exc:
+        logger.exception("website_capper_sync_failed")
+        await send_staff_alert("website_cappers", f"Website capper roster sync failed: `{str(exc)[:1500]}`")
+
+
+@website_capper_sync.before_loop
+async def before_website_capper_sync() -> None:
+    await bot.wait_until_ready()
+
+
 @tasks.loop(time=API_SPORTS_DAILY_SYNC_TIME)
 async def daily_nfl_data_sync() -> None:
     try:
@@ -580,6 +601,8 @@ async def on_ready():
         member_bet_vault.reconcile.start()
     if not hourly_tracker_update.is_running():
         hourly_tracker_update.start()
+    if not website_capper_sync.is_running():
+        website_capper_sync.start()
     if not auto_settle_suggestions.is_running():
         auto_settle_suggestions.start()
     if not scheduled_recaps.is_running():

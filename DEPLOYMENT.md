@@ -1,5 +1,39 @@
 # Proxmox deployment guide
 
+## OPERATOR-only website cappers
+
+For the separately authorized removal of Jatin/Doomsday's official records,
+run `supabase/maintenance/delete_non_capper_official_plays.sql` as database
+owner. It checks both exact pairs: user 11 / Discord 1211806245229695138 and
+user 12 / Discord 759419251773014056. Default preview deletes nothing.
+Review the listed play IDs/counts and confirm a backup before setting
+`apply_delete := true` and rerunning the full statement. It removes only their
+official plays and associated legs/tails/settlements/history, leaving accounts,
+memberships, vault records, and unpublished draft legs intact. The operation
+is atomic; mismatched identities fail without deleting. After applying,
+refresh website results and run the bot's `/update_tracker` to rebuild cached
+Discord tracker messages. Existing Discord play messages are not deleted by SQL.
+
+Apply `supabase/migrations/20261008010000_operator_capper_roster.sql` after
+the website member-picks migration, then deploy the updated bot and website.
+The bot synchronizes the configured guild's `TRACKER_ROLE_ID` membership every
+five minutes, starting when ready. The confirmed OPERATOR role is
+`1328120848992960543` (the existing default); verify `GUILD_ID` and any production
+override. The bot requires the Discord Server Members intent and full member
+cache/chunk access. Sync failures log and alert staff.
+
+Until the first successful sync, or after 15 minutes without a successful sync,
+capper directory/follow/picks RPCs report an explicit unavailable-roster error.
+They never fall back to all play authors or the unsynchronized `users.role`.
+Current OPERATOR identities alone populate capper cards/pages, follow options,
+and premium current picks. Removed operators leave those surfaces on the next
+successful sync. Existing settled results remain in the public historical ledger;
+no plays or member records are deleted. This does not open premium enrollment.
+
+After restart, confirm `website_capper_sync_complete` in the bot logs and inspect
+`public.website_capper_roster` as database owner. Verify Jatin/Doomsday are absent
+unless they actually hold the OPERATOR role, and approved operators remain.
+
 ## Website member access and current picks (October 8, 2026)
 
 This release adds `/picks`, sport/capper filters, current picks on capper pages,

@@ -84,15 +84,8 @@ function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]):
       avatar_url: entry.avatar_url ?? getCapperAvatarUrl(entry.name), plays: 0, wins: 0, losses: 0, net_units: 0 })
   }
   for (const result of results) {
-    const summary = summaries.get(result.capper) ?? {
-      name: result.capper,
-      slug: capperSlug(result.capper),
-      avatar_url: result.avatar_url ?? getCapperAvatarUrl(result.capper),
-      plays: 0,
-      wins: 0,
-      losses: 0,
-      net_units: 0,
-    }
+    const summary = summaries.get(result.capper)
+    if (!summary) continue
     summary.plays += 1
     summary.net_units += Number(result.net_units)
     summary.avatar_url ??= result.avatar_url ?? getCapperAvatarUrl(result.capper)
@@ -248,7 +241,7 @@ function Website() {
 
   const sports: string[] = ['All', ...Array.from(new Set(results.map((result) => result.sport)))]
   const visibleResults = sport === 'All' ? results : results.filter((result) => result.sport === sport)
-  const cappers = summarizeCappers(results, directory)
+  const cappers = summarizeCappers(results, directoryState === 'ready' ? directory : [])
   const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
   const memberHandle = routePath.startsWith('/members/') ? decodeURIComponent(routePath.slice('/members/'.length)) : null
   const selectedCapper = cappers.find((capper) => capper.slug === profileSlug)
@@ -467,7 +460,7 @@ function Website() {
         <section className="cappers-section scroll-reveal" id="cappers">
           <div className="section-heading compact">
             <div><p className="eyebrow">The room</p><h2>Know who made the call.</h2></div>
-            <p>Meet the authors of published official plays. Performance summaries use settled plays only; open selections require verified member access.</p>
+            <p>Meet our current Discord OPERATOR cappers. Performance summaries use settled plays only; open selections require verified member access.</p>
           </div>
           <div className="capper-grid">
             {cappers.map((capper, index) => (
@@ -479,7 +472,7 @@ function Website() {
                 <Link to={`/cappers/${capper.slug}`}>Open capper homepage <ArrowRight size={16} /></Link>
               </article>
             ))}
-            {loadState === 'ready' && directoryState === 'ready' && cappers.length === 0 && <p className="results-empty">Capper pages will appear after official plays are published.</p>}
+            {loadState === 'ready' && directoryState === 'ready' && cappers.length === 0 && <p className="results-empty">No current OPERATOR cappers are listed yet.</p>}
             {directoryState === 'error' && <p className="data-notice" role="alert">The capper directory could not be loaded. <button className="results-retry" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry</button></p>}
             {loadState !== 'ready' && <p className="results-empty">Capper records load with the settled results.</p>}
           </div>
