@@ -16,7 +16,7 @@ from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
 from src.member_stats import MemberStats
 from src.services.membership_service import MembershipService
-from src.services import capper_insight_service
+from src.services import bang_service, capper_insight_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_features_service import (
     build_recap,
@@ -278,6 +278,8 @@ async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], ch
             if reaction_result is None:
                 continue
             async for reaction_user in reaction.users():
+                if getattr(reaction_user, "bot", False):
+                    continue
                 if user_can_settle(reaction_user, owner_id, message.guild):
                     result = reaction_result
                     break
@@ -287,6 +289,8 @@ async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], ch
         if result:
             await asyncio.to_thread(official_play_service.settle_play, int(play["id"]), result)
             await update_play_message(message, int(play["id"]), result)
+            if result == "win":
+                await send_bang_notifications(message, int(play["id"]))
             settled_count += 1
 
     return settled_count
@@ -629,6 +633,8 @@ async def on_ready():
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
         return
+    if payload.member is not None and getattr(payload.member, "bot", False):
+        return
 
     result = REACTION_RESULTS.get(str(payload.emoji))
     if result is None:
@@ -645,12 +651,16 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
         channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
         reactor = payload.member or bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+        if getattr(reactor, "bot", False):
+            return
         if not user_can_settle(reactor, str(play.get("discord_user_id")), getattr(channel, "guild", None)):
             return
 
         await asyncio.to_thread(official_play_service.settle_play, int(play["id"]), result)
         message = await channel.fetch_message(payload.message_id)
         await update_play_message(message, int(play["id"]), result)
+        if result == "win":
+            await send_bang_notifications(message, int(play["id"]))
     except Exception:
         logger.exception("reaction_settlement_failed message=%s user=%s", payload.message_id, payload.user_id)
 
@@ -1749,6 +1759,67 @@ async def edit_play_command(interaction: discord.Interaction):
 
 
 # ---- Play cards, staff alerts, tails/follows, auto-settle, recaps -------------------------
+
+async def send_bang_notifications(source: discord.Message, play_id: int) -> None:
+    if source.guild is None or source.guild.id != GUILD_ID:
+        return
+    targets = (
+        [("TEST_CHANNEL_ID", TEST_CHANNEL_ID, None)]
+        if testing_enabled else [
+            ("VIP_CHAT_CHANNEL_ID", VIP_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID),
+            ("FREE_CHAT_CHANNEL_ID", FREE_CHAT_CHANNEL_ID, ROOKIE_ROLE_ID),
+        ]
+    )
+    image = next(
+        (attachment for attachment in source.attachments if (attachment.content_type or "").startswith("image/")),
+        None,
+    )
+    image_url = next((embed.image.url for embed in source.embeds if embed.image and embed.image.url), None)
+    if image is None and image_url is None:
+        logger.warning("bang_slip_missing play=%s message=%s", play_id, source.id)
+        await send_staff_alert(f"bang_image:{play_id}", f"BANG for Play #{play_id} has no slip image. Text/link only.")
+    for name, channel_id, role_id in targets:
+        file = None
+        try:
+            channel = await resolve_channel(channel_id, name, required=True)
+            if channel is None:
+                raise RuntimeError(f"{name} is unavailable.")
+            embed = discord.Embed(title=f"BANG! Play #{play_id} won", color=discord.Color.green())
+            embed.description = f"[Original play]({source.jump_url})"
+            if source.embeds and source.embeds[0].author.name:
+                embed.set_author(
+                    name=source.embeds[0].author.name, icon_url=source.embeds[0].author.icon_url,
+                )
+            files = {}
+            if image is not None:
+                file = await image.to_file()
+                files["file"] = file
+                embed.set_image(url=f"attachment://{file.filename}")
+            elif image_url:
+                embed.set_image(url=image_url)
+            else:
+                embed.description += "\nNo slip image is available for this play."
+            if not await asyncio.to_thread(bang_service.claim, play_id, channel.id):
+                continue
+            sent = await channel.send(
+                content=f"BANG! <@&{role_id}>" if role_id else "BANG!",
+                embed=embed, **files,
+                allowed_mentions=discord.AllowedMentions(
+                    roles=[discord.Object(id=role_id)] if role_id else False,
+                    users=False, everyone=False,
+                ),
+            )
+            await asyncio.to_thread(bang_service.complete, play_id, channel.id, sent.id)
+        except Exception:
+            logger.exception("bang_notification_failed play=%s channel=%s", play_id, channel_id)
+            await send_staff_alert(
+                f"bang:{play_id}:{channel_id}",
+                f"BANG delivery/tracking failed for Play #{play_id} in {name}. "
+                "Inspect logs, the destination and play_bang_notifications before retrying; a claim may remain.",
+            )
+        finally:
+            if file is not None:
+                file.close()
 
 STAFF_ALERT_INTERVAL = timedelta(minutes=10)
 staff_alert_sent: dict[str, datetime] = {}

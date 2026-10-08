@@ -1,5 +1,31 @@
 # Proxmox deployment guide
 
+## BANG win notifications
+
+Disable the other bot's green-check BANG rule before enabling this replacement.
+Apply `supabase/migrations/20261008060000_bang_notifications.sql`, then deploy
+and restart this bot. An original author's or authorized settlement staff's
+green-check reaction to an open/regraded tracked official pick still settles
+it as a win, and now sends BANG to both `VIP_CHAT_CHANNEL_ID` and
+`FREE_CHAT_CHANNEL_ID`. VIP mentions HIGHROLLER; FREE mentions ROOKIE. Ordinary
+members and bots do not trigger it. Offline reaction reconciliation also
+handles wins; slash-command/manual settlements do not trigger BANG.
+
+Each destination receives the slip attachment re-uploaded directly when
+available (otherwise the existing embed image), with a link to the source.
+Missing images are explicitly flagged in the post and staff alert. In testing
+mode, only `TEST_CHANNEL_ID` receives a notification, without role mentions.
+The bot needs attachment/embed/send access and permission to mention the
+configured roles. Verify both destinations with a new test win.
+
+The private `play_bang_notifications` table atomically claims each
+play/destination once, including across restarts and reaction removal/re-add.
+Partial delivery continues to the other destination and logs/alerts failures.
+A crash or uncertain send can leave a claim without a message ID; automatic
+retries intentionally do not resend these, avoiding duplicate role pings.
+Inspect the destination and logs before a database owner removes a failed
+claim. Do not clear successfully delivered claims.
+
 ## Capper-authored insight requests
 
 Apply `supabase/migrations/20261008050000_capper_insights.sql` after the

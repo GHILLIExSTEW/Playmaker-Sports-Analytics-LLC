@@ -351,5 +351,22 @@ test(`website member access and current picks enforce server authorization (${ha
     await db.exec("update public.website_capper_roster set verified_at=now()-interval '16 minutes'")
     await assert.rejects(call("select public.save_capper_insight(2,'222','Stale roster')", 'service_role'), /unavailable or stale/)
   })
+  await t.test('BANG claims are private and atomic per winning play and destination', async () => {
+    await load('../../supabase/migrations/20261008060000_bang_notifications.sql')
+    await assert.rejects(call("select public.claim_play_bang(1,'101')", 'service_role'), /published winning/)
+    await db.exec("update public.plays set status='win',settled_at=now() where id=1")
+    for (const role of ['anon', 'authenticated']) {
+      await assert.rejects(call("select public.claim_play_bang(1,'101')", role), /permission denied/)
+      await assert.rejects(call('select * from public.play_bang_notifications', role), /permission denied/)
+    }
+    const claim = async (channel) => (await call(`select public.claim_play_bang(1,'${channel}') as claimed`, 'service_role'))[0].claimed
+    assert.equal(await claim('101'), true)
+    assert.equal(await claim('101'), false)
+    assert.equal(await claim('202'), true)
+    await call("select public.complete_play_bang(1,'101','999')", 'service_role')
+    assert.equal(await claim('101'), false)
+    assert.equal((await db.query("select message_id from public.play_bang_notifications where channel_id='101'")).rows[0].message_id, '999')
+    await assert.rejects(call("select public.complete_play_bang(1,'303','999')", 'service_role'), /not claimed/)
+  })
 })
 }
