@@ -1,5 +1,46 @@
 # Proxmox deployment guide
 
+## Capper-authored insight requests
+
+Apply `supabase/migrations/20261008050000_capper_insights.sql` after the
+website access/OPERATOR migrations through `20261008040000`. Deploy the matching
+bot and frontend, then restart the bot so `/request_insights` is registered.
+Keep general enrollment disabled.
+
+Newly recorded open OPERATOR picks receive a request mentioning only their
+original author in `CONFIRMATION_CHANNEL_ID` (`TEST_CHANNEL_ID` in testing
+mode). The visible request has an **Add / edit insight** button. Only the
+original author, currently holding `TRACKER_ROLE_ID` in `GUILD_ID`, can open
+or submit the private modal. Submissions are checked again against the stored
+author, open/published state and fresh roster in a service-role-only SQL RPC.
+The modal and confirmation are private; the submitted text is intentionally
+published to authorized website members, not posted back into Discord.
+The original button supports edits while the pick remains open and survives
+bot restarts. Tail behavior is unchanged.
+
+A play manager can run `/request_insights` to send requests for existing open
+OPERATOR picks, at most 50 per invocation. Repeat for additional batches.
+Stored prompt message IDs prevent normal repeated requests across restarts;
+picks already containing insight are skipped. No historical picks are
+messaged automatically on startup. If a send succeeds but tracking fails,
+the command stops with a partial count/error: inspect the channel and database
+before retrying to avoid a duplicate request. A manually deleted tracked
+request must be reviewed and its `prompt_message_id` cleared by the database
+owner before requesting it again.
+
+Insight is stored separately in the private `play_insights` table (maximum
+2000 characters); browser writes and raw reads are denied. The authorized
+current-picks RPC keeps its `analysis` output field but now returns only
+capper-authored insight, never image extraction or `plays.play_text`.
+Cards expose a collapsed **Capper insight** disclosure only when insight
+exists, on both the expert board and capper pages. Refresh picks after saving.
+Public settled results do not expose insight.
+
+Verify with a new test pick and an existing open pick: a different operator
+cannot open the modal; the author can submit/edit; removed operators and
+settled picks cannot submit; only authorized website members can reveal the
+saved text. Re-running `/request_insights` must not repost tracked requests.
+
 ## Complimentary OPERATOR team HIGHROLLER access
 
 Apply `20261008020000_owner_website_preview.sql` first, then

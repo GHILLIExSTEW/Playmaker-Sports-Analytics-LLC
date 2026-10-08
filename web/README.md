@@ -80,6 +80,17 @@ document verification service.
 
 ## Current Picks and Verified Website Access
 
+Apply `20261008050000_capper_insights.sql` after the access/team migrations
+and deploy the matching bot. Current pick cards are compact, with a collapsed
+**Capper insight** disclosure only when the author supplied justification.
+The RPC's `analysis` field now contains only that separate authored text;
+extracted slip selections are never presented as reasoning. This applies to
+the expert board and embedded capper-page feed. Insight is restricted to the
+existing member entitlement checks and is not added to public settled results.
+The bot requests it in the confirmation channel through an author-only button
+and private modal. A play manager can run `/request_insights` for existing open
+picks. See the deployment guide for migration order and rollout checks.
+
 Apply `20261008030000_operator_website_access.sql` after the owner-preview
 migration and deploy the matching frontend to allow age-verified OPERATOR
 members to view picks while enrollment is closed. Access is resolved using

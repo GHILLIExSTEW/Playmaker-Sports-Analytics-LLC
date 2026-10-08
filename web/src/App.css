@@ -14,6 +14,8 @@
 .current-pick-card h3 { font-size: 22px; line-height: 1.4; }
 .current-pick-line { font-weight: 700; display: flex; flex-wrap: wrap; gap: 20px; }
 .current-pick-analysis { white-space: pre-wrap; line-height: 1.65; }
+.current-pick-insight { margin: 16px 0; }
+.current-pick-insight summary { cursor: pointer; color: var(--green); font-weight: 600; }
 .site-shell { overflow: hidden; }
 .site-header { height: 76px; padding: 0 clamp(20px, 5vw, 76px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: rgba(4, 9, 22, 0.96); position: sticky; top: 0; z-index: 20; backdrop-filter: blur(12px); }
 .brand { min-width: 0; display: flex; align-items: center; text-decoration: none; }

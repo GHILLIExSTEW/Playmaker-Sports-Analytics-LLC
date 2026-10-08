@@ -16,6 +16,7 @@ from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
 from src.member_stats import MemberStats
 from src.services.membership_service import MembershipService
+from src.services import capper_insight_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_features_service import (
     build_recap,
@@ -998,6 +999,127 @@ async def send_confirmation_message(interaction: discord.Interaction, payload: d
     confirmation = f"Bet recorded: Play #{payload['play_id']}"
     view = EditBetView(payload["play_id"], interaction.user.id, payload)
     await interaction.followup.send(confirmation, ephemeral=True, view=view)
+    try:
+        await send_insight_request(int(payload["play_id"]))
+    except Exception:
+        logger.exception("insight_request_failed play=%s", payload["play_id"])
+        await send_staff_alert("insight_request", "A capper insight request failed. Check logs and retry with /request_insights.")
+
+
+insight_prompt_lock = asyncio.Lock()
+
+
+def can_submit_insight(interaction: discord.Interaction, owner_id: int) -> bool:
+    return (
+        interaction.user.id == owner_id
+        and interaction.guild is not None
+        and interaction.guild.id == GUILD_ID
+        and any(role.id == TRACKER_ROLE_ID for role in getattr(interaction.user, "roles", []))
+    )
+
+
+class CapperInsightModal(discord.ui.Modal, title="Add capper insight"):
+    justification = discord.ui.TextInput(
+        label="Why are you taking this pick?",
+        style=discord.TextStyle.paragraph, required=True, max_length=2000,
+        placeholder="Your reasoning will be shown to authorized website members.",
+    )
+
+    def __init__(self, play_id: int, owner_id: int, current: str):
+        super().__init__()
+        self.play_id = play_id
+        self.owner_id = owner_id
+        self.justification.default = current
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not can_submit_insight(interaction, self.owner_id):
+            await interaction.response.send_message(
+                "Only this pick's original author, while holding OPERATOR, can submit insight.", ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await asyncio.to_thread(
+                capper_insight_service.save_insight, self.play_id, interaction.user.id, self.justification.value,
+            )
+        except Exception:
+            logger.exception("capper_insight_save_failed play=%s user=%s", self.play_id, interaction.user.id)
+            await interaction.followup.send(
+                "Insight was not saved. Check that the pick is still open and your OPERATOR role is current, then retry.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            f"Insight saved for Play #{self.play_id}. Website members can reveal it after refreshing picks.",
+            ephemeral=True,
+        )
+
+
+async def handle_insight_click(interaction: discord.Interaction, play_id: int) -> None:
+    rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
+    if not rows:
+        await interaction.response.send_message(
+            "This pick is no longer open or its author is no longer a current OPERATOR.", ephemeral=True,
+        )
+        return
+    context = rows[0]
+    owner_id = int(context["discord_user_id"])
+    if not can_submit_insight(interaction, owner_id):
+        await interaction.response.send_message(
+            "Only this pick's original author, while holding OPERATOR, can add or edit its insight.", ephemeral=True,
+        )
+        return
+    await interaction.response.send_modal(CapperInsightModal(play_id, owner_id, context["justification"]))
+
+
+async def send_insight_request(play_id: int) -> bool:
+    async with insight_prompt_lock:
+        rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
+        if not rows or rows[0]["prompt_message_id"] or rows[0]["justification"]:
+            return False
+        name, channel_id = play_post_target()
+        channel = await resolve_channel(channel_id, name, required=True)
+        if channel is None:
+            raise RuntimeError("Insight confirmation channel is unavailable.")
+        owner_id = int(rows[0]["discord_user_id"])
+        view = discord.ui.View(timeout=None)
+        view.add_item(discord.ui.Button(
+            label="Add / edit insight", style=discord.ButtonStyle.secondary, custom_id=f"pm:insight:{play_id}",
+        ))
+        view.stop()
+        message = await channel.send(
+            f"<@{owner_id}> Please add your justification for Play #{play_id} "
+            f"({rows[0]['selection'][:200]}). Only you can use this button. "
+            "The form is private; your insight will be published to authorized website members.",
+            view=view, allowed_mentions=discord.AllowedMentions(
+                users=[discord.Object(id=owner_id)], roles=False, everyone=False,
+            ),
+        )
+        await asyncio.to_thread(capper_insight_service.mark_prompt, play_id, message.id)
+        return True
+
+
+@bot.tree.command(name="request_insights", description="Request author insight for up to 50 open picks missing a request")
+async def request_insights_command(interaction: discord.Interaction) -> None:
+    if interaction.guild is None or interaction.guild.id != GUILD_ID or not can_manage_plays(interaction.user, interaction.guild):
+        await interaction.response.send_message("Only play managers in the configured server can request insights.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    sent = 0
+    try:
+        rows = await asyncio.to_thread(capper_insight_service.insight_context)
+        for row in rows:
+            sent += int(await send_insight_request(int(row["play_id"])))
+    except Exception:
+        logger.exception("capper_insight_backfill_failed sent=%s", sent)
+        await interaction.followup.send(
+            f"Sent {sent} requests, then stopped because a request failed. Check bot logs before retrying.",
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        f"Sent {sent} insight requests. Run again for remaining picks if this batch reached 50.", ephemeral=True,
+    )
 
 
 class EditBetModal(discord.ui.Modal, title="Edit Recorded Bet"):
@@ -1800,6 +1922,8 @@ async def on_play_feature_interaction(interaction: discord.Interaction) -> None:
     try:
         if parts[1] == "tail":
             await handle_tail_click(interaction, int(parts[2]))
+        elif parts[1] == "insight":
+            await handle_insight_click(interaction, int(parts[2]))
         elif parts[1] == "follow":
             await interaction.response.send_message("Follow alerts have been retired.", ephemeral=True)
         elif parts[1] == "as" and parts[3] in RESULT_COLORS:

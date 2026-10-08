@@ -104,7 +104,10 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
           <h3>{pick.selection}</h3>
           <p className="current-pick-line">{pick.odds > 0 ? '+' : ''}{pick.odds} <span>Risk: {pick.units}u</span></p>
           <p className="current-pick-time">Published <time dateTime={pick.created_at}>{new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(new Date(pick.created_at))}</time> ET</p>
-          {pick.analysis && <p className="current-pick-analysis">{pick.analysis}</p>}
+          {pick.analysis.trim() && <details className="current-pick-insight">
+            <summary>Capper insight</summary>
+            <p className="current-pick-analysis">{pick.analysis}</p>
+          </details>}
           <Link to={`/cappers/${capperSlug(pick.capper)}`}>Capper page & settled record</Link>
         </article>)}</div>}
       {ready && !error && filtered.length > visibleCount && <button className="account-secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Show more picks</button>}

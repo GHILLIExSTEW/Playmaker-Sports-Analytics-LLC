@@ -5,6 +5,19 @@ const picks = [
   { id: 1, created_at: '2026-10-07T19:00:00Z', sport: 'NFL', capper: 'First Capper', avatar_url: null, selection: 'First NFL selection', analysis: 'NFL analysis', odds: 110, units: 1 },
 ]
 
+test('insight stays collapsed and missing insight has no reveal control', async ({ page }) => {
+  await mockApi(page, { dataset: [{ ...picks[0], analysis: '' }, picks[1]] })
+  await page.goto('/picks')
+  const withInsight = page.getByRole('article').filter({ hasText: 'First NFL selection' })
+  const withoutInsight = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  await expect(withoutInsight.locator('summary')).toHaveCount(0)
+  await expect(withInsight.getByText('NFL analysis', { exact: true })).not.toBeVisible()
+  await withInsight.getByText('Capper insight', { exact: true }).click()
+  await expect(withInsight.getByText('NFL analysis', { exact: true })).toBeVisible()
+  await withInsight.getByText('Capper insight', { exact: true }).click()
+  await expect(withInsight.getByText('NFL analysis', { exact: true })).not.toBeVisible()
+})
+
 async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string } = {}) {
   const control = { state: options.state ?? 'active', feedRequests: 0, offsets: [] as number[], failAccess: options.accessError ?? false }
   await page.route('https://lhsevzucmmzetpshpffv.supabase.co/**', async (route) => {
