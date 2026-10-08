@@ -4,6 +4,7 @@ import { capperSlug } from './capperIdentity'
 import { MemberAccessNotice } from './MemberAccess'
 import { useMemberAccess } from './memberAccessContext'
 import { supabase } from './supabaseClient'
+import PickInsightEditor from './PickInsightEditor'
 
 type CurrentPick = {
   id: number
@@ -44,6 +45,25 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
   const [sport, setSport] = useState('All')
   const [author, setAuthor] = useState('All')
   const [visibleCount, setVisibleCount] = useState(50)
+  const [owner, setOwner] = useState<{ access: typeof access; name: string | null; error: string } | null>(null)
+
+  useEffect(() => {
+    if (access?.state !== 'active') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const { data, error: ownerError } = await supabase.rpc('owned_capper_page')
+        if (ownerError) throw ownerError
+        if (data !== null && typeof data !== 'string') throw new Error('Unexpected page ownership response.')
+        if (!cancelled) setOwner({ access, name: data, error: '' })
+      } catch (failure) {
+        const detail = failure && typeof failure === 'object' && 'message' in failure && typeof failure.message === 'string'
+          ? ` ${failure.message}` : ''
+        if (!cancelled) setOwner({ access, name: null, error: `Insight editing could not be checked.${detail}` })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [access])
 
   useEffect(() => {
     if (access?.state !== 'active') return
@@ -86,6 +106,7 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
     </header>
     <MemberAccessNotice />
     {access?.state === 'active' && <>
+      {owner?.access === access && owner.error && <p role="alert">{owner.error}</p>}
       <div className="current-picks-toolbar">
         <div className="current-picks-filter"><label htmlFor={`${filterId}-sport`}>Sport</label><select id={`${filterId}-sport`} value={sport} onChange={(event) => { setSport(event.target.value); setVisibleCount(50) }}>
           {[...new Set([...sports, sport])].map((name) => <option key={name}>{name}</option>)}
@@ -108,6 +129,12 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
             <summary>Capper insight</summary>
             <p className="current-pick-analysis">{pick.analysis}</p>
           </details>}
+          {owner?.access === access && owner.name === pick.capper && <PickInsightEditor
+            key={pick.id} playId={pick.id} insight={pick.analysis}
+            onSaved={(value) => setLoaded((current) => current && current.access === access
+              ? { ...current, picks: current.picks.map((item) => item.id === pick.id ? { ...item, analysis: value } : item) }
+              : current)}
+          />}
           <Link to={`/cappers/${capperSlug(pick.capper)}`}>Capper page & settled record</Link>
         </article>)}</div>}
       {ready && !error && filtered.length > visibleCount && <button className="account-secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Show more picks</button>}

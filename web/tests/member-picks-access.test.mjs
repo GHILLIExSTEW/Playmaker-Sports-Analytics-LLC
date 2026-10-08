@@ -368,5 +368,91 @@ test(`website member access and current picks enforce server authorization (${ha
     assert.equal((await db.query("select message_id from public.play_bang_notifications where channel_id='101'")).rows[0].message_id, '999')
     await assert.rejects(call("select public.complete_play_bang(1,'303','999')", 'service_role'), /not claimed/)
   })
+  await t.test('only immutable Discord OPERATOR page owners can customize their own public settings', async () => {
+    await load('../../supabase/migrations/20261008070000_capper_page_settings.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','222'])", 'service_role')
+    const profile = async () => (await call("select public.capper_page_profile('First Capper') as profile", 'anon', ''))[0].profile
+    const saveSql = `select public.save_capper_page('#123abc','My public bio','https://images.example/avatar.png','{"website":"https://example.com","x":"https://x.com/capper"}') as profile`
+    assert.equal((await profile()).bio, '')
+    await assert.rejects(call(saveSql), /original OPERATOR page owner/)
+    await assert.rejects(call(saveSql, 'anon', ''), /permission denied/)
+    await assert.rejects(call('select * from public.capper_page_settings'), /permission denied/)
+    await db.exec("update auth.identities set provider_id='111'")
+    assert.equal((await call('select public.owned_capper_page() as name'))[0].name, 'First Capper')
+    const saved = (await call(saveSql))[0].profile
+    assert.equal(saved.bio, 'My public bio')
+    assert.equal(saved.accent_color, '#123abc')
+    assert.equal((await profile()).avatar_url, 'https://images.example/avatar.png')
+    assert.equal((await call('select * from public.public_capper_directory()', 'anon', '')).find((row) => row.name === 'First Capper').avatar_url, 'https://images.example/avatar.png')
+    assert.equal((await db.query('select count(*)::integer as count from public.capper_page_settings')).rows[0].count, 1)
+    assert.equal((await db.query('select user_id from public.capper_page_settings')).rows[0].user_id, 1)
+    assert.equal((await call("select public.capper_page_profile('New Capper') as profile", 'anon', ''))[0].profile.bio, '')
+    for (const args of [
+      "'red','','','{}'", "'#123abc',repeat('x',2001),'','{}'",
+      "'#123abc','','http://example.com/image.png','{}'",
+      "'#123abc','','https://user:pass@example.com/image','{}'",
+      "'#123abc','','','{\"website\":\"javascript:alert(1)\"}'",
+      "'#123abc','','','{\"website\":123}'", "'#123abc','','','{\"unknown\":\"https://example.com\"}'",
+      "'#123abc','','','[]'",
+    ]) {
+      await assert.rejects(call(`select public.save_capper_page(${args})`), /Invalid page settings|Social links/)
+    }
+    await db.exec(`update auth.users set raw_user_meta_data='{"provider_id":"111"}'; update auth.identities set provider_id='999'`)
+    await assert.rejects(call(saveSql), /original OPERATOR page owner/)
+    await db.exec("update auth.identities set provider_id='111'; update public.website_capper_roster set discord_user_ids=array['222']")
+    await assert.rejects(call(saveSql), /original OPERATOR page owner/)
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','222'])", 'service_role')
+    assert.equal((await profile()).bio, 'My public bio')
+    await db.exec("update public.website_capper_roster set verified_at=now()-interval '16 minutes'")
+    await assert.rejects(call(saveSql), /unavailable or stale/)
+  })
+  await t.test('storage policies restrict avatar uploads/deletes to the owner folder without touching brand assets', async () => {
+    await db.exec(`
+      create schema storage;
+      create table storage.buckets (id text primary key, public boolean);
+      create table storage.objects (id bigint generated always as identity, bucket_id text, name text);
+      alter table storage.objects enable row level security;
+      grant usage on schema storage to authenticated, anon;
+      grant select, insert, delete, update on storage.objects to authenticated;
+      grant select on storage.objects to anon;
+      grant usage on sequence storage.objects_id_seq to authenticated;
+      insert into storage.buckets values ('website-assets', true);
+    `)
+    await load('../../supabase/migrations/20261008080000_capper_avatar_uploads.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','222'])", 'service_role')
+    const ownPath = `capper-avatars/${memberId}/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp`
+    const otherPath = 'capper-avatars/22222222-2222-2222-2222-222222222222/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp'
+    await call(`insert into storage.objects (bucket_id,name) values ('website-assets','${ownPath}') returning name`)
+    assert.equal((await call('select * from storage.objects')).length, 1)
+    assert.equal((await call('select * from storage.objects', 'anon', '')).length, 0)
+    for (const [bucket, path] of [['website-assets', otherPath], ['website-assets', 'brand/logo.webp'], ['Media', ownPath], ['website-assets', ownPath.replace('.webp', '.svg')]]) {
+      await assert.rejects(call(`insert into storage.objects (bucket_id,name) values ('${bucket}','${path}')`), /row-level security/)
+    }
+    assert.equal((await call("update storage.objects set name='brand/logo.webp' returning name")).length, 0)
+    await db.exec(`insert into storage.objects (bucket_id,name) values ('website-assets','${otherPath}'),('website-assets','brand/logo.webp')`)
+    assert.equal((await call("delete from storage.objects where name='brand/logo.webp' returning name")).length, 0)
+    assert.equal((await call('delete from storage.objects returning name')).length, 1)
+    assert.equal((await db.query('select count(*)::integer as count from storage.objects')).rows[0].count, 2)
+    await db.exec("create policy broad_legacy_insert on storage.objects for insert to authenticated with check (bucket_id='website-assets')")
+    await assert.rejects(call(`insert into storage.objects (bucket_id,name) values ('website-assets','${otherPath}')`), /row-level security/)
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['222'])", 'service_role')
+    await assert.rejects(call(`insert into storage.objects (bucket_id,name) values ('website-assets','${ownPath}')`), /row-level security/)
+  })
+  await t.test('website insight editing derives author identity and shares Discord insight storage', async () => {
+    await load('../../supabase/migrations/20261008090000_website_capper_insight_editing.sql')
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['111','222'])", 'service_role')
+    await db.exec("update public.plays set status='open',settled_at=null where id=1")
+    await call("select public.save_my_pick_insight(1,'Website author reasoning')")
+    assert.equal((await call('select * from public.member_current_picks()')).find((row) => row.id === 1).analysis, 'Website author reasoning')
+    assert.equal((await call('select * from public.capper_insight_context(1)', 'service_role'))[0].justification, 'Website author reasoning')
+    await assert.rejects(call("select public.save_my_pick_insight(2,'Other author')"), /original current OPERATOR/)
+    await assert.rejects(call("select public.save_my_pick_insight(1,'Anonymous')", 'anon', ''), /permission denied/)
+    await db.exec("update auth.identities set provider_id='222'")
+    await assert.rejects(call("select public.save_my_pick_insight(1,'Wrong owner')"), /original current OPERATOR/)
+    await db.exec("update auth.identities set provider_id='111'; update public.plays set status='win',settled_at=now() where id=1")
+    await assert.rejects(call("select public.save_my_pick_insight(1,'Closed pick')"), /original current OPERATOR/)
+    await call("select public.sync_website_capper_roster('123','1328120848992960543',array['222'])", 'service_role')
+    await assert.rejects(call("select public.save_my_pick_insight(1,'Removed role')"), /active OPERATOR/)
+  })
 })
 }

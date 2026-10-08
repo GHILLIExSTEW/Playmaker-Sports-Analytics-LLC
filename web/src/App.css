@@ -1,4 +1,16 @@
 #root { min-height: 100vh; }
+.capper-custom-profile { border-top: 4px solid var(--green); padding: 24px 0; }
+.capper-bio { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.capper-social-links { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }
+.capper-social-links a { color: var(--ink); }
+.capper-page-editor { display: grid; gap: 16px; max-width: 640px; margin-top: 24px; }
+.capper-page-editor label { display: grid; gap: 8px; }
+.capper-page-editor input, .capper-page-editor textarea { max-width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); color: var(--ink); background: var(--white); }
+.capper-page-editor input[type=color] { width: 80px; height: 48px; padding: 4px; }
+.capper-page-editor textarea { min-height: 140px; resize: vertical; }
+.pick-insight-editor { margin: 16px 0; }
+.pick-insight-editor form { display: grid; gap: 12px; margin-top: 16px; }
+.pick-insight-editor textarea { min-height: 120px; max-width: 100%; padding: 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); resize: vertical; }
 .current-picks { padding: 64px clamp(20px, 7vw, 108px); }
 .current-picks-embedded { padding: 36px 0; border-top: 1px solid var(--line); }
 .current-picks h1 { margin: 0; font: 700 clamp(48px, 6vw, 86px)/0.95 var(--display); text-transform: uppercase; }

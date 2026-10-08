@@ -1,5 +1,50 @@
 # Proxmox deployment guide
 
+## Owner-customizable capper pages
+
+Apply `20261008090000_website_capper_insight_editing.sql` after the capper insight
+and page-settings migrations to let authors add/edit insight on their own open
+picks from both the expert board and their page. This uses the same stored
+justification as the Discord modal; it never edits slip selections or results.
+The save RPC derives Discord identity from auth and rechecks ownership, current
+OPERATOR status, website access and the open/published pick state. Other authors
+cannot edit a pick. Refresh to see edits from Discord or another browser.
+
+Apply `supabase/migrations/20261008070000_capper_page_settings.sql` after the
+OPERATOR website migrations, then deploy the frontend. No bot update is needed.
+Also apply `20261008080000_capper_avatar_uploads.sql` after page settings
+and the existing public `website-assets` bucket migration.
+Sign in through Discord, visit your own capper page and select **Edit your
+capper page**. Owners can change a six-digit accent color, public bio (2000
+characters), HTTPS profile image URL and HTTPS Website/X/Instagram/Discord
+links. Owners can upload PNG/JPEG/WebP images up to 10 MB directly into the
+existing public `website-assets` bucket. The browser resizes to at most 512px
+and converts to WebP. Storage policies restrict inserts/selects/deletes to
+`capper-avatars/<auth-user-uuid>/<random-uuid>.webp` for the current verified
+OPERATOR owner; they grant no overwrite access or access to branding paths.
+The private Media bucket is untouched. A restrictive avatar-folder guard
+prevents broader authenticated policies bypassing ownership. Review existing
+bucket policies before rollout; this migration does not revoke unrelated grants.
+An HTTPS image URL is also supported. Clear an
+image/link to restore the default/remove it. Content is plain text, never HTML.
+
+The database derives ownership from provider-managed Discord identity and the
+fresh OPERATOR roster on every save; callers cannot choose another page ID.
+Role removal or stale roster blocks edits, even if an editor was already open.
+Public page settings expose no Discord IDs. Raw settings writes/reads are
+denied; public display is through a restricted RPC. Picks/results/statistics
+and capper names remain system-controlled. Avatar changes also update the
+existing capper-directory/current-picks avatar source. Ambiguous duplicate
+capper names fail explicitly until an administrator resolves them. Saved
+settings persist after role removal but the page remains roster-controlled.
+Replaced managed avatars are removed after a successful save. A failed save
+attempts to remove its unused upload and reports cleanup failures explicitly.
+Browser closure or role removal during upload can leave an unused object;
+an administrator should review such objects before deleting them.
+
+Verify that an owner can save and reload their page, a different operator
+cannot edit it, and an expired/removed role cannot save an already-open form.
+
 ## BANG win notifications
 
 Disable the other bot's green-check BANG rule before enabling this replacement.

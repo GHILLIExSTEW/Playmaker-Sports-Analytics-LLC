@@ -37,6 +37,23 @@ fallback at `web/public/playmaker-arch-transparent.webp`.
 
 ## Capper Pages
 
+Apply `20261008090000_website_capper_insight_editing.sql` after the insight
+and page-settings migrations for **Add your insight / Edit your insight**
+controls on the author's open picks. They appear on both the capper page and
+expert board, require verified OPERATOR ownership and member access, and update
+the same justification used by the Discord modal. Settled picks are not editable.
+
+Apply `20261008070000_capper_page_settings.sql` to enable owner customization.
+Verified Discord owners currently in the OPERATOR roster can edit their page's
+accent color, bio, HTTPS profile image URL and Website/X/Instagram/Discord links
+from **Edit your capper page**. These settings are public; picks, names and
+performance records are not editable. Database ownership checks run on every
+save, and raw settings access is denied. Apply `20261008080000_capper_avatar_uploads.sql`
+for direct PNG/JPEG/WebP uploads into the existing public `website-assets`
+bucket. Images up to 10 MB are resized to 512px and converted to WebP;
+each owner can manage only their own avatar folder. HTTPS image URLs remain
+an alternative. Clearing the upload and image URL restores the default avatar.
+
 Each capper has a URL at `/cappers/<slug>` with their settled record, cumulative
 net-unit graph, sport-by-sport net graph, and full results ledger. To show a
 capper's own image instead of the generated initials avatar, set their approved

@@ -45,6 +45,7 @@ const MembershipPage = lazy(() => import('./MembershipPage'))
 const PolicyPage = lazy(() => import('./PolicyPage'))
 const SportPage = lazy(() => import('./SportPage'))
 const CurrentPicksFeed = lazy(() => import('./CurrentPicksFeed'))
+const CapperPageProfile = lazy(() => import('./CapperPageProfile'))
 
 type CapperDirectoryEntry = { name: string; avatar_url: string | null }
 
@@ -345,10 +346,13 @@ function Website() {
             <div className="capper-profile-heading">
               <Link to="/#cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
               <div className="capper-identity">
-                <CapperAvatar name={selectedCapper.name} avatarUrl={selectedCapper.avatar_url} large />
+                <CapperAvatar key={selectedCapper.avatar_url} name={selectedCapper.name} avatarUrl={selectedCapper.avatar_url} large />
                 <div><p className="eyebrow">Public capper homepage</p><h1>{selectedCapper.name}</h1><p>Official results, performance trends, and sport-by-sport analysis.</p></div>
               </div>
             </div>
+            <Suspense fallback={<p className="account-state">Loading capper profile...</p>}>
+              <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onSaved={() => setRetryCount((count) => count + 1)} />
+            </Suspense>
             <div className="capper-profile-metrics">
               <div><span>Settled plays</span><strong>{selectedCapper.plays}</strong></div>
               <div><span>Record</span><strong>{selectedCapper.wins}-{selectedCapper.losses}</strong></div>
@@ -465,7 +469,7 @@ function Website() {
           <div className="capper-grid">
             {cappers.map((capper, index) => (
               <article className="capper-card" key={capper.name}>
-                <CapperAvatar name={capper.name} avatarUrl={capper.avatar_url} /><span className="capper-index">0{index + 1}</span>
+                <CapperAvatar key={capper.avatar_url} name={capper.name} avatarUrl={capper.avatar_url} /><span className="capper-index">0{index + 1}</span>
                 <h3>{capper.name}</h3><strong>{capper.plays} settled plays · {capper.wins}-{capper.losses}</strong>
                 <p>Verified net: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
                 <span className="capper-record-label">Calculated from the public settled record</span>
