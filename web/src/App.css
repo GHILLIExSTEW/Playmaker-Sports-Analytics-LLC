@@ -106,7 +106,7 @@
 
 .results-section, .cappers-section, .plans-section, .method-section { padding: 110px clamp(20px, 7vw, 108px); }
 .results-section { background: var(--white); }
-.results-page .section-heading h1 { margin: 0; font: 700 clamp(48px, 6vw, 86px)/0.95 var(--display); text-transform: uppercase; }
+.results-page .section-heading h1, .cappers-page .section-heading h1 { margin: 0; font: 700 clamp(48px, 6vw, 86px)/0.95 var(--display); text-transform: uppercase; }
 .results-view-all-wrap { display: flex; justify-content: flex-end; margin-top: 22px; }
 .results-view-all { color: #040916; background: var(--green); border-color: var(--green); }
 .membership-promo { padding: 64px clamp(20px, 7vw, 108px); display: flex; align-items: center; justify-content: space-between; gap: 32px; color: var(--ink); background: #0f0821; }
@@ -179,6 +179,7 @@
 .nfl-preview-heading .eyebrow { color: var(--green); }
 .nfl-view-link { display: inline-flex; align-items: center; gap: 8px; color: var(--amber); font-size: 13px; font-weight: 600; text-decoration: none; }
 .nfl-preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.sports-preview-filters { flex-wrap: wrap; }
 .nfl-game-card { min-width: 0; padding: 20px; border: 1px solid var(--line); background: rgba(2, 3, 5, 0.6); }
 .nfl-game-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 20px; color: var(--muted); font-size: 11px; }
 .nfl-game-meta span:first-child { color: var(--green); font-weight: 700; text-transform: uppercase; }

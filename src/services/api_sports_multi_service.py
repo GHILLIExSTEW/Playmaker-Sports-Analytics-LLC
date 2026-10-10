@@ -253,7 +253,7 @@ class ApiSportsMultiService:
         ).data or []
         active = set()
         for row in rows:
-            if row.get("sport_slug") in DATE_PRODUCTS and str(row.get("status_code") or "").upper() not in SEASON_FINAL_STATUSES:
+            if row.get("sport_slug") in DATE_PRODUCTS.keys() | SEASON_PRODUCTS.keys() and str(row.get("status_code") or "").upper() not in SEASON_FINAL_STATUSES:
                 active.add(row["sport_slug"])
         return sorted(active)
 
@@ -264,13 +264,13 @@ class ApiSportsMultiService:
         now = self.clock()
         current_date = now.astimezone(timezone.utc).date().isoformat()
         for sport_slug in targets:
-            config = DATE_PRODUCTS.get(sport_slug)
+            config = DATE_PRODUCTS.get(sport_slug) or SEASON_PRODUCTS.get(sport_slug)
             if not config:
                 continue
             started = self.clock()
             request_start = self.request_count
             try:
-                params = {"date": current_date, **DATE_PRODUCT_PARAMS.get(sport_slug, {})}
+                params = {"season": now.year} if sport_slug in SEASON_PRODUCTS else {"date": current_date, **DATE_PRODUCT_PARAMS.get(sport_slug, {})}
                 rows = self._request(*config, params=params)
                 fetched_at = self.clock()
                 events = [normalize_event(sport_slug, row, fetched_at) for row in rows]

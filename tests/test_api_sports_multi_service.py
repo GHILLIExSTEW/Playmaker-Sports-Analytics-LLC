@@ -8,6 +8,11 @@ from src.services import supabase_service as supabase_module
 from src.services.api_sports_multi_service import ApiSportsMultiService, DATE_PRODUCTS, DATE_PRODUCT_PARAMS, normalize_event
 
 
+@pytest.fixture(autouse=True)
+def mock_request_budget(monkeypatch):
+    monkeypatch.setattr("src.services.api_sports_multi_service.reserve_request", lambda _base_url: None)
+
+
 @pytest.fixture
 def synced_at():
     return datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
@@ -156,6 +161,22 @@ def test_live_sync_with_no_active_sports_uses_no_api_requests(synced_at):
 def test_ncaa_feed_uses_american_football_ncaa_league_filter():
     assert DATE_PRODUCTS["ncaa"] == ("https://v1.american-football.api-sports.io", "games")
     assert DATE_PRODUCT_PARAMS["ncaa"] == {"league": 2}
+
+def test_formula_one_is_active_and_live_sync_uses_season_request(synced_at):
+    client = SimpleNamespace(table=lambda _name: FakeQuery([
+        {"sport_slug": "formula-1", "status_code": "NS"},
+        {"sport_slug": "hockey", "status_code": "FT"},
+        {"sport_slug": "cricket", "status_code": "NS"},
+    ]))
+    calls = []
+    service = ApiSportsMultiService(
+        api_key="test-key", client=client, clock=lambda: synced_at,
+        get=lambda url, params, **_kwargs: calls.append((url, params)) or FakeApiResponse(),
+    )
+    assert service.active_sports() == ["formula-1"]
+    result = service.sync_live_scores()
+    assert calls == [("https://v1.formula-1.api-sports.io/races", {"season": 2026})]
+    assert result["sports"]["formula-1"] == {"requests": 1, "events": 0}
 
 
 @pytest.mark.parametrize("operation", ["daily_check", "record", "store", "active"])

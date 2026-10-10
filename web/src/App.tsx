@@ -39,7 +39,7 @@ const CapperAnalyticsCharts = lazy(() => import('./CapperAnalyticsCharts'))
 const AllResultsPage = lazy(() => import('./AllResultsPage'))
 const NflPage = lazy(() => import('./NflPage'))
 const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
-const NflHomePreview = lazy(() => import('./NflHomePreview'))
+const SportsHomePreview = lazy(() => import('./SportsHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
 const MemberPublicPage = lazy(() => import('./MemberPublicPage'))
 const MemberHomeFeed = lazy(() => import('./MemberHomeFeed'))
@@ -136,6 +136,36 @@ function CapperAvatar({ name, avatarUrl, large = false }: { name: string; avatar
   const initials = name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
   if (failed) return <span className={`capper-avatar-fallback${large ? ' is-large' : ''}`} aria-label={`${name} avatar`}>{initials}</span>
   return <img className={`capper-avatar-image${large ? ' is-large' : ''}`} src={avatarUrl || generatedAvatarUrl(name)} alt={`${name} avatar`} onError={() => setFailed(true)} />
+}
+
+function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalone = false }: {
+  cappers: CapperSummary[]; directoryState: LoadState; loadState: LoadState; onRetry: () => void; standalone?: boolean
+}) {
+  return <section className={`cappers-section${standalone ? ' cappers-page' : ' scroll-reveal'}`} id="cappers">
+    <div className="section-heading compact">
+      <div><p className="eyebrow">The room</p>{standalone ? <h1>Our cappers.</h1> : <h2>Know who made the call.</h2>}</div>
+      <p>Meet our current Discord OPERATOR cappers. Performance summaries use settled plays only; open selections require verified member access.</p>
+    </div>
+    <div className="capper-grid">
+      {cappers.map((capper, index) => (
+        <article className="capper-card" key={capper.name}>
+          <CapperAvatar key={capper.avatar_url} name={capper.name} avatarUrl={capper.avatar_url} /><span className="capper-index">0{index + 1}</span>
+          <h3>{capper.name}</h3>
+          {loadState === 'ready' && <>
+            <strong>{capper.plays} settled plays · {capper.wins}-{capper.losses}</strong>
+            <p>Verified net: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
+            <span className="capper-record-label">Calculated from the public settled record</span>
+          </>}
+          <Link to={`/cappers/${capper.slug}`}>Open capper homepage <ArrowRight size={16} /></Link>
+        </article>
+      ))}
+    </div>
+    {directoryState === 'loading' && <p className="results-empty" role="status">Loading capper directory...</p>}
+    {directoryState === 'ready' && cappers.length === 0 && <p className="results-empty">No current OPERATOR cappers are listed yet.</p>}
+    {directoryState === 'error' && <p className="data-notice" role="alert">The capper directory could not be loaded. <button className="results-retry" type="button" onClick={onRetry}>Retry</button></p>}
+    {directoryState === 'ready' && cappers.length > 0 && loadState === 'loading' && <p className="results-empty" role="status">Loading capper performance records...</p>}
+    {directoryState === 'ready' && cappers.length > 0 && loadState === 'error' && <p className="data-notice" role="alert">Capper performance records could not be loaded. <button className="results-retry" type="button" onClick={onRetry}>Retry</button></p>}
+  </section>
 }
 
 function BrandLogo({ className }: { className: string }) {
@@ -284,6 +314,8 @@ function Website() {
       ? `${policyKind === 'terms' ? 'Terms of Service' : policyKind === 'privacy' ? 'Privacy Notice' : 'Refund Policy'} | Playmaker Picks`
       : selectedCapperName
       ? `${selectedCapperName} | Playmaker Picks`
+      : routePath === '/cappers'
+        ? 'Our Cappers | Playmaker Picks'
       : routePath === '/results'
         ? 'Settled Results | Playmaker Picks'
         : routePath === '/picks'
@@ -299,6 +331,8 @@ function Website() {
       'content',
       selectedCapperName
         ? `${selectedCapperName}'s official settled-play record, performance graphs, and results.`
+        : routePath === '/cappers'
+          ? 'Meet the Playmaker Picks cappers, browse their public settled records, and visit their individual homepages.'
         : 'Verified sports analysis, transparent play tracking, and the Playmaker Picks community.',
     )
   }, [routePath, selectedCapperName, sportRouteSlug, policyKind])
@@ -310,6 +344,12 @@ function Website() {
   const capperSports = ['All', ...Array.from(new Set(capperResults.map((result) => result.sport)))]
   const visibleCapperResults = sport === 'All' ? capperResults : capperResults.filter((result) => result.sport === sport)
   const closeMenu = () => setMenuOpen(false)
+  const retryCapperDirectory = () => {
+    setDirectoryState('loading')
+    setLoadState('loading')
+    setRetryCount((count) => count + 1)
+  }
+  const capperDirectory = <CapperDirectory cappers={cappers} directoryState={directoryState} loadState={loadState} onRetry={retryCapperDirectory} standalone={routePath === '/cappers'} />
   const sectionHref = (section: string) => routePath === '/' ? `#${section}` : `/#${section}`
   const homepageResults = visibleResults.slice(0, 10)
 
@@ -324,7 +364,7 @@ function Website() {
           <a href="/results" onClick={closeMenu}>Results</a>
           <SportsDropdown onNavigate={closeMenu} />
           <a href="/account" onClick={closeMenu}>Account</a>
-          <a href={sectionHref('cappers')} onClick={closeMenu}>Cappers</a>
+          <Link to="/cappers" onClick={closeMenu}>Cappers</Link>
           <Link to="/membership" onClick={closeMenu}>Membership</Link>
           <a href={sectionHref('method')} onClick={closeMenu}>Method</a>
           <a className="nav-community" href="https://discord.gg/mwxRsWUp5W" target="_blank" rel="noreferrer" onClick={closeMenu}>Join Discord <ArrowRight size={16} /></a>
@@ -375,11 +415,13 @@ function Website() {
               onRetry={() => { setLoadState('loading'); setRetryCount((count) => count + 1) }}
             />
           </Suspense>
+        ) : routePath === '/cappers' ? (
+          capperDirectory
         ) : selectedCapper ? (
           <section className="capper-home" style={capperBackground?.name === selectedCapper.name ? capperBackgroundStyle(capperBackground.theme) : undefined}>
             {capperBackground?.name === selectedCapper.name && capperBackground.theme.appearance.banner_url && <CapperBanner key={capperBackground.theme.appearance.banner_url} url={capperBackground.theme.appearance.banner_url} name={selectedCapper.name} />}
             <div className="capper-profile-heading">
-              <Link to="/#cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
+              <Link to="/cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
               <div className="capper-identity">
                 <CapperAvatar key={selectedCapper.avatar_url} name={selectedCapper.name} avatarUrl={selectedCapper.avatar_url} large />
                 <div><p className="eyebrow">Public capper homepage</p><h1>{selectedCapper.name}</h1><p>Official results, performance trends, and sport-by-sport analysis.</p></div>
@@ -430,7 +472,7 @@ function Website() {
             }} />
           </section>
         ) : profileSlug ? (
-          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry capper directory</button>}<Link to="/#cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
+          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry capper directory</button>}<Link to="/cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
         ) : routePath !== '/' ? (
           <section className="capper-not-found"><p className="eyebrow">Page not found</p><h1>This page isn't on the board.</h1><Link to="/">Return home <ArrowRight size={16} /></Link></section>
         ) : (
@@ -494,30 +536,11 @@ function Website() {
           </div>
         </section>
 
-        <Suspense fallback={<section className="nfl-preview"><p className="nfl-state">Loading NFL schedule…</p></section>}>
-          <NflHomePreview />
+        <Suspense fallback={<section className="nfl-preview"><p className="nfl-state">Loading sports schedules...</p></section>}>
+          <SportsHomePreview />
         </Suspense>
 
-        <section className="cappers-section scroll-reveal" id="cappers">
-          <div className="section-heading compact">
-            <div><p className="eyebrow">The room</p><h2>Know who made the call.</h2></div>
-            <p>Meet our current Discord OPERATOR cappers. Performance summaries use settled plays only; open selections require verified member access.</p>
-          </div>
-          <div className="capper-grid">
-            {cappers.map((capper, index) => (
-              <article className="capper-card" key={capper.name}>
-                <CapperAvatar key={capper.avatar_url} name={capper.name} avatarUrl={capper.avatar_url} /><span className="capper-index">0{index + 1}</span>
-                <h3>{capper.name}</h3><strong>{capper.plays} settled plays · {capper.wins}-{capper.losses}</strong>
-                <p>Verified net: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
-                <span className="capper-record-label">Calculated from the public settled record</span>
-                <Link to={`/cappers/${capper.slug}`}>Open capper homepage <ArrowRight size={16} /></Link>
-              </article>
-            ))}
-            {loadState === 'ready' && directoryState === 'ready' && cappers.length === 0 && <p className="results-empty">No current OPERATOR cappers are listed yet.</p>}
-            {directoryState === 'error' && <p className="data-notice" role="alert">The capper directory could not be loaded. <button className="results-retry" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry</button></p>}
-            {loadState !== 'ready' && <p className="results-empty">Capper records load with the settled results.</p>}
-          </div>
-        </section>
+        {capperDirectory}
 
         <section className="membership-promo scroll-reveal" id="membership">
           <div><p className="eyebrow">Membership</p><h2>One membership. Your seat.</h2><p>Join the free ROOKIE community or try seven days of full HIGHROLLER access. Continue for $19.99 per 30-day pass. No automatic charges. Enrollment remains closed pending launch review.</p></div>

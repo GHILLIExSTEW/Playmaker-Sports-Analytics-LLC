@@ -57,6 +57,13 @@ fallback at `web/public/playmaker-arch-transparent.webp`.
 
 ## Capper Pages
 
+The header's **Cappers** link opens `/cappers`, a dedicated public directory
+of current Discord OPERATOR cappers with settled performance summaries and
+links to individual profiles. The same listing remains on the homepage at
+`/#cappers`. Profile **All cappers** links return to the dedicated directory.
+The directory displays loading, empty and retryable error states; performance
+figures appear only after the settled record loads successfully.
+
 Apply `20261008120000_capper_full_appearance.sql` after background colors for
 separate name/link/body colors, heading-font choices, an optional banner image
 and section ordering. Uploads support banners (1600px) and avatars (512px);
@@ -252,6 +259,15 @@ The website reads `public_nfl_games`, `public_nfl_standings`, and
 
 ## Multi-Sport API-Sports Events
 
+The homepage sports board fetches all 11 connected sport caches independently
+and provides a selector for every catalog sport. It highlights up to three
+near/in-progress, upcoming, then recent completed events for the selected sport,
+with Eastern times, cached sync timestamps and links to its sports center.
+Failures are retryable and isolated by sport; Cricket and Cycling explicitly
+show that no feed is connected. Homepage and sport pages share paginated,
+deterministically ordered event fetching to avoid truncating large schedules.
+This does not introduce browser-side provider requests.
+
 1. Run `supabase/migrations/20260930300000_api_sports_multi_event_cache.sql` in
   Supabase SQL Editor. It creates a private event cache and a public read-only
   RPC.
@@ -262,6 +278,8 @@ The website reads `public_nfl_games`, `public_nfl_standings`, and
 4. The daily sync requests a rolling seven-day schedule for each reachable
   date-based API, plus the current Formula 1 season. Live scores are refreshed
   every 15 minutes only for sports with a cached game near/in progress.
+  Formula 1 uses a season-scoped refresh during those windows because its
+  configured race endpoint is season-based, not date-based.
 
 Connected product feeds currently include Football, Basketball, Baseball,
 Hockey, Rugby, Handball, Volleyball, Formula 1, MMA, and NCAA football.

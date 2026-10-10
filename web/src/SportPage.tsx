@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { fetchNflGames, type NflGame } from './nflData'
-import { supabase } from './supabaseClient'
+import { fetchSportEvents, finalEventStatuses, formatEventScore, type SportEvent } from './sportEvents'
 import { sportsCatalog } from './sportsCatalog'
 
 type Result = {
@@ -15,26 +14,7 @@ type Result = {
   status: 'win' | 'loss' | 'void' | 'partial'
   net_units: number
 }
-type SportEvent = {
-  event_id: string
-  league_name: string | null
-  season: string | null
-  round_name: string | null
-  event_name: string
-  start_at: string
-  venue: { name?: string; city?: string; country?: string } | null
-  home_name: string | null
-  home_logo: string | null
-  away_name: string | null
-  away_logo: string | null
-  home_score: unknown
-  away_score: unknown
-  status_code: string
-  status: string
-  synced_at: string
-}
 type EventView = 'schedule' | 'scores'
-const finalEventStatuses = new Set(['FT', 'AOT', 'CANC', 'ABD', 'WO', 'COMPLETED', 'FINISHED'])
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' }).format(new Date(value))
@@ -90,14 +70,7 @@ function SportPageContent({ sport, results, loadState }: { sport: (typeof sports
     let cancelled = false
     void (async () => {
       try {
-        let rows: SportEvent[]
-        if (sport.feed === 'nfl') {
-          rows = (await fetchNflGames()).map(mapNflGame)
-        } else {
-          const { data, error } = await supabase.rpc('public_sport_events', { p_sport_slug: sport.slug })
-          if (error) throw error
-          rows = (data ?? []) as SportEvent[]
-        }
+        const rows = await fetchSportEvents(sport)
         if (cancelled) return
         setEvents(rows)
         setEventState('ready')
@@ -106,7 +79,7 @@ function SportPageContent({ sport, results, loadState }: { sport: (typeof sports
       }
     })()
     return () => { cancelled = true }
-  }, [sport.feed, sport.slug])
+  }, [sport])
 
   const sportResultNames = sport.slug === 'american-football' ? new Set(['nfl', 'american football']) : new Set([sport.name.toLowerCase()])
   const sportResults = results.filter((result) => sportResultNames.has(result.sport.trim().toLowerCase()))
@@ -204,36 +177,6 @@ function SportEventTeam({ name, logo, score }: { name: string; logo: string | nu
     <span>{name}</span>
     <strong>{formatEventScore(score)}</strong>
   </div>
-}
-
-function formatEventScore(value: unknown): string {
-  if (typeof value === 'number' || typeof value === 'string') return String(value)
-  if (value && typeof value === 'object' && 'total' in value) {
-    const total = (value as { total?: unknown }).total
-    if (typeof total === 'number' || typeof total === 'string') return String(total)
-  }
-  return '—'
-}
-
-function mapNflGame(game: NflGame): SportEvent {
-  return {
-    event_id: String(game.game_id),
-    league_name: 'NFL',
-    season: String(game.season),
-    round_name: game.week || game.stage,
-    event_name: `${game.away_team_name} vs ${game.home_team_name}`,
-    start_at: game.kickoff_at,
-    venue: { name: game.venue_name || undefined, city: game.venue_city || undefined },
-    home_name: game.home_team_name,
-    home_logo: game.home_team_logo,
-    away_name: game.away_team_name,
-    away_logo: game.away_team_logo,
-    home_score: game.home_score,
-    away_score: game.away_score,
-    status_code: game.status_short,
-    status: game.status_long,
-    synced_at: game.synced_at,
-  }
 }
 
 function SportEventCard({ event, sportName }: { event: SportEvent; sportName: string }) {

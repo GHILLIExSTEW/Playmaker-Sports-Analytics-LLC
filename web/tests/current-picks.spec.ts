@@ -87,6 +87,69 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
   return control
 }
 
+for (const mobile of [false, true]) {
+  test(`cappers navigation opens a dedicated directory and preserves the homepage listing (${mobile ? 'mobile' : 'desktop'})`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 })
+    await mockApi(page)
+    await page.goto('/')
+    await expect(page.locator('#cappers .capper-card')).toHaveCount(2)
+    if (mobile) await page.getByRole('button', { name: 'Toggle navigation' }).click()
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Cappers', exact: true }).click()
+    await expect(page).toHaveURL(/\/cappers$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Our cappers.' })).toBeVisible()
+    await expect(page.locator('.capper-card')).toHaveCount(2)
+    await expect(page.locator('.hero-section, .results-section, .method-section, .membership-promo')).toHaveCount(0)
+    if (mobile) await expect(page.getByRole('button', { name: 'Toggle navigation' })).toHaveAttribute('aria-expanded', 'false')
+    await expect(page).toHaveTitle('Our Cappers | Playmaker Picks')
+    await page.reload()
+    const firstCapper = page.locator('.capper-card').filter({ hasText: 'First Capper' })
+    await expect(firstCapper).toContainText('1 settled plays · 1-0')
+    await expect(firstCapper).toContainText('Verified net: +1u')
+    await firstCapper.getByRole('link', { name: 'Open capper homepage' }).click()
+    await expect(page).toHaveURL(/\/cappers\/first-capper$/)
+    await page.getByRole('link', { name: 'All cappers', exact: true }).click()
+    await expect(page).toHaveURL(/\/cappers$/)
+    await page.goto('/cappers/missing-capper')
+    await page.getByRole('link', { name: 'Return to all cappers' }).click()
+    await expect(page).toHaveURL(/\/cappers$/)
+    await page.goto('/#cappers')
+    await expect(page.locator('#cappers .capper-card')).toHaveCount(2)
+    await expect(page.locator('#cappers').getByRole('heading', { name: 'Know who made the call.' })).toBeVisible()
+  })
+}
+
+test('capper directory shows loading, retryable errors and an empty roster', async ({ page }) => {
+  await mockApi(page)
+  let releaseDirectory!: () => void
+  const directoryWait = new Promise<void>((resolve) => { releaseDirectory = resolve })
+  let failed = true
+  await page.route('**/rest/v1/rpc/public_capper_directory*', async (route) => {
+    await directoryWait
+    await route.fulfill({ status: failed ? 500 : 200, json: failed ? { message: 'Directory unavailable' } : [] })
+  })
+  await page.goto('/cappers/')
+  await expect(page.getByRole('status')).toContainText('Loading capper directory')
+  releaseDirectory()
+  await expect(page.getByRole('alert')).toContainText('The capper directory could not be loaded.')
+  failed = false
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(page.getByText('No current OPERATOR cappers are listed yet.')).toBeVisible()
+  await expect(page.locator('.capper-card')).toHaveCount(0)
+})
+
+test('capper directory keeps profiles accessible when performance records fail', async ({ page }) => {
+  await mockApi(page)
+  await page.route('**/rest/v1/rpc/public_settled_results*', (route) => route.fulfill({ status: 500, json: { message: 'Results unavailable' } }))
+  await page.goto('/cappers')
+  await expect(page.locator('.capper-card')).toHaveCount(2)
+  await expect(page.getByRole('alert')).toContainText('Capper performance records could not be loaded.')
+  await expect(page.locator('.capper-card').filter({ hasText: 'Verified net:' })).toHaveCount(0)
+  await page.unroute('**/rest/v1/rpc/public_settled_results*')
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(page.locator('.capper-card').filter({ hasText: 'First Capper' })).toContainText('Verified net: +1u')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
 test('owner customizes capper bio, color, avatar and links with persistent public rendering', async ({ page }) => {
   await mockApi(page, { pageOwner: 'New Capper' })
   await page.route('https://images.example/avatar.png', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>' }))
