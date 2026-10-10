@@ -38,6 +38,39 @@ async function mockSports(page: Page, failingSport?: string) {
 }
 
 for (const mobile of [false, true]) {
+  test(`homepage sections remain opaque while scrolling and returning home (${mobile ? 'mobile' : 'desktop'})`, async ({ page }) => {
+    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 768 })
+    await mockSports(page)
+    await page.addInitScript(() => {
+      class InactiveObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() { return [] }
+      }
+      Object.defineProperty(window, 'IntersectionObserver', { value: InactiveObserver })
+    })
+    await page.goto('/')
+    await expect(page.locator('.personalized-feed')).toContainText('Sign in to build a feed')
+    const hero = await page.locator('.hero-section').boundingBox()
+    const feed = await page.locator('.personalized-feed').boundingBox()
+    expect(hero).not.toBeNull()
+    expect(feed).not.toBeNull()
+    expect(Math.abs(feed!.y - (hero!.y + hero!.height))).toBeLessThanOrEqual(1)
+    for (const selector of ['.personalized-feed', '#results', '#cappers', '#membership', '#method', '#community']) {
+      const section = page.locator(selector)
+      await section.scrollIntoViewIfNeeded()
+      await expect(section).toHaveCSS('opacity', '1')
+      await expect(section).toHaveCSS('transform', 'none')
+    }
+    await page.getByRole('link', { name: 'Manage favorites' }).click()
+    await expect(page).toHaveURL(/\/account$/)
+    await page.getByRole('link', { name: 'Playmaker Picks home' }).click()
+    await expect(page.locator('.personalized-feed')).toHaveCSS('opacity', '1')
+    await page.goto('/#cappers')
+    await expect(page.locator('#cappers')).toHaveCSS('opacity', '1')
+  })
+
   test(`homepage loads every connected sport and links to its center (${mobile ? 'mobile' : 'desktop'})`, async ({ page }) => {
     if (mobile) await page.setViewportSize({ width: 390, height: 844 })
     const calls = await mockSports(page)
@@ -96,4 +129,60 @@ test('empty caches are explicit and recent final events are shown without upcomi
   await board.getByRole('button', { name: 'MMA', exact: true }).click()
   await expect(board.getByRole('article')).toContainText('Recent fight')
   await expect(board.getByRole('article')).toContainText('Finished')
+})
+
+for (const [sportName, leagueName] of [
+  ['Football', 'Major League Soccer'], ['Basketball', 'NBA'], ['Basketball', 'NBA W'],
+  ['Baseball', 'MLB'], ['Hockey', 'NHL'], ['Hockey', 'AHL'],
+  ['Rugby', 'Major League Rugby'], ['Volleyball', 'Pro Volleyball Federation'],
+]) {
+  test(`${sportName} prioritizes ${leagueName} and retains international fallback`, async ({ page }) => {
+    await mockSports(page)
+    await page.route('**/rest/v1/rpc/public_sport_events*', (route) => route.fulfill({ json: [
+      { event_id: 'international', league_name: 'National League', event_name: 'International fixture', start_at: '2026-10-10T16:00:00Z', status_code: 'NS', status: 'Not Started', synced_at: '2026-10-10T14:00:00Z' },
+      { event_id: 'us-later', league_name: ` ${leagueName.toLowerCase()} `, event_name: 'U.S. later fixture', start_at: '2026-10-12T16:00:00Z', status_code: 'NS', status: 'Not Started', synced_at: '2026-10-10T14:00:00Z' },
+      { event_id: 'us-earlier', league_name: leagueName, event_name: 'U.S. earlier fixture', start_at: '2026-10-11T16:00:00Z', status_code: 'NS', status: 'Not Started', synced_at: '2026-10-10T14:00:00Z' },
+    ] }))
+    await page.goto('/')
+    const board = page.getByRole('region', { name: 'Sports schedule and scores' })
+    await board.getByRole('button', { name: sportName, exact: true }).click()
+    await expect(board.getByRole('article').getByRole('heading')).toHaveText(['U.S. earlier fixture', 'U.S. later fixture', 'International fixture'])
+  })
+}
+
+test('U.S. priority preserves event groups and never duplicates an event starting now', async ({ page }) => {
+  await mockSports(page)
+  const fixture = (id: string, league: string, date: string, status = 'NS') => ({
+    event_id: id, league_name: league, event_name: id, start_at: date,
+    status_code: status, status, synced_at: '2026-10-10T14:00:00Z',
+  })
+  await page.route('**/rest/v1/rpc/public_sport_events*', (route) => route.fulfill({ json: [
+    fixture('International live', 'International League', '2026-10-10T14:00:00Z'),
+    fixture('U.S. starting now', 'MLB', '2026-10-10T15:00:00Z'),
+    fixture('International upcoming', 'International League', '2026-10-10T16:00:00Z'),
+    fixture('U.S. upcoming', 'MLB', '2026-10-11T16:00:00Z'),
+    fixture('U.S. recent', 'MLB', '2026-10-09T16:00:00Z', 'FT'),
+  ] }))
+  await page.goto('/')
+  const board = page.getByRole('region', { name: 'Sports schedule and scores' })
+  await board.getByRole('button', { name: 'Baseball', exact: true }).click()
+  await expect(board.getByRole('article').getByRole('heading')).toHaveText(['U.S. starting now', 'International live', 'U.S. upcoming'])
+})
+
+test('recent U.S. events come first, with newest events first within each priority', async ({ page }) => {
+  await mockSports(page)
+  const fixture = (id: string, league: string, day: string) => ({
+    event_id: id, league_name: league, event_name: id, start_at: `2026-10-${day}T16:00:00Z`,
+    status_code: 'FT', status: 'Finished', synced_at: '2026-10-10T14:00:00Z',
+  })
+  await page.route('**/rest/v1/rpc/public_sport_events*', (route) => route.fulfill({ json: [
+    fixture('International newest', 'National League', '09'),
+    fixture('U.S. older', 'NHL', '07'),
+    fixture('U.S. newer', 'NHL', '08'),
+    fixture('International older', 'National League', '06'),
+  ] }))
+  await page.goto('/')
+  const board = page.getByRole('region', { name: 'Sports schedule and scores' })
+  await board.getByRole('button', { name: 'Hockey', exact: true }).click()
+  await expect(board.getByRole('article').getByRole('heading')).toHaveText(['U.S. newer', 'U.S. older', 'International newest'])
 })

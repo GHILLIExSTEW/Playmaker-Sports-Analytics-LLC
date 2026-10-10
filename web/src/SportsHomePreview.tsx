@@ -6,6 +6,20 @@ import { sportsCatalog, type SportCatalogItem } from './sportsCatalog'
 
 type Feed = { state: 'loading' | 'ready' | 'error'; events: SportEvent[] }
 
+const usLeagueNames: Record<string, Set<string>> = {
+  football: new Set(['major league soccer', 'mls', 'mls next pro', 'nwsl', 'nwsl women', 'usl championship', 'usl league one', 'usl league one cup', 'usl super league', 'usl league two']),
+  basketball: new Set(['nba', 'nba w', 'wnba', 'nba g league', 'nba - g league', 'ncaa', 'ncaa women']),
+  baseball: new Set(['mlb', 'major league baseball']),
+  hockey: new Set(['nhl', 'ahl', 'echl', 'sphl', 'ushl', 'ncaa', 'ncaa women']),
+  rugby: new Set(['mlr', 'major league rugby']),
+  volleyball: new Set(['pvf', 'pro volleyball federation', 'lovb', 'lovb pro', 'nva', 'national volleyball association', 'ncaa', 'ncaa women']),
+}
+
+function isUsLeague(sportSlug: string, event: SportEvent): boolean {
+  if (sportSlug === 'american-football' || sportSlug === 'ncaa') return true
+  return usLeagueNames[sportSlug]?.has(event.league_name?.trim().toLowerCase() ?? '') ?? false
+}
+
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat('en-US', {
     month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
@@ -37,12 +51,16 @@ export default function SportsHomePreview() {
 
   const feed = feeds[selectedSport.slug]
   const events = feed?.events ?? []
-  const upcoming = events.filter((event) => !finalEventStatuses.has(event.status_code.toUpperCase()) && Date.parse(event.start_at) >= now)
-    .sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at))
+  const compareEvents = (a: SportEvent, b: SportEvent, recent = false) =>
+    Number(isUsLeague(selectedSport.slug, b)) - Number(isUsLeague(selectedSport.slug, a))
+    || (recent ? -1 : 1) * (Date.parse(a.start_at) - Date.parse(b.start_at))
+    || a.event_id.localeCompare(b.event_id)
+  const upcoming = events.filter((event) => !finalEventStatuses.has(event.status_code.toUpperCase()) && Date.parse(event.start_at) > now)
+    .sort((a, b) => compareEvents(a, b))
   const inProgress = events.filter((event) => !finalEventStatuses.has(event.status_code.toUpperCase()) && Date.parse(event.start_at) <= now && Date.parse(event.start_at) >= now - 5 * 60 * 60 * 1000)
-    .sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at))
+    .sort((a, b) => compareEvents(a, b))
   const recent = events.filter((event) => finalEventStatuses.has(event.status_code.toUpperCase()) && Date.parse(event.start_at) <= now)
-    .sort((a, b) => Date.parse(b.start_at) - Date.parse(a.start_at))
+    .sort((a, b) => compareEvents(a, b, true))
   const chosen = [...inProgress, ...upcoming, ...recent].slice(0, 3)
   const oldestSync = events.length ? events.reduce((oldest, event) => Date.parse(event.synced_at) < Date.parse(oldest) ? event.synced_at : oldest, events[0].synced_at) : null
 
@@ -61,7 +79,7 @@ export default function SportsHomePreview() {
         : feed.state === 'error' ? <p className="nfl-state" role="alert">{selectedSport.name} data could not be loaded. <button type="button" className="results-retry" onClick={() => { setFeeds({}); setRetry((value) => value + 1) }}>Retry sports data</button></p>
         : chosen.length === 0 ? <p className="nfl-state">No current {selectedSport.name} events are available in the cached schedule.</p>
         : <>
-          <p className="nfl-state">Cached schedule and scores, not a real-time feed. Times Eastern. Oldest cached event sync: {oldestSync && formatTime(oldestSync)}.</p>
+          <p className="nfl-state">U.S.-based leagues first within live, upcoming, and recent events; international events fill remaining spots. Cached schedule and scores, not a real-time feed. Times Eastern. Oldest cached event sync: {oldestSync && formatTime(oldestSync)}.</p>
           <div className="nfl-preview-grid">{chosen.map((event) => <article className="nfl-game-card" key={event.event_id}>
             <div className="nfl-game-meta"><span>{event.league_name || selectedSport.name}</span><time dateTime={event.start_at}>{formatTime(event.start_at)}</time></div>
             <h3>{event.event_name}</h3>

@@ -141,7 +141,7 @@ function CapperAvatar({ name, avatarUrl, large = false }: { name: string; avatar
 function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalone = false }: {
   cappers: CapperSummary[]; directoryState: LoadState; loadState: LoadState; onRetry: () => void; standalone?: boolean
 }) {
-  return <section className={`cappers-section${standalone ? ' cappers-page' : ' scroll-reveal'}`} id="cappers">
+  return <section className={`cappers-section${standalone ? ' cappers-page' : ''}`} id="cappers">
     <div className="section-heading compact">
       <div><p className="eyebrow">The room</p>{standalone ? <h1>Our cappers.</h1> : <h2>Know who made the call.</h2>}</div>
       <p>Meet our current Discord OPERATOR cappers. Performance summaries use settled plays only; open selections require verified member access.</p>
@@ -283,24 +283,6 @@ function Website() {
     const sectionId = location.hash.slice(1)
     if (sectionId) requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView())
   }, [location.hash, location.pathname])
-
-  useEffect(() => {
-    const targets = document.querySelectorAll<HTMLElement>('.scroll-reveal')
-    if (!('IntersectionObserver' in window)) {
-      targets.forEach((target) => target.classList.add('is-visible'))
-      return
-    }
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible')
-          observer.unobserve(entry.target)
-        }
-      })
-    }, { threshold: 0.08, rootMargin: '0px 0px -8% 0px' })
-    targets.forEach((target) => observer.observe(target))
-    return () => observer.disconnect()
-  }, [routePath])
 
   const sports: string[] = ['All', ...Array.from(new Set(results.map((result) => result.sport)))]
   const visibleResults = sport === 'All' ? results : results.filter((result) => result.sport === sport)
@@ -497,7 +479,7 @@ function Website() {
           <Link className="button membership-promo-link" to="/picks">Browse expert picks <ArrowRight size={17} /></Link>
         </section>
 
-        <section className="results-section scroll-reveal" id="results">
+        <section className="results-section" id="results">
           <div className="section-heading">
             <div><p className="eyebrow">The settled ledger</p><h2>Built for receipts, not promises.</h2></div>
             <p>Official plays appear here after they settle, with the original published line, risk, capper, and final grade. Open plays and private account details are never returned by the public data endpoint.</p>
@@ -542,12 +524,12 @@ function Website() {
 
         {capperDirectory}
 
-        <section className="membership-promo scroll-reveal" id="membership">
+        <section className="membership-promo" id="membership">
           <div><p className="eyebrow">Membership</p><h2>One membership. Your seat.</h2><p>Join the free ROOKIE community or try seven days of full HIGHROLLER access. Continue for $19.99 per 30-day pass. No automatic charges. Enrollment remains closed pending launch review.</p></div>
           <Link className="button membership-promo-link" to="/membership">See membership &amp; trial <ArrowRight size={17} /></Link>
         </section>
 
-        <section className="method-section scroll-reveal" id="method">
+        <section className="method-section" id="method">
           <div className="method-intro"><p className="eyebrow">How the board works</p><h2>Clarity before confidence.</h2></div>
           <div className="method-steps">
             <article><span>01</span><div><h3>Post</h3><p>Every play records its author, odds, units, and publish time before the event begins.</p></div></article>
@@ -557,7 +539,7 @@ function Website() {
           </div>
         </section>
 
-        <section className="community-section scroll-reveal" id="community">
+        <section className="community-section" id="community">
           <div><p className="eyebrow">The clubhouse</p><h2>The card moves fast.<br />The record stays put.</h2></div>
           <div className="community-copy"><p>Discord carries live alerts and conversation. The website keeps the durable analysis, searchable discussion, and complete history.</p>
             <a className="button button-accent" href="https://discord.gg/mwxRsWUp5W" target="_blank" rel="noreferrer"><MessageCircle size={18} /> Join Discord</a>

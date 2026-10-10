@@ -42,6 +42,11 @@ function grants anonymous access only to the restricted settled-results query.
 
 ## Brand Logo
 
+Homepage sections render visibly without scroll-triggered opacity gates,
+including the lazy-loaded personalized board. The hero entrance animation
+remains; scrolling, direct section links and route navigation do not depend on
+an intersection observer to make content readable.
+
 The transparent brand mark is stored at
 `website-assets/brand/playmaker-mark-transparent-512.webp` in the dedicated
 public Supabase Storage bucket. The existing `Media` bucket remains private.
@@ -263,6 +268,13 @@ The homepage sports board fetches all 11 connected sport caches independently
 and provides a selector for every catalog sport. It highlights up to three
 near/in-progress, upcoming, then recent completed events for the selected sport,
 with Eastern times, cached sync timestamps and links to its sports center.
+Within each live/upcoming/recent group, recognized U.S.-based leagues rank
+first, followed by international events as fallback; chronological ordering
+is preserved within each priority. NFL and NCAA football are U.S. feeds.
+Other sports use exact, sport-specific league-name aliases (including MLS,
+NWSL, USL, NBA/WNBA, MLB, NHL and U.S. hockey leagues). Cross-border leagues
+such as MLS/NHL are included. Unknown or ambiguous names are not assumed to
+be U.S. leagues. Sport center pages remain unfiltered.
 Failures are retryable and isolated by sport; Cricket and Cycling explicitly
 show that no feed is connected. Homepage and sport pages share paginated,
 deterministically ordered event fetching to avoid truncating large schedules.

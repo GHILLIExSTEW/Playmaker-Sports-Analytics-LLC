@@ -81,7 +81,7 @@ export default function MemberHomeFeed({ results }: { results: FeedResult[] }) {
     return () => { cancelled = true }
   }, [results])
 
-  return <section className="personalized-feed scroll-reveal" aria-labelledby="personalized-feed-title">
+  return <section className="personalized-feed" aria-labelledby="personalized-feed-title">
     <div className="personalized-feed-heading">
       <div><p className="eyebrow">Your board</p><h2 id="personalized-feed-title">Picked for you.</h2></div>
       <Link to="/account">Manage favorites <ArrowRight size={16} /></Link>
