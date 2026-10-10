@@ -5,10 +5,16 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import src.bot as bot_module
+import src.administration as admin_module
 from src.services import team_api_service as module
 from src.services.api_budget_service import ApiBudgetDenied
 from src.services.team_api_service import TeamApiService, TeamRefreshFailed
+
+
+def administration():
+    return admin_module.Administration(
+        set_testing=Mock(), get_tracker_start=Mock(return_value=None), set_tracker_start=Mock(),
+    )
 
 
 class Query:
@@ -228,29 +234,30 @@ def test_budget_disabled_and_concurrent_refresh_are_explicit(monkeypatch):
 
 
 def test_owner_only_command_permissions_and_failure_message(monkeypatch):
-    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
+    monkeypatch.setattr(admin_module, "GUILD_ID", 123)
     interaction = SimpleNamespace(
         guild=SimpleNamespace(id=123), user=SimpleNamespace(id=1, roles=[], bot=False),
         response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
         followup=SimpleNamespace(send=AsyncMock()),
     )
     refresh = Mock()
-    monkeypatch.setattr(bot_module.team_api_service, "refresh", refresh)
-    asyncio.run(bot_module.api_command.callback(interaction, "nfl", "2026"))
+    cog = administration()
+    monkeypatch.setattr(cog.api_service, "refresh", refresh)
+    asyncio.run(cog.api_command.callback(cog, interaction, "nfl", "2026"))
     assert not refresh.called
-    interaction.user.roles = [SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)]
+    interaction.user.roles = [SimpleNamespace(id=admin_module.WEBSITE_OWNER_ROLE_ID)]
     report = {"complete": False, "requests": 1, "snapshots": 0, "games": 0, "player_games": 0,
               "empty_player_games": 0, "player_supported": True, "quota_denied": True, "error": "quota"}
     refresh.side_effect = TeamRefreshFailed(report)
-    asyncio.run(bot_module.run_api_refresh(interaction, "nfl", "1", "10", "2026"))
+    asyncio.run(cog.run_api_refresh(interaction, "nfl", "1", "10", "2026"))
     message = interaction.followup.send.call_args.args[0]
     assert "PARTIAL / FAILED" in message and "budget denied" in message
     assert interaction.followup.send.call_args.kwargs["ephemeral"]
     interaction.guild.id = 456
-    assert not bot_module.can_refresh_api(interaction)
+    assert not admin_module.can_refresh_api(interaction)
     interaction.guild.id = 123
     interaction.user.bot = True
-    assert not bot_module.can_refresh_api(interaction)
+    assert not admin_module.can_refresh_api(interaction)
 
 
 def test_picker_loads_team_names_without_requiring_ids(monkeypatch):
@@ -286,16 +293,16 @@ def test_provider_league_picker_and_nested_soccer_team_names(monkeypatch):
 
 
 def test_picker_paginated_buttons_and_owner_rechecks(monkeypatch):
-    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
+    monkeypatch.setattr(admin_module, "GUILD_ID", 123)
 
     async def run():
         rows = [(f"Team {i:02}", str(i + 1)) for i in range(32)]
-        picker = bot_module.ApiPickerView(7, "nfl", "2026", rows, "1")
+        picker = admin_module.ApiPickerView(administration(), 7, "nfl", "2026", rows, "1")
         assert len(picker.children[0].options) == 25
         assert picker.previous.disabled and not picker.next.disabled
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=123),
-            user=SimpleNamespace(id=7, roles=[SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)], bot=False),
+            user=SimpleNamespace(id=7, roles=[SimpleNamespace(id=admin_module.WEBSITE_OWNER_ROLE_ID)], bot=False),
             response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock()),
         )
         assert await picker.interaction_check(interaction)
@@ -304,7 +311,7 @@ def test_picker_paginated_buttons_and_owner_rechecks(monkeypatch):
         assert picker.next.disabled
         interaction.user.roles = []
         assert not await picker.interaction_check(interaction)
-        interaction.user.roles = [SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)]
+        interaction.user.roles = [SimpleNamespace(id=admin_module.WEBSITE_OWNER_ROLE_ID)]
         interaction.user.id = 8
         assert not await picker.interaction_check(interaction)
 
@@ -312,20 +319,21 @@ def test_picker_paginated_buttons_and_owner_rechecks(monkeypatch):
 
 
 def test_command_opens_private_league_picker_and_team_selection_refreshes(monkeypatch):
-    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
+    monkeypatch.setattr(admin_module, "GUILD_ID", 123)
     directory = Mock(side_effect=[[("NFL", "1")], [("Home", "10")]])
-    monkeypatch.setattr(bot_module.team_api_service, "picker_directory", directory)
+    cog = administration()
+    monkeypatch.setattr(cog.api_service, "picker_directory", directory)
     refresh = AsyncMock()
-    monkeypatch.setattr(bot_module, "run_api_refresh", refresh)
+    monkeypatch.setattr(cog, "run_api_refresh", refresh)
 
     async def run():
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=123),
-            user=SimpleNamespace(id=7, roles=[SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)], bot=False),
+            user=SimpleNamespace(id=7, roles=[SimpleNamespace(id=admin_module.WEBSITE_OWNER_ROLE_ID)], bot=False),
             response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(), edit_message=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()), edit_original_response=AsyncMock(),
         )
-        await bot_module.api_command.callback(interaction, "nfl", "2026")
+        await cog.api_command.callback(cog, interaction, "nfl", "2026")
         assert interaction.followup.send.call_args.kwargs["ephemeral"]
         picker = interaction.followup.send.call_args.kwargs["view"]
         select = picker.children[0]

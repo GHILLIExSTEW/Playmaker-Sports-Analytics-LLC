@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import src.bot as bot_module
+from src.play_settlement import PlayPickerView
 import src.services.official_play_service as official_play_module
 from src.services.official_play_service import OfficialPlayService
 
@@ -75,14 +76,15 @@ def test_open_play_label_shows_status_and_fits_limit():
     assert len(OfficialPlayService.open_play_label(make_play(9, play_text="x" * 300))) == 100
 
 
-def test_load_play_page_scopes_settle_and_regrade(monkeypatch):
+def test_load_play_page_scopes_settle_and_regrade(monkeypatch, load_settlement):
     calls = []
     monkeypatch.setattr(bot_module.official_play_service, "list_plays", lambda *args, **kwargs: calls.append((args, kwargs)) or ([], False))
 
-    bot_module.load_play_page("settle", 0)
-    bot_module.load_play_page("regrade", 2)
-    bot_module.load_play_page("unsettle", 1)
-    bot_module.load_play_page("edit", 0)
+    cog = load_settlement()
+    cog.load_play_page("settle", 0)
+    cog.load_play_page("regrade", 2)
+    cog.load_play_page("unsettle", 1)
+    cog.load_play_page("edit", 0)
 
     assert calls[0] == ((0, 10), {"statuses": ["open", "regraded"]})
     assert calls[1][0] == (2, 10)
@@ -94,9 +96,10 @@ def test_load_play_page_scopes_settle_and_regrade(monkeypatch):
     assert calls[3] == ((0, 10), {"statuses": ["open", "regraded"]})
 
 
-def test_picker_view_has_ten_options_and_paging_buttons():
+def test_picker_view_has_ten_options_and_paging_buttons(load_settlement):
+    cog = load_settlement()
     async def build():
-        return bot_module.PlayPickerView(1, "settle", [make_play(i) for i in range(10)], page=0, has_more=True)
+        return PlayPickerView(cog, 1, "settle", [make_play(i) for i in range(10)], page=0, has_more=True)
 
     view = asyncio.run(build())
     buttons = [item for item in view.children if isinstance(item, bot_module.discord.ui.Button)]
@@ -121,24 +124,26 @@ class FakeInteraction:
         self.edit_original_response = edit_original_response
 
 
-def test_show_play_picker_reports_empty_list(monkeypatch):
-    monkeypatch.setattr(bot_module, "load_play_page", lambda mode, page: ([], False))
+def test_show_play_picker_reports_empty_list(monkeypatch, load_settlement):
+    cog = load_settlement()
+    monkeypatch.setattr(cog, "load_play_page", lambda mode, page: ([], False))
     interaction = FakeInteraction()
 
-    asyncio.run(bot_module.show_play_picker(interaction, "regrade", 0))
+    asyncio.run(cog.show_play_picker(interaction, "regrade", 0))
 
     assert interaction.sent == [("There are no plays from the last 2 days to regrade.", {"ephemeral": True})]
 
 
-def test_show_play_picker_sends_view(monkeypatch):
-    monkeypatch.setattr(bot_module, "load_play_page", lambda mode, page: ([make_play(3)], False))
+def test_show_play_picker_sends_view(monkeypatch, load_settlement):
+    cog = load_settlement()
+    monkeypatch.setattr(cog, "load_play_page", lambda mode, page: ([make_play(3)], False))
     interaction = FakeInteraction()
 
-    asyncio.run(bot_module.show_play_picker(interaction, "settle", 0))
+    asyncio.run(cog.show_play_picker(interaction, "settle", 0))
 
     content, kwargs = interaction.sent[0]
     assert content == "Select an open play to settle (page 1):"
-    assert isinstance(kwargs["view"], bot_module.PlayPickerView)
+    assert isinstance(kwargs["view"], PlayPickerView)
 
 
 def test_is_official(monkeypatch):

@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import src.bot as bot_module
+import src.member_activity as activity_module
+from src.play_submission import PlaySubmission
 
 
 def card_message():
@@ -37,7 +39,7 @@ def test_engagement_and_suggestion_views_use_dispatcher_ids_and_are_not_stored()
     assert engagement.is_finished() and suggestion.is_finished()
 
 
-def test_partial_reaction_settles_play(monkeypatch):
+def test_partial_reaction_settles_play(monkeypatch, load_settlement):
     settled = []
     monkeypatch.setattr(bot_module.official_play_service, "settle_play", lambda play_id, result: settled.append((play_id, result)))
 
@@ -61,6 +63,7 @@ def test_partial_reaction_settles_play(monkeypatch):
 
     plays = [{"id": 5, "user_id": 1, "status": "regraded", "message_id": "99"}]
     users = [{"id": 1, "discord_user_id": "42"}]
+    load_settlement()
     count = asyncio.run(bot_module.reconcile_open_play_reactions(plays, users, [Channel()]))
     assert count == 1
     assert settled == [(5, "partial")]
@@ -73,13 +76,13 @@ def test_mystats_embed_sections():
         "tails": {**summary, "open": 1, "count": 4},
         "vault": {**summary, "count": 3, "month": summary},
     }
-    embed = bot_module.build_mystats_embed(SimpleNamespace(display_name="Ace"), stats)
+    embed = activity_module.build_mystats_embed(SimpleNamespace(display_name="Ace"), stats)
     names = [field.name for field in embed.fields]
     assert names[0] == "📣 Your Official Plays"
     assert "W2" in embed.fields[0].value
     assert "Open tails: 1" in embed.fields[1].value
 
-    empty = bot_module.build_mystats_embed(SimpleNamespace(display_name="New"), {
+    empty = activity_module.build_mystats_embed(SimpleNamespace(display_name="New"), {
         "capper": None,
         "tails": {**summary, "open": 0, "count": 0},
         "vault": {**summary, "count": 0, "month": summary},
@@ -104,7 +107,6 @@ class FakeRole:
 
 
 def share_view(monkeypatch, tier="vip", allowed=True, webhooks=None):
-    bot_module.share_webhooks.clear()
     roles = [FakeRole(bot_module.HIGHROLLER_ROLE_ID, "HIGHROLLER"), FakeRole(bot_module.ROOKIE_ROLE_ID, "ROOKIE")]
     guild = SimpleNamespace(roles=roles, get_role=lambda role_id: next((r for r in roles if r.id == role_id), None))
     webhook = SimpleNamespace(send=AsyncMock(), channel_id=0)
@@ -116,13 +118,14 @@ def share_view(monkeypatch, tier="vip", allowed=True, webhooks=None):
         channel.id = webhook.channel_id = channel_id
         return channel
 
-    monkeypatch.setattr(bot_module, "resolve_channel", resolve)
     membership = Mock()
     membership.has_paid_access.return_value = allowed
-    monkeypatch.setattr(bot_module, "MembershipService", lambda: membership)
+    activity = activity_module.MemberActivity(
+        bot_module.bot, features=Mock(), resolve_channel=resolve, membership=membership,
+    )
 
     async def build():
-        return bot_module.ShareStatsView(42, bot_module.discord.Embed(title="Stats"), tier)
+        return activity_module.ShareStatsView(activity, 42, bot_module.discord.Embed(title="Stats"), tier)
 
     return asyncio.run(build()), channel, webhook
 
@@ -154,7 +157,7 @@ def test_vip_share_posts_as_member_via_webhook_tags_highroller_and_deletes_priva
 def test_free_share_tags_rookie_and_reuses_existing_webhook(monkeypatch):
     bot_user = SimpleNamespace(id=999)
     monkeypatch.setattr(type(bot_module.bot), "user", property(lambda self: bot_user))
-    existing = SimpleNamespace(name=bot_module.SHARE_WEBHOOK_NAME, user=bot_user, token="t", send=AsyncMock(), channel_id=0)
+    existing = SimpleNamespace(name=activity_module.SHARE_WEBHOOK_NAME, user=bot_user, token="t", send=AsyncMock(), channel_id=0)
     view, channel, _ = share_view(monkeypatch, "free", allowed=False, webhooks=[existing])
     asyncio.run(view.children[0].callback(ShareInteraction()))
     assert channel.id == bot_module.FREE_CHAT_CHANNEL_ID == 1556482816974389290
@@ -204,7 +207,13 @@ def test_only_operator_role_can_post_official_images():
 
 def test_non_operator_image_is_not_recorded(monkeypatch):
     extract = Mock()
-    monkeypatch.setattr(bot_module.image_play_service, "extract_play", extract)
+    submission = PlaySubmission(
+        official=bot_module.official_play_service, get_testing=bot_module.get_testing_enabled,
+        is_tracked_operator=bot_module.is_tracked_operator, publish_play=AsyncMock(),
+        official_post_target=Mock(), confirm_recorded=AsyncMock(), repost_play=AsyncMock(),
+        announce_play=AsyncMock(), staff_alert=AsyncMock(), images=Mock(extract_play=extract),
+    )
+    monkeypatch.setattr(bot_module.bot, "get_cog", lambda name: submission)
     monkeypatch.setattr(bot_module.bot, "process_commands", AsyncMock())
     monkeypatch.setattr(bot_module, "testing_enabled", False)
     image = SimpleNamespace(content_type="image/png", url="https://cdn/slip.png")
@@ -221,14 +230,15 @@ def repost_payload():
     return {"play_id": 7, "summary": "Capper play", "units": 2, "odds": 150, "to_win": 3}
 
 
-def test_repost_official_play_replaces_slip_with_one_tail_message():
-    file = SimpleNamespace(filename="slip.png")
+def test_repost_official_play_replaces_slip_with_one_tail_message(load_presentation):
+    file = SimpleNamespace(filename="slip.png", close=Mock())
     image = SimpleNamespace(content_type="image/png", to_file=AsyncMock(return_value=file))
     source = SimpleNamespace(content="Lock of the day", attachments=[image], delete=AsyncMock())
     repost = SimpleNamespace(id=99)
     channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source), send=AsyncMock(return_value=repost))
     operator = SimpleNamespace(display_name="Cap", display_avatar=SimpleNamespace(url="https://a/x.png"))
 
+    load_presentation()
     result = asyncio.run(bot_module.repost_official_play(channel, 5, repost_payload(), operator))
 
     assert result is repost
@@ -239,12 +249,14 @@ def test_repost_official_play_replaces_slip_with_one_tail_message():
     assert kwargs["embed"].author.name == "Cap"
     assert [item.custom_id for item in kwargs["view"].children] == ["pm:tail:7"]
     source.delete.assert_awaited_once()
+    file.close.assert_called_once()
 
 
-def test_repost_official_play_falls_back_when_send_fails():
+def test_repost_official_play_falls_back_when_send_fails(load_presentation):
     source = SimpleNamespace(content="", attachments=[], delete=AsyncMock())
     channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source), send=AsyncMock(side_effect=RuntimeError("no perms")))
     operator = SimpleNamespace(display_name="Cap", display_avatar=SimpleNamespace(url="https://a/x.png"))
 
+    load_presentation(staff_alert=AsyncMock())
     assert asyncio.run(bot_module.repost_official_play(channel, 5, repost_payload(), operator)) is None
     source.delete.assert_not_awaited()

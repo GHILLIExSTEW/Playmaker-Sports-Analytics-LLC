@@ -49,10 +49,6 @@ class TeamRankingService:
 
     @staticmethod
     def fetch_rankings_from_supabase() -> list[dict]:
-        try:
-            response = supabase_service.select("plays", "team_id, team_name, status, units")
-        except RuntimeError:
-            return []
-
+        response = supabase_service.select("plays", "team_id, team_name, status, units")
         rows = response.data or []
         return TeamRankingService.build_rankings(rows)

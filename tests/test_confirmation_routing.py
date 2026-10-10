@@ -1,8 +1,9 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import src.bot as bot_module
+from src.play_submission import ConfirmImageView, PlaySubmission
 
 
 class CapturingChannel:
@@ -13,7 +14,7 @@ class CapturingChannel:
         self.sent.append(kwargs)
 
 
-def test_confirmation_uses_dedicated_channel(monkeypatch):
+def test_confirmation_uses_dedicated_channel(monkeypatch, load_settlement):
     confirmation_channel = CapturingChannel()
     requested_channel_ids = []
 
@@ -25,6 +26,7 @@ def test_confirmation_uses_dedicated_channel(monkeypatch):
     monkeypatch.setattr(bot_module.bot, "get_channel", lambda channel_id: None)
     monkeypatch.setattr(bot_module.bot, "fetch_channel", fetch_channel)
     monkeypatch.setattr(bot_module.official_play_service, "get_play_legs", lambda play_id: [])
+    monkeypatch.setattr(bot_module, "send_insight_request", AsyncMock(return_value=False))
 
     followup = SimpleNamespace(sent=[])
 
@@ -36,6 +38,7 @@ def test_confirmation_uses_dedicated_channel(monkeypatch):
     interaction = SimpleNamespace(user=SimpleNamespace(id=1, display_name="Test User"), followup=followup)
     payload = {"play_id": 1, "summary": "Test play", "units": 1, "legs": 1, "odds": -110, "to_win": 0.91}
 
+    load_settlement()
     asyncio.run(bot_module.send_confirmation_message(interaction, payload))
 
     assert requested_channel_ids == []
@@ -46,7 +49,11 @@ def test_confirmation_uses_dedicated_channel(monkeypatch):
 
 
 def test_confirming_recorded_image_does_not_create_another_play(monkeypatch):
-    view = bot_module.ConfirmImageView({"legs": [{"odds": -110}]}, source_message_id=123)
+    submission = PlaySubmission(
+        official=bot_module.official_play_service, get_testing=Mock(),
+        is_tracked_operator=Mock(), publish_play=AsyncMock(), official_post_target=Mock(),
+        confirm_recorded=AsyncMock(), repost_play=AsyncMock(), announce_play=AsyncMock(), staff_alert=AsyncMock(),
+    )
     create_play = Mock()
     monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lambda message_id: {"id": 42})
     monkeypatch.setattr(bot_module.official_play_service, "create_play_record", create_play)
@@ -59,14 +66,17 @@ def test_confirming_recorded_image_does_not_create_another_play(monkeypatch):
     async def send(content, **kwargs):
         replies.append((content, kwargs))
 
-    interaction = SimpleNamespace(response=SimpleNamespace(defer=defer), followup=SimpleNamespace(send=send))
-    asyncio.run(view.confirm.callback(interaction))
+    async def confirm():
+        view = ConfirmImageView(submission, 42, {"legs": [{"odds": -110}]}, source_message_id=123)
+        interaction = SimpleNamespace(response=SimpleNamespace(defer=defer), followup=SimpleNamespace(send=send))
+        await view.confirm.callback(interaction)
+    asyncio.run(confirm())
 
     create_play.assert_not_called()
     assert replies == [("This image has already been recorded.", {"ephemeral": True})]
 
 
-def test_play_card_posts_to_confirmation_channel_not_interaction_channel(monkeypatch):
+def test_play_card_posts_to_confirmation_channel_not_interaction_channel(monkeypatch, load_presentation):
     target_channel = CapturingChannel()
     interaction_channel = CapturingChannel()
     requested_channel_ids = []
@@ -98,6 +108,7 @@ def test_play_card_posts_to_confirmation_channel_not_interaction_channel(monkeyp
         "play_text": "Selection (+100)",
     }
 
+    load_presentation()
     asyncio.run(bot_module.publish_play_message(interaction, payload))
 
     assert requested_channel_ids == [101]
@@ -105,7 +116,7 @@ def test_play_card_posts_to_confirmation_channel_not_interaction_channel(monkeyp
     assert interaction_channel.sent == []
 
 
-def test_play_card_posts_to_test_channel_while_testing(monkeypatch):
+def test_play_card_posts_to_test_channel_while_testing(monkeypatch, load_presentation):
     target_channel = CapturingChannel()
     requested_channel_ids = []
 
@@ -135,13 +146,14 @@ def test_play_card_posts_to_test_channel_while_testing(monkeypatch):
         "play_text": "Selection (+100)",
     }
 
+    load_presentation()
     asyncio.run(bot_module.publish_play_message(interaction, payload))
 
     assert requested_channel_ids == [202]
     assert len(target_channel.sent) == 1
 
 
-def test_manual_play_embed_posts_to_official_channel(monkeypatch):
+def test_manual_play_embed_posts_to_official_channel(monkeypatch, load_presentation):
     target_channel = CapturingChannel()
     requested_channel_ids = []
 
@@ -171,6 +183,7 @@ def test_manual_play_embed_posts_to_official_channel(monkeypatch):
         "play_text": "Selection (+100)",
     }
 
+    load_presentation()
     asyncio.run(bot_module.publish_play_message(interaction, payload, bot_module.official_post_target()))
 
     assert requested_channel_ids == [303]

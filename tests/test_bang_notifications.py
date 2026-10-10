@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import src.bot as bot_module
+import src.play_presentation as presentation_module
 import pytest
 from src.services import bang_service
 
@@ -25,8 +26,8 @@ def setup(monkeypatch):
     monkeypatch.setattr(bot_module, "testing_enabled", False)
     channels = {101: SimpleNamespace(id=101, send=AsyncMock(return_value=SimpleNamespace(id=900))),
                 202: SimpleNamespace(id=202, send=AsyncMock(return_value=SimpleNamespace(id=901)))}
-    monkeypatch.setattr(bot_module, "VIP_CHAT_CHANNEL_ID", 101)
-    monkeypatch.setattr(bot_module, "FREE_CHAT_CHANNEL_ID", 202)
+    monkeypatch.setattr(presentation_module, "VIP_CHAT_CHANNEL_ID", 101)
+    monkeypatch.setattr(presentation_module, "FREE_CHAT_CHANNEL_ID", 202)
     monkeypatch.setattr(bot_module, "resolve_channel", AsyncMock(side_effect=lambda channel_id, *args, **kwargs: channels[channel_id]))
     claims = set()
 
@@ -45,9 +46,10 @@ def setup(monkeypatch):
     return channels, complete, alert
 
 
-def test_bang_uploads_slip_to_both_channels_with_only_correct_role_mentions(monkeypatch):
+def test_bang_uploads_slip_to_both_channels_with_only_correct_role_mentions(monkeypatch, load_presentation):
     channels, complete, _ = setup(monkeypatch)
     message = source()
+    load_presentation()
     asyncio.run(bot_module.send_bang_notifications(message, 7))
     for channel_id, role_id in [(101, bot_module.HIGHROLLER_ROLE_ID), (202, bot_module.ROOKIE_ROLE_ID)]:
         kwargs = channels[channel_id].send.call_args.kwargs
@@ -65,9 +67,10 @@ def test_bang_uploads_slip_to_both_channels_with_only_correct_role_mentions(monk
     assert all(channel.send.await_count == 1 for channel in channels.values())
 
 
-def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(monkeypatch):
+def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(monkeypatch, load_presentation):
     channels, _, alert = setup(monkeypatch)
     message = source(False)
+    load_presentation()
     message.embeds[0].set_image(url="https://cdn.example/slip.png")
     asyncio.run(bot_module.send_bang_notifications(message, 7))
     assert channels[101].send.call_args.kwargs["embed"].image.url == "https://cdn.example/slip.png"
@@ -77,28 +80,30 @@ def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(mo
     alert.assert_awaited_once()
 
 
-def test_one_destination_failure_still_delivers_to_other(monkeypatch):
+def test_one_destination_failure_still_delivers_to_other(monkeypatch, load_presentation):
     channels, complete, alert = setup(monkeypatch)
     channels[101].send.side_effect = RuntimeError("Unavailable")
+    load_presentation()
     asyncio.run(bot_module.send_bang_notifications(source(), 7))
     channels[202].send.assert_awaited_once()
     complete.assert_called_once_with(7, 202, 901)
     alert.assert_awaited_once()
 
 
-def test_testing_does_not_ping_or_send_to_live_channels(monkeypatch):
+def test_testing_does_not_ping_or_send_to_live_channels(monkeypatch, load_presentation):
     _, _, _ = setup(monkeypatch)
     monkeypatch.setattr(bot_module, "testing_enabled", True)
-    monkeypatch.setattr(bot_module, "TEST_CHANNEL_ID", 303)
+    monkeypatch.setattr(presentation_module, "TEST_CHANNEL_ID", 303)
     channel = SimpleNamespace(id=303, send=AsyncMock(return_value=SimpleNamespace(id=999)))
     resolve = AsyncMock(return_value=channel)
     monkeypatch.setattr(bot_module, "resolve_channel", resolve)
+    load_presentation()
     asyncio.run(bot_module.send_bang_notifications(source(), 7))
     resolve.assert_awaited_once_with(303, "TEST_CHANNEL_ID", required=True)
     assert channel.send.call_args.kwargs["allowed_mentions"].roles is False
 
 
-def test_reaction_requires_settlement_authority_and_only_win_posts_bang(monkeypatch):
+def test_reaction_requires_settlement_authority_and_only_win_posts_bang(monkeypatch, load_settlement):
     setup(monkeypatch)
     play = {"id": 7, "discord_user_id": "42", "status": "open"}
     monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lambda message_id: play)
@@ -113,6 +118,7 @@ def test_reaction_requires_settlement_authority_and_only_win_posts_bang(monkeypa
     monkeypatch.setattr(bot_module, "update_play_message", AsyncMock())
     bang = AsyncMock()
     monkeypatch.setattr(bot_module, "send_bang_notifications", bang)
+    load_settlement()
     for user_id, emoji in [(43, "✅"), (42, "❌"), (42, "✅")]:
         payload = SimpleNamespace(user_id=user_id, emoji=emoji, channel_id=101, message_id=500,
                                   member=SimpleNamespace(id=user_id, bot=False))
@@ -130,10 +136,11 @@ def test_claim_does_not_retry_uncertain_database_commit(monkeypatch):
     client.rpc.return_value.execute.assert_called_once()
 
 
-def test_other_bot_reactions_do_not_trigger_settlement_or_bang(monkeypatch):
+def test_other_bot_reactions_do_not_trigger_settlement_or_bang(monkeypatch, load_settlement):
     monkeypatch.setattr(type(bot_module.bot), "user", property(lambda self: SimpleNamespace(id=999)))
     lookup = Mock()
     monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lookup)
     payload = SimpleNamespace(user_id=888, member=SimpleNamespace(bot=True))
+    load_settlement()
     asyncio.run(bot_module.on_raw_reaction_add(payload))
     lookup.assert_not_called()

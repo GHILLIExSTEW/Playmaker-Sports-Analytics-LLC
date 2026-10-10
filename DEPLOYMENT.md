@@ -1,5 +1,292 @@
 # Proxmox deployment guide
 
+## Searchable official-play results
+
+`/play_results` searches stored settled official plays. The existing paid
+`/results` sports-score command is unchanged; its name was already in use.
+The new command is available in the configured Playmaker guild and always
+responds privately. No migration, dependency, provider request or new setting
+is required; restart after deployment to synchronize the command.
+
+Filters are optional: `start` and `end` use strict YYYY-MM-DD dates, `sport`
+uses recorded sport choices, `capper` selects a server member, and `result`
+selects win/loss/void/partial. Dates refer to Eastern settlement dates; both
+bounds are inclusive. Missing bounds search all past stored history. This
+search deliberately does not apply the tracker's presentation start-date
+cutoff. Older plays without sport classification appear as Unspecified;
+the bot does not guess their sport.
+
+The search follows existing official tracker scope: current OPERATOR authors,
+published posts only, counted once per tracked message. Open/regraded and future
+results are excluded. An unavailable operator roster/database produces an
+explicit error rather than an empty or unfiltered result. Member Vault tickets
+are never queried. Cards show status/date/sport/stake/net units, not premium
+selections or author insights.
+
+Each search includes W/L/V/P counts and net units for all matching rows, with
+10 plays per page, newest settlement first. The requesting member alone can
+operate the 10-minute pagination menu. Counts/pages are a snapshot; rerun the
+command after corrections. Original-post links appear only when the bot finds
+the tracked message in a currently configured play-post channel that the member
+can view and read. Missing/deleted/inaccessible posts omit the link without
+removing the historical result. No broad role pings or public posting are added.
+
+## Startup and shutdown lifecycle
+
+The entry point now uses the Discord client's async context manager, ensuring
+client cleanup on normal exit, startup/command-sync failure or cancellation.
+`OfficialBot.close()` cancels and awaits its cog loops and sports-data startup
+tasks, as well as the existing Whop/Member Vault reconciliation jobs belonging
+to that bot. It stops the Vault's persistent view and lets Discord unload cogs
+and close the connection. A different bot instance's components are not stopped.
+
+Existing startup validation, command synchronization, membership ownership and
+reconciliation intervals are unchanged. Reconnects still start at most one
+component job, and the component ready handler does not restart jobs after
+shutdown begins. Shutdown-task failures are explicitly logged. Cancelling
+async tasks cannot interrupt synchronous provider/database calls already
+running in worker threads; they may finish during process shutdown.
+
+No new dependency, migration or configuration is required. Restart after
+deployment; these lifecycle changes do not deploy or enable provider jobs.
+
+## Tracker helpers in reporting
+
+`src/reporting.py` now owns tracker row pagination, Eastern-time parsing,
+Unit Summary/Top Playmakers calculations, tracker image rendering, and
+update-or-post behavior. `/summary`, `/update_tracker` and the hourly job use
+the reporting cog directly rather than callbacks into the bot. No new
+dependency, migration or setting is required; restart the bot after deployment.
+
+Existing 1,000-row database pages, published-message deduplication, operator
+filtering, settlement-date monthly/yearly totals, pending counts and win/loss
+capper rankings are unchanged. The tracker-start callback reads the current
+in-memory cutoff for every build, so `/tracker_start` still applies immediately.
+The standalone renderer accepts an explicit cutoff; the bot compatibility
+bridge retains the configured-cutoff default.
+
+Refresh still reconciles reactions first, reloads rows after any settlement,
+then publishes the Unit Summary image and optional Top Playmakers card. A
+reconciliation failure aborts rather than publishing stale results. Message
+replacement still scans the latest 50 posts and matches both bot author and
+embed title. Image rendering now runs in a worker thread; upload file handles
+close on successful send/edit and on failure. Failures continue through the
+reporting command/job error responses and staff alerts.
+
+## Play presentation and engagement cog
+
+`src/play_presentation.py` owns play-card builders/publication/refresh,
+official-slip reposting, Tail bars and interactions, retired-follow responses,
+and BANG win announcements. It loads before submission/settlement and command
+synchronization. No dependency, migration or new setting is required; restart
+the bot after deployment.
+
+Existing `pm:tail:<play_id>` buttons continue through the cog listener after
+restart. Views remain stopped/non-stored; the listener ignores suggestion and
+insight IDs so those cogs respond only once. Tails still toggle the requesting
+member's existing record only while a play is open/regraded, update the displayed
+count without removing other buttons, and send private confirmation. Follow
+alerts remain retired; this extraction does not add subscriptions.
+
+Publication retains explicit official-channel targets and dynamic testing-mode
+defaults. Reposts upload the slip before deleting the original, preserve author
+and source text, and return the new tracked message. Failed publication leaves
+the original intact; failed deletion preserves the successful repost and alerts
+staff. Uploaded repost files now close on success or failure.
+
+BANG still uses the configured guild, VIP/HIGHROLLER and FREE/ROOKIE routes,
+test-channel-only delivery without role pings in testing mode, attachment/embed
+images, and persisted per-play/per-channel claim/complete deduplication. A failed
+destination does not prevent delivery to the other. Uncertain delivery claims
+are not automatically retried. Manual/suggestion settlement behavior is unchanged.
+
+Submission, settlement and recorded confirmations call the loaded cog through
+thin explicit bridges; missing presentation raises an error. Bot-owned card
+refresh checks remain intact. Repost, Tail-bar attachment and card-update failures
+are logged and now notify staff without claiming the saved play record failed.
+Tracker helpers now belong to reporting; staff-alert throttling remains in the
+bot for later lifecycle cleanup.
+
+## Sports-data synchronization cog
+
+`src/data_sync.py` owns NFL and multi-sport initial, daily and live-score
+synchronization. It loads before command synchronization and starts only once
+Discord is ready and `API_SPORTS_KEY` is configured. No new dependency, migration
+or setting is required; restart the bot after deployment.
+
+Schedules are unchanged: NFL daily refresh at 06:10 Eastern, multi-sport daily
+refresh at 06:25 Eastern, and live checks every 15 minutes. NFL live checks still
+use the service's game gate; multi-sport checks still pass only active sports.
+Existing service caching, coverage and shared API budgets remain authoritative.
+No new provider requests or forced refreshes are introduced.
+
+Each cog instance tracks its two initial tasks, so reconnects do not repeat
+startup refreshes, even if an initial attempt failed. Daily jobs retain the
+existing recovery schedule. Ready hot-loads start the jobs; unloading cancels
+all four loops and the owned initial tasks. Cancelling an await cannot interrupt
+a synchronous provider/database operation already running in a worker thread.
+Failures are logged and now also use the existing rate-limited staff-alert
+callback; an alert-delivery failure is logged without stopping the scheduler.
+Membership and Member Vault reconciliation remain in their existing components.
+
+## Play settlement cog
+
+`src/play_settlement.py` owns `/settle`, `/regrade`, `/unsettle`, `/edit_play`,
+their pickers/result buttons/modals, post-record edit forms, reaction settlement
+and reconciliation, and the 15-minute final-score suggestion loop/listener.
+It loads before command synchronization. No dependency, migration or new setting
+is required; restart the bot after deployment.
+
+The bot retains a single raw-reaction entry point and delegates to the loaded
+cog. Reporting reconciliation and recorded-play confirmation use explicit
+bridges; a missing cog raises an error instead of silently skipping settlement.
+Existing services still store results and calculate units. Card rendering,
+message lookup and BANG notifications use presentation-cog bridges;
+channel/permission checks and staff alerts are injected callbacks. Reaction wins retain their existing BANG behavior and
+deduplication; manual and suggestion settlements do not gain new announcements.
+
+Ten-item pagination, empty-older-page fallback, open/regraded settlement/edit
+filters, two-day created-at regrade window and seven-day settled-at reopen
+window are unchanged. Menus now recheck the requesting user's current official
+role; regrade and command-edit modals also recheck before saving. Private
+post-record editing retains its original-uploader access, including non-operator
+uploaders. Unexpected edit/regrade failures are logged and shown explicitly;
+reaction failures also alert staff.
+
+Existing `pm:as:<play_id>:<result>` and `pm:asx:<play_id>` buttons continue through
+the cog listener after restart. The bot's Tail/retired-follow dispatcher no
+longer handles suggestion actions, preventing duplicate responses. Suggestions
+still require manager confirmation and recheck the current play status; they
+never automatically settle a play. Reconnects do not duplicate the job,
+ready hot-loads start it, and unloading cancels it.
+
+## Play submission cog
+
+`src/play_submission.py` owns `/play`, multi-leg draft entry, image intake,
+review/units/confirmation forms and the existing unregistered image-import
+helper. It loads before command synchronization. No new migration, dependency
+or configuration is required; restart the bot after deploying.
+
+The bot remains the single message router: Member Vault intake takes priority,
+then the submission cog consumes test-channel messages or handles official
+images, and prefix commands run once where they previously did. There is no
+second `on_message` listener. Test mode is read through a callback, so
+`/testing` changes still affect image intake and channel routing immediately.
+
+The existing official service handles draft storage and play creation.
+Publishing, source reposting, recorded-play confirmation and Tail bars are
+explicit workflow callbacks; card rendering/reposting/Tail bars now belong to
+the presentation cog and post-record edits belong to settlement. Source-message duplicate checks and
+repost/source/card tracking choices are retained. Successful image reviews
+cannot be reused, concurrent confirms are blocked, and the confirmation view
+now carries the original uploader through units/review steps and rejects
+other users. Review views still expire after 15 minutes.
+
+## Website synchronization cog
+
+`src/website_sync.py` owns the five-minute OPERATOR/Owner roster reconciliation,
+`/request_insights`, author insight modals and the `pm:insight:<play_id>` component
+listener. It loads before command synchronization; no new migration, dependency
+or setting is required. Restart the bot after deployment.
+
+Existing insight buttons continue to work through the cog listener after
+restart. The play dispatcher no longer handles insight buttons, preventing
+duplicate responses. Authors must still hold OPERATOR in the configured guild;
+the modal rechecks author/role before saving, and database checks remain intact.
+New-play confirmation invokes the loaded cog through an explicit bridge:
+an unavailable cog reports failure without claiming that play recording failed.
+Prompt deduplication still uses the saved prompt ID/justification and a per-cog
+lock; routing reads current testing mode rather than caching the channel.
+
+Roster sync retains exact role IDs, verified-empty-roster handling and separate
+capper/Owner error alerts. Missing/unverified rosters are never treated as empty
+rosters. Reconnects do not duplicate the scheduled loop, and unloading cancels
+it. This changes no website entitlement or public premium-disclosure rules.
+
+## Administration cog
+
+`src/administration.py` owns `/api`, `/test`, `/testing`, `/tracker_start`,
+the Owner league/team picker and image-test forms. It loads before command
+synchronization. No migration, dependency or new setting is required; restart
+the bot after deploying.
+
+Owner API permissions, per-click requester/Owner/guild checks, three-minute
+picker timeout, provider coverage and shared API budget remain unchanged.
+Diagnostics retain official-role checks and never record test plays.
+Operators/server managers still control testing and tracker date changes;
+`tracker_start show` remains read-only. Test-mode routing and the tracker cutoff
+use explicit callbacks to the existing bot state, so the cog and play/tracker
+workflows do not keep divergent copies. As before, these command changes are
+in memory; restart restores `TESTING` and `TRACKER_START_DATE` from configuration.
+The test-channel listener remains in the play workflow and uses the extracted
+image-test forms. Unexpected diagnostic failures are logged and reported.
+
+## Member activity cog
+
+`src/member_activity.py` owns `/mystats`, its optional ten-minute sharing view,
+and `/vault_leaderboard`. It is loaded before command synchronization. No
+migration, dependency or configuration change is required; restart the bot after
+deploying.
+
+Personal stats remain private until the requesting member chooses to share.
+Sharing retains member display name/avatar, bot-owned webhooks, FREE/VIP
+destinations and the corresponding ROOKIE/HIGHROLLER role mention.
+VIP sharing rechecks HIGHROLLER role or explicit paid-ledger access on click.
+This chat-sharing rule is separate from protected stats/Vault eligibility.
+Webhook caches belong to each cog instance; deleted webhooks are evicted.
+Repeated concurrent clicks publish a card at most once after a successful send.
+Failed sends leave the private card available for retry.
+
+If membership verification fails during `/mystats`, the private stats still
+display with an explicit notice and no share button. The bot no longer defaults
+to sharing in FREE CHAT on lookup failure. The monthly Vault leaderboard keeps
+its existing public visibility, net-unit ordering and Eastern Time window;
+database failures are private error responses. Tail buttons and the persistent
+play interaction dispatcher now belong to the presentation cog.
+
+## Private onboarding and access help
+
+`src/member_onboarding.py` adds `/start` and owns the expanded
+`/membership_status`. Both commands return private, non-mentioning responses
+only in the configured guild. Restart the bot to register the commands; no
+migration, dependency or new environment variable is required.
+
+The help checks Vault and stats eligibility independently using the existing
+membership service. It preserves the stats moderator override without granting
+Vault access. Failed lookups are logged and displayed as verification
+unavailable, never as denial or verified access. Disabled membership sync does
+not query the ledger. Refresh availability requires both
+`MEMBER_STATS_REFRESH_ENABLED` and `API_SPORTS_BUDGET_ENABLED`; provider limits
+still apply. A missing Vault channel is explicitly identified.
+
+The card explains account linking, the five-minute sync interval (not a delivery
+guarantee), cached stats, slip submission, personal stats and support.
+It does not disclose payment records or infer a plan/source/expiration from
+boolean eligibility RPCs. Members must check their pass dates in Whop.
+It makes no role, entitlement, payment or provider changes, and protected
+features continue to recheck access when used.
+
+## Reporting cog
+
+The bot loads `src/reporting.py` during `setup_hook`, before Discord command
+synchronization. It owns `/recap`, `/rankings`, `/summary`, `/update_tracker`,
+the hourly tracker schedule and the weekly/monthly recap schedule.
+No new environment settings, migrations or dependencies are required.
+Restart the bot after deploying; do not run a second bot process for the cog.
+
+Schedules retain Eastern Time: tracker updates at each hour and completed
+weekly/monthly recaps at 10:00 on Mondays/the first of the month. Reconnects do
+not start duplicate loops, and unloading the cog cancels both loops.
+Existing command permissions and channel restrictions are retained.
+
+`/summary` now uses the same official tracker rows, operator filtering, cutoff
+and formatting as the hourly tracker instead of an undefined summary service.
+It returns pending bets, monthly/yearly units, the monthly capper breakdown
+and Top Playmakers. Ranking/summary failures are reported explicitly, not as
+an empty record. Reaction reconciliation and tracker card/image refresh remain
+in the existing bot workflow and are passed explicitly to the cog; the cog
+does not import the global bot.
+
 ## Owner /api team refresh
 
 Apply `20261008130000_owner_team_api_cache.sql` after the NFL/event cache and

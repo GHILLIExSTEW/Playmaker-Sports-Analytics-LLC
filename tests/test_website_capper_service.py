@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from src.services import website_capper_service
+import src.website_sync as website_module
 
 
 def test_sync_uses_configured_operator_role_and_exact_roster(monkeypatch):
@@ -58,36 +59,37 @@ def test_owner_sync_uses_exact_confirmed_role_and_empty_roster(monkeypatch):
 
 @pytest.mark.parametrize("owners", [{999, 888}, set()])
 def test_bot_syncs_verified_owner_role_in_existing_loop(monkeypatch, owners):
-    import src.bot as bot_module
-
     role = SimpleNamespace(members=[SimpleNamespace(id=member_id) for member_id in owners])
     guild = SimpleNamespace(id=123, chunked=False, chunk=AsyncMock(),
                             get_role=lambda role_id: role if role_id == 1347741218158678097 else None)
-    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
-    monkeypatch.setattr(bot_module.bot, "get_guild", lambda guild_id: guild)
-    monkeypatch.setattr(bot_module, "tracked_operator_ids", AsyncMock(return_value={111}))
+    monkeypatch.setattr(website_module, "GUILD_ID", 123)
     capper_sync = Mock()
     owner_sync = Mock()
-    monkeypatch.setattr(bot_module, "sync_website_capper_roster", capper_sync)
-    monkeypatch.setattr(bot_module, "sync_website_owner_roster", owner_sync)
-    asyncio.run(bot_module.website_capper_sync.coro())
+    monkeypatch.setattr(website_module, "sync_website_capper_roster", capper_sync)
+    monkeypatch.setattr(website_module, "sync_website_owner_roster", owner_sync)
+    cog = website_module.WebsiteSync(
+        SimpleNamespace(get_guild=lambda guild_id: guild),
+        tracked_operators=AsyncMock(return_value={111}), play_post_target=Mock(),
+        resolve_channel=AsyncMock(), can_manage_plays=Mock(), staff_alert=AsyncMock(),
+    )
+    asyncio.run(cog.website_capper_sync.coro(cog))
     guild.chunk.assert_awaited_once_with(cache=True)
     owner_sync.assert_called_once_with(123, owners)
     capper_sync.assert_called_once()
 
 
 def test_missing_owner_role_alerts_without_syncing_empty_roster(monkeypatch):
-    import src.bot as bot_module
-
     guild = SimpleNamespace(id=123, chunked=True, get_role=lambda role_id: None)
-    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
-    monkeypatch.setattr(bot_module.bot, "get_guild", lambda guild_id: guild)
-    monkeypatch.setattr(bot_module, "tracked_operator_ids", AsyncMock(return_value={111}))
-    monkeypatch.setattr(bot_module, "sync_website_capper_roster", Mock())
+    monkeypatch.setattr(website_module, "GUILD_ID", 123)
+    monkeypatch.setattr(website_module, "sync_website_capper_roster", Mock())
     owner_sync = Mock()
     alert = AsyncMock()
-    monkeypatch.setattr(bot_module, "sync_website_owner_roster", owner_sync)
-    monkeypatch.setattr(bot_module, "send_staff_alert", alert)
-    asyncio.run(bot_module.website_capper_sync.coro())
+    monkeypatch.setattr(website_module, "sync_website_owner_roster", owner_sync)
+    cog = website_module.WebsiteSync(
+        SimpleNamespace(get_guild=lambda guild_id: guild),
+        tracked_operators=AsyncMock(return_value={111}), play_post_target=Mock(),
+        resolve_channel=AsyncMock(), can_manage_plays=Mock(), staff_alert=alert,
+    )
+    asyncio.run(cog.website_capper_sync.coro(cog))
     owner_sync.assert_not_called()
     assert alert.call_args.args[0] == "website_owners"

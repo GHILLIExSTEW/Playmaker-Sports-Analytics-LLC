@@ -26,7 +26,7 @@ class FakeChannel:
         return self.message
 
 
-def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch):
+def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch, load_settlement, load_presentation):
     message = SimpleNamespace(
         reactions=[FakeReaction("✅", [SimpleNamespace(id=999), SimpleNamespace(id=123)])],
         embeds=[],
@@ -45,6 +45,8 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch):
         lambda play_id, result: settlements.append((play_id, result)),
     )
 
+    load_presentation()
+    load_settlement()
     settled_count = asyncio.run(
         bot_module.reconcile_open_play_reactions(plays, users, [FakeChannel(message)])
     )
@@ -54,7 +56,7 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch):
     assert message.edited["embed"].title == "Play #42 • Win"
 
 
-def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch):
+def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch, load_settlement, load_presentation):
     operator = SimpleNamespace(
         id=555,
         roles=[SimpleNamespace(id=bot_module.WEBSITE_OWNER_ROLE_ID)],
@@ -81,6 +83,8 @@ def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch
         lambda play_id, result: settlements.append((play_id, result)),
     )
 
+    load_presentation()
+    load_settlement()
     settled_count = asyncio.run(
         bot_module.reconcile_open_play_reactions(plays, users, [FakeChannel(message)])
     )
@@ -89,7 +93,7 @@ def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch
     assert settlements == [(43, "loss")]
 
 
-def test_reconcile_ignores_reaction_from_unrelated_member(monkeypatch):
+def test_reconcile_ignores_reaction_from_unrelated_member(monkeypatch, load_settlement):
     stranger = SimpleNamespace(
         id=555,
         roles=[SimpleNamespace(id=1)],
@@ -105,6 +109,7 @@ def test_reconcile_ignores_reaction_from_unrelated_member(monkeypatch):
     users = [{"id": 7, "discord_user_id": "123"}]
     monkeypatch.setattr(bot_module, "OPERATOR_ROLE_IDS", {4242})
 
+    load_settlement()
     settled_count = asyncio.run(
         bot_module.reconcile_open_play_reactions(plays, users, [FakeChannel(message)])
     )
