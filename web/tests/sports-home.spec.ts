@@ -15,7 +15,7 @@ async function mockSports(page: Page, failingSport?: string) {
       const events = Array.from({ length: count }, (_, index) => ({
         event_id: String(index), league_name: `${slug} league`, season: '2026', round_name: 'Round 1',
         event_name: `${slug} event ${index}`, start_at: index === 1000 ? '2026-10-10T16:00:00Z' : '2026-10-11T16:00:00Z',
-        venue: null, home_name: slug === 'formula-1' ? null : 'Home', away_name: slug === 'formula-1' ? null : 'Away',
+        venue: null, home_name: slug === 'formula-1' ? null : 'Home Club', away_name: slug === 'formula-1' ? null : 'Away Club',
         home_logo: null, away_logo: null, home_score: { total: 7 }, away_score: 3,
         status_code: 'NS', status: 'Not Started', synced_at: '2026-10-10T14:00:00Z',
       }))
@@ -185,4 +185,64 @@ test('recent U.S. events come first, with newest events first within each priori
   const board = page.getByRole('region', { name: 'Sports schedule and scores' })
   await board.getByRole('button', { name: 'Hockey', exact: true }).click()
   await expect(board.getByRole('article').getByRole('heading')).toHaveText(['U.S. newer', 'U.S. older', 'International newest'])
+})
+
+test('MMA shows named fighters and placeholder matchups are omitted from all sport views', async ({ page }) => {
+  await mockSports(page)
+  await page.route('**/rest/v1/rpc/public_sport_events*', async (route) => {
+    const slug = route.request().postDataJSON().p_sport_slug
+    const fixture = (eventName: string, index: number, status = 'NS') => ({
+      event_id: String(index), league_name: slug === 'mma' ? 'UFC 332' : 'League', event_name: eventName,
+      start_at: '2026-10-10T16:00:00Z', status_code: status, status,
+      home_name: null, away_name: null, synced_at: '2026-10-10T14:00:00Z',
+    })
+    await route.fulfill({ json: [
+      fixture('Home vs Away', 1), fixture(' HOME vs. AWAY ', 2), fixture('Home Team versus Away Team', 3),
+      fixture('TBD vs Real Club', 4), fixture('Home vs Named Club', 5, 'FT'),
+      { ...fixture('Incorrect named fixture', 6), home_name: 'Home', away_name: 'Away' },
+      slug === 'mma'
+        ? { ...fixture('Ismail Naurdiev vs Marvin Vettori', 7), home_name: 'Ismail Naurdiev', away_name: 'Marvin Vettori' }
+        : fixture('Named Club vs Visiting Club', 7),
+    ] })
+  })
+  await page.goto('/')
+  const board = page.getByRole('region', { name: 'Sports schedule and scores' })
+  await board.getByRole('button', { name: 'MMA', exact: true }).click()
+  await expect(board.getByRole('article')).toHaveCount(1)
+  await expect(board.getByRole('article')).toContainText('Ismail Naurdiev vs Marvin Vettori')
+  await board.getByRole('link', { name: 'Open MMA center' }).click()
+  await expect(page.locator('.sport-event-card')).toHaveCount(1)
+  await expect(page.locator('.sport-event-card')).toContainText('Ismail Naurdiev vs Marvin Vettori')
+  await page.goto('/sports/basketball')
+  await expect(page.locator('.sport-event-card')).toHaveCount(1)
+  await expect(page.locator('.sport-event-card')).toContainText('Named Club vs Visiting Club')
+  await page.getByRole('button', { name: 'Scores', exact: true }).click()
+  await expect(page.locator('.sport-event-card')).toHaveCount(0)
+})
+
+test('placeholder rows do not stop pagination and NFL placeholders are also omitted', async ({ page }) => {
+  await mockSports(page)
+  await page.route('**/rest/v1/rpc/public_sport_events*', async (route) => {
+    const offset = Number(new URL(route.request().url()).searchParams.get('offset') || 0)
+    const fixture = (name: string, id: number) => ({
+      event_id: String(id), league_name: 'League', event_name: name, start_at: '2026-10-10T16:00:00Z',
+      status_code: 'NS', status: 'Not Started', synced_at: '2026-10-10T14:00:00Z',
+    })
+    await route.fulfill({ json: offset === 0
+      ? Array.from({ length: 1000 }, (_, index) => fixture('Home vs Away', index))
+      : [fixture('Real Club vs Other Club', 1000)] })
+  })
+  await page.route('**/rest/v1/rpc/public_nfl_games*', (route) => route.fulfill({ json: [{
+    game_id: 1, home_team_name: 'Home', away_team_name: 'Away', kickoff_at: '2026-10-10T16:00:00Z',
+    status_short: 'NS', status_long: 'Not Started', season: 2026,
+  }] }))
+  await page.goto('/')
+  const board = page.getByRole('region', { name: 'Sports schedule and scores' })
+  await expect(board.getByRole('article')).toHaveCount(1)
+  await expect(board.getByRole('article')).toContainText('Real Club vs Other Club')
+  await board.getByRole('button', { name: 'NFL', exact: true }).click()
+  await expect(board.getByRole('article')).toHaveCount(0)
+  await expect(board).toContainText('No current NFL events')
+  await page.goto('/nfl')
+  await expect(page.locator('.nfl-game-card')).toHaveCount(0)
 })

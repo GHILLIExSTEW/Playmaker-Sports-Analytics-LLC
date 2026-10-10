@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { hasNamedMatchup } from './eventIdentity'
 
 export type NflGame = {
   game_id: number
@@ -59,7 +60,8 @@ async function fetchRpc<T>(name: string, orderColumns: string[] = []): Promise<T
 }
 
 export async function fetchNflGames(): Promise<NflGame[]> {
-  return fetchRpc<NflGame>('public_nfl_games', ['kickoff_at', 'game_id'])
+  return (await fetchRpc<NflGame>('public_nfl_games', ['kickoff_at', 'game_id']))
+    .filter((game) => hasNamedMatchup(`${game.away_team_name} vs ${game.home_team_name}`, game.home_team_name, game.away_team_name))
 }
 
 export async function fetchNflStandings(): Promise<NflStanding[]> {

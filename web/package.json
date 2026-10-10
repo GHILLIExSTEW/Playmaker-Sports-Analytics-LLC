@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:access": "node --test tests/member-picks-access.test.mjs tests/official-play-cleanup.test.mjs tests/team-api-cache.test.mjs",
+    "test:access": "node --test tests/member-picks-access.test.mjs tests/official-play-cleanup.test.mjs tests/team-api-cache.test.mjs tests/mma-event-cache.test.mjs",
     "test:picks": "playwright test",
     "preview": "vite preview"
   },

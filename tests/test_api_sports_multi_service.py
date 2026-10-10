@@ -62,6 +62,29 @@ def test_normalize_formula_one_race_without_teams(synced_at):
     assert result["venue"]["name"] == "Albert Park Circuit"
     assert result["status_code"] == "COMPLETED"
 
+def test_normalize_mma_uses_fighters_and_fight_card(synced_at):
+    result = normalize_event("mma", {
+        "id": 2912, "date": "2026-10-03T12:00:00+00:00",
+        "slug": "UFC 332: Silva vs. Wang", "category": "Middleweight",
+        "status": {"short": "FT", "long": "Finished"},
+        "fighters": {
+            "first": {"id": 241, "name": "Ismail Naurdiev", "logo": "first.png", "winner": True},
+            "second": {"id": 503, "name": "Marvin Vettori", "logo": "second.png", "winner": False},
+        },
+    }, synced_at)
+    assert result["event_name"] == "Ismail Naurdiev vs Marvin Vettori"
+    assert result["home_name"] == "Ismail Naurdiev"
+    assert result["away_name"] == "Marvin Vettori"
+    assert result["home_id"] == "241"
+    assert result["away_id"] == "503"
+    assert result["home_logo"] == "first.png"
+    assert result["away_logo"] == "second.png"
+    assert result["league_name"] == "UFC 332: Silva vs. Wang"
+    assert result["round_name"] == "Middleweight"
+    assert result["status_code"] == "FT"
+    assert result["home_score"] is None
+    assert result["away_score"] is None
+
 
 def test_normalize_ncaa_nested_game(synced_at):
     result = normalize_event("ncaa", {

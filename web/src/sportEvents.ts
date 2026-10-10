@@ -1,6 +1,7 @@
 import { fetchNflGames, type NflGame } from './nflData'
 import { supabase } from './supabaseClient'
 import type { SportCatalogItem } from './sportsCatalog'
+import { hasNamedMatchup } from './eventIdentity'
 
 export type SportEvent = {
   event_id: string
@@ -32,7 +33,7 @@ export async function fetchSportEvents(sport: SportCatalogItem): Promise<SportEv
       .order('start_at').order('event_id').range(offset, offset + 999)
     if (error) throw error
     if (!Array.isArray(data)) throw new Error(`Unexpected ${sport.name} events response.`)
-    events.push(...data as SportEvent[])
+    events.push(...(data as SportEvent[]).filter((event) => hasNamedMatchup(event.event_name, event.home_name, event.away_name)))
     if (data.length < 1000) return events
   }
 }

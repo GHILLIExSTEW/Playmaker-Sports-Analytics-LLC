@@ -80,6 +80,19 @@ def normalize_event(sport_slug: str, row: dict, synced_at: datetime) -> dict:
         round_name = row.get("type")
         start_value = row.get("date")
         event_id = row.get("id")
+    elif sport_slug == "mma":
+        event = row
+        league = {"name": row.get("slug") or "MMA"}
+        fighters = row.get("fighters") or {}
+        home = fighters.get("first") or {}
+        away = fighters.get("second") or {}
+        venue = row.get("venue") or {}
+        scores = {}
+        status_value = row.get("status")
+        name = f"{home.get('name') or 'Home'} vs {away.get('name') or 'Away'}"
+        round_name = row.get("category")
+        start_value = row.get("date")
+        event_id = row.get("id")
     elif sport_slug == "ncaa":
         event = row.get("game") or {}
         league = row.get("league") or {}

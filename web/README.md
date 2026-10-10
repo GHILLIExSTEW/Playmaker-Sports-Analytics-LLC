@@ -280,6 +280,15 @@ show that no feed is connected. Homepage and sport pages share paginated,
 deterministically ordered event fetching to avoid truncating large schedules.
 This does not introduce browser-side provider requests.
 
+MMA maps `fighters.first` / `fighters.second` to the displayed participants,
+using the fight-card slug for the league label and category for the round.
+Apply `supabase/migrations/20261010153000_repair_mma_fighter_names.sql` to repair
+existing cached fights from their saved provider responses without API calls.
+Deploy the updated bot mapper so future syncs retain those names.
+Homepage, sport-center and NFL data consumers omit placeholder matchups
+(`Home vs Away`, including `vs.`/case variants, and unnamed TBD participants)
+before selecting highlights or schedule groups. Formula 1 races remain visible.
+
 1. Run `supabase/migrations/20260930300000_api_sports_multi_event_cache.sql` in
   Supabase SQL Editor. It creates a private event cache and a public read-only
   RPC.
