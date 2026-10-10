@@ -175,7 +175,7 @@ class OfficialBot(commands.Bot):
             print(f"Synced global commands: {', '.join(command.name for command in synced)}")
 
 
-bot = OfficialBot(command_prefix="!", intents=intents, application_id=APPLICATION_ID)
+bot = OfficialBot(command_prefix="!", intents=intents, application_id=APPLICATION_ID, max_messages=50)
 member_bet_vault = MemberBetVault(bot, MEMBER_BET_CHANNEL_ID) if MEMBER_BET_CHANNEL_ID else None
 membership_role_sync = MembershipRoleSync(bot, GUILD_ID, PAID_MEMBER_ROLE_ID) if GUILD_ID and PAID_MEMBER_ROLE_ID else None
 whop_membership_sync = WhopMembershipSync(bot, membership_role_sync) if WHOP_MEMBERSHIP_SYNC_ENABLED else None
