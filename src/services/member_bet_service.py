@@ -352,13 +352,13 @@ class MemberBetService:
         }, row["status"])
 
     def pending(self, channel_id: int) -> list[dict]:
-        return self.db._ensure_client().table("member_bets").select("*").eq(
+        return self.db._execute(lambda: self.db._ensure_client().table("member_bets").select("*").eq(
             "channel_id", str(channel_id)
         ).in_("status", ["processing", "open"]).lte(
             "next_check_at", datetime.now(timezone.utc).isoformat()
-        ).order("next_check_at").limit(100).execute().data or []
+        ).order("next_check_at").limit(100).execute()).data or []
 
     def dirty(self, channel_id: int) -> list[dict]:
-        return self.db._ensure_client().table("member_bets").select("*").eq(
+        return self.db._execute(lambda: self.db._ensure_client().table("member_bets").select("*").eq(
             "channel_id", str(channel_id)
-        ).eq("card_dirty", True).order("updated_at").limit(100).execute().data or []
+        ).eq("card_dirty", True).order("updated_at").limit(100).execute()).data or []

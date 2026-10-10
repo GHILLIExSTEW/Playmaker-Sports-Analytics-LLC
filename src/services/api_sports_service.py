@@ -132,25 +132,25 @@ class ApiSportsService:
 
     def _upsert(self, table: str, rows: list[dict], conflict: str) -> None:
         if rows:
-            self._client().table(table).upsert(rows, on_conflict=conflict).execute()
+            supabase_service._execute(lambda: self._client().table(table).upsert(rows, on_conflict=conflict).execute())
 
     def _record_sync(self, sync_key: str, started_at: datetime, success: bool, error: str | None = None) -> None:
-        self._client().table("api_sports_sync_state").upsert({
+        supabase_service._execute(lambda: self._client().table("api_sports_sync_state").upsert({
             "sync_key": sync_key,
             "last_attempt_at": started_at.isoformat(),
             "last_success_at": self.clock().isoformat() if success else None,
             "request_count": self.request_count,
             "success": success,
             "error_message": error[:500] if error else None,
-        }, on_conflict="sync_key").execute()
+        }, on_conflict="sync_key").execute())
 
     def _already_synced_today(self) -> bool:
         rows = (
-            self._client().table("api_sports_sync_state")
+            supabase_service._execute(lambda: self._client().table("api_sports_sync_state")
             .select("last_success_at,success")
             .eq("sync_key", "daily")
             .limit(1)
-            .execute()
+            .execute())
             .data
             or []
         )
@@ -182,12 +182,12 @@ class ApiSportsService:
     def should_sync_live_scores(self) -> bool:
         now = self.clock()
         rows = (
-            self._client().table("api_sports_nfl_games")
+            supabase_service._execute(lambda: self._client().table("api_sports_nfl_games")
             .select("kickoff_at,status_short")
             .eq("season", nfl_season_for_date(now.astimezone(TRACKER_TIMEZONE).date()))
             .gte("kickoff_at", (now - timedelta(hours=5)).isoformat())
             .lte("kickoff_at", (now + timedelta(minutes=20)).isoformat())
-            .execute()
+            .execute())
             .data
             or []
         )

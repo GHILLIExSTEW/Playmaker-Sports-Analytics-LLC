@@ -1,5 +1,19 @@
 # Proxmox deployment guide
 
+## Supabase disconnect recovery
+
+NFL sync cache/live-game reads and cache/sync-state upserts, plus Member Vault
+pending/dirty reconciliation reads, now use the existing bounded Supabase
+transport recovery helper. A transient disconnect rebuilds the database query
+against the replacement client; three failed attempts still raise and report
+failure. Only the database operation is retried, not the entire sports sync or
+API request/budget reservation. Persisted cache upserts retain their conflict
+keys. No new configuration, dependency or migration is required.
+
+Sports-data staff alerts expose failures that previously appeared only in
+logs; the alerts alone do not identify a provider/key/budget problem. Capture
+the associated traceback before diagnosing an unresolved NFL alert.
+
 ## Searchable official-play results
 
 `/play_results` searches stored settled official plays. The existing paid
