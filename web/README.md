@@ -1,5 +1,16 @@
 # React + TypeScript + Vite
 
+## User Guide
+
+The current Discord, website, research and API guide is
+[`Playmaker_Picks_User_Guide.html`](../Playmaker_Picks_User_Guide.html).
+It is the canonical content source for both
+[`Playmaker_Picks_User_Guide.pdf`](../Playmaker_Picks_User_Guide.pdf) and
+[`docs/Playmaker_Bot_User_Guide.pdf`](../docs/Playmaker_Bot_User_Guide.pdf).
+After editing the HTML, run `scripts/create_user_guide_pdf.py` from the repository
+root with the project's Python environment. The generator requires Pillow,
+ReportLab and Windows Segoe fonts, and updates both PDF copies.
+
 ## NFL Matchup Lab
 
 NFL Matchup Lab (`/nfl/lab`) and Data Models (`/models`) require verified
@@ -315,11 +326,12 @@ revoked, preserving service-role access and the restricted public RPCs.
 No slip-image reveal, reaction requirement, or change to Discord Tail tracking
 is included. Event times and live status are not inferred from publication time.
 
-The browser rechecks access and refreshes the board every 30 seconds, on focus,
-and on explicit refresh. It hides previously loaded picks while checking access,
-when signed out, when expired, or on access-check failure. Exact pass expiry
-also triggers a recheck; changes already viewed cannot be retroactively erased
-from a user's memory or saved copies.
+The browser checks active access once per tab session and preserves it across
+navigation and reloads using sessionStorage. It does not recheck access every
+30 seconds or on focus. Sign-out, account/profile changes, explicit Retry, and
+exact pass expiry invalidate the cached access. Every new protected database
+request still enforces current access; previously viewed content cannot be
+retroactively erased from memory or saved copies.
 
 Validation from `web/`:
 

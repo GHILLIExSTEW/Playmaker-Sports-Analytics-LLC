@@ -1,6 +1,9 @@
 from functools import lru_cache
+from html import escape
+from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
+from shutil import copyfile
 
 from PIL import Image as PILImage, ImageDraw, ImageFont
 from reportlab.lib import colors
@@ -10,10 +13,12 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Image as RLImage, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "Playmaker_Picks_User_Guide.pdf"
+DOCS_OUTPUT = ROOT / "docs" / "Playmaker_Bot_User_Guide.pdf"
+SOURCE = ROOT / "Playmaker_Picks_User_Guide.html"
 EMOJI_FONT = r"C:\Windows\Fonts\seguiemj.ttf"
 # Segoe UI Emoji stores its color layers at 109px; other sizes render flat.
 EMOJI_RENDER_PX = 109
@@ -114,77 +119,104 @@ def command_table(rows, headers, col_widths, icon_column=False):
     return [table, Spacer(1, 8)]
 
 
-def build_pdf():
+class GuideNode:
+    def __init__(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tag = tag
+        self.attrs = dict(attrs)
+        self.children: list[GuideNode | str] = []
+
+    def text(self) -> str:
+        return "".join(child if isinstance(child, str) else child.text() for child in self.children)
+
+    def elements(self, tag: str) -> list["GuideNode"]:
+        return [child for child in self.children if isinstance(child, GuideNode) and child.tag == tag]
+
+    def inline(self) -> str:
+        content = "".join(escape(child) if isinstance(child, str) else child.inline() for child in self.children)
+        if self.tag == "br":
+            return "<br/>"
+        if self.tag in {"b", "i"}:
+            return f"<{self.tag}>{content}</{self.tag}>"
+        if self.tag == "a":
+            return f'<a href="{escape(self.attrs["href"] or "", quote=True)}" color="#0b7285">{content}</a>'
+        return content
+
+
+class GuideParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.root = GuideNode("document", [])
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        node = GuideNode(tag, attrs)
+        self.stack[-1].children.append(node)
+        if tag not in {"meta", "br"}:
+            self.stack.append(node)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.stack[-1].tag != tag:
+            raise ValueError(f"Unexpected closing HTML tag: {tag}")
+        self.stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        self.stack[-1].children.append(data)
+
+
+def build_pdf() -> None:
+    parser = GuideParser()
+    parser.feed(SOURCE.read_text(encoding="utf-8"))
+    parser.close()
+    main = parser.root.elements("html")[0].elements("body")[0].elements("main")[0]
+    header = main.elements("header")[0]
     doc = SimpleDocTemplate(
         str(OUTPUT), pagesize=letter, rightMargin=0.6 * inch,
         leftMargin=0.6 * inch, topMargin=0.5 * inch, bottomMargin=0.45 * inch,
         title="Playmaker Picks User Guide",
     )
     story = [
-        p("Playmaker Picks", "TitleCustom"),
-        p("Command reference and results guide", "Subtitle"),
+        p(header.elements("h1")[0].inline(), "TitleCustom"),
+        p(header.elements("p")[0].inline(), "Subtitle"),
     ]
+    for block in main.elements("section"):
+        heading = block.elements("h2")[0]
+        icon = heading.elements("span")[0]
+        title = heading.text().removeprefix(icon.text()).strip()
+        heading_table = section(icon.text(), escape(title), "")[0]
+        heading_table.keepWithNext = True
+        story.append(heading_table)
+        for node in block.children:
+            if isinstance(node, str) or node.tag == "h2":
+                continue
+            if node.tag in {"p", "div"}:
+                story.append(p(node.inline()))
+            elif node.tag == "ol":
+                for index, item in enumerate(node.elements("li"), start=1):
+                    story.append(p(f"{index}. {item.inline()}"))
+            elif node.tag == "table":
+                headers = node.elements("thead")[0].elements("tr")[0].elements("th")
+                rows = node.elements("tbody")[0].elements("tr")
+                has_icons = headers[0].text() == "Icon"
+                widths = [0.55 * inch, inch, 5.4 * inch] if has_icons else [2.1 * inch, 4.85 * inch]
+                content = [[cell.text() if has_icons and index == 0 else cell.inline()
+                            for index, cell in enumerate(row.elements("td"))] for row in rows]
+                story += command_table(content, [cell.text() for cell in headers], widths, icon_column=has_icons)
+            else:
+                raise ValueError(f"Unsupported guide block: {node.tag}")
+    story.append(p(main.elements("footer")[0].inline(), "Small"))
 
-    story += section("📷", "Recording a play from an image", "Post your betting-slip image in the official plays channel. No command is needed. The bot reads the selections, odds, and units, then shows you a private preview. Press <b>Confirm and record</b> to record the play. If the slip does not show your units, press <b>Enter units</b> first, then confirm. Your original image post is the message that gets tracked, so react on that post to settle the play. The confirmation card, with the <b>Edit bet</b> button, is sent to the confirmation channel.")
-    story += section("✍️", "Recording a play manually", "Use <b>/play</b> when you have no image. You need an official role and must run it in the official plays channel. Enter your units, the number of legs, the Leg 1 selection, the Leg 1 odds, and an optional team. Multi-leg plays prompt for each remaining leg one at a time, and the combined odds are calculated automatically when the final leg is submitted. The bot posts a bet embed to the official plays channel, and that embed is what you react to.")
+    def page_number(canvas, document) -> None:
+        canvas.saveState()
+        canvas.setFont("SegoeUI", 8)
+        canvas.setFillColor(colors.HexColor("#52606d"))
+        canvas.drawRightString(7.9 * inch, 0.22 * inch, f"Page {document.page}")
+        canvas.restoreState()
 
-    story += section("✅", "Settling a play with reactions", "React directly on the tracked message in the official plays channel. The play owner and anyone holding an operator role can settle. Reactions posted in any other channel are ignored.")
-    story += command_table(
-        [
-            ["✅", "Win", "Settles immediately and updates the card"],
-            ["❌", "Loss", "Settles immediately and updates the card"],
-            ["🅿️", "Void", "No change to your unit total"],
-            ["🌓", "Partial", "Not processed by reaction — use /settle instead"],
-        ],
-        ["Icon", "Result", "What happens"],
-        [0.55 * inch, 1.0 * inch, 5.4 * inch],
-        icon_column=True,
-    )
-
-    story += section("🛠️", "Commands for everyone", "")
-    story += command_table(
-        [
-            ["/update_tracker", "Refreshes the Unit Summary now and catches up any missed reactions. The tracker also refreshes automatically every hour, Eastern Time."],
-            ["/rankings", "Posts the current team ranking summary."],
-            ["/summary", "Posts the daily playmaker report with the top three finishers."],
-            ["/tracker_start date_value:show", "Shows the date the tracker is currently counting from."],
-            ["/test", "Runs system diagnostics. Attach an image to parse it without recording anything."],
-        ],
-        ["Command", "What it does"],
-        [2.1 * inch, 4.85 * inch],
-    )
-
-    story += section("🔒", "Commands for officials", "")
-    story += command_table(
-        [
-            ["/settle play_id: result:", "Settles a play. Accepts win, loss, void, partial, or regraded. Use this for partials and for any play whose message was deleted. The play ID is the number shown on the card as &quot;Play #43&quot;."],
-            ["/regrade play_id: legs_left: odds: [note:]", "Use when a leg voids and the rest of the parlay stands. Sets the remaining leg count and the new odds. Regraded plays count as zero units."],
-        ],
-        ["Command", "What it does"],
-        [2.1 * inch, 4.85 * inch],
-    )
-
-    story += [PageBreak()]
-    story += section("🔑", "Commands for operators and server managers", "")
-    story += command_table(
-        [
-            ["/tracker_start date_value:YYYY-MM-DD", "Counts only plays settled on or after this date, for example 2026-09-28. Everything earlier is hidden from the tracker but is never deleted."],
-            ["/tracker_start date_value:clear", "Counts every play again."],
-            ["/testing enabled:true", "Sends parsed plays to the test channel without writing to the database."],
-            ["/testing enabled:false", "Returns to normal recording."],
-        ],
-        ["Command", "What it does"],
-        [2.55 * inch, 4.4 * inch],
-    )
-    story += [p("Both settings revert to their .env defaults when the bot restarts. Set TRACKER_START_DATE or TESTING in .env to make a change permanent.", "Small"), Spacer(1, 8)]
-
-    story += section("📊", "How units are scored", "Wins pay the true price of the bet. Risking 2 units at +250 and winning returns <b>+5 units</b>; the same 2 units at −110 returns <b>+1.82 units</b>. A loss always costs the full amount risked. Voids and regrades count as zero. Your record displays as wins-losses, and the net unit figure reflects actual profit rather than a flat win count.")
-
-    story += section("\U0001F6A8", "If something does not appear", "Check that the bot is online, that you hold the required official role, and that you are posting in the correct channel. Plays only record from the official plays channel, and only reactions in that channel settle a play. If a result will not settle by reaction, ask an official to run <b>/settle</b>. After a deployment, pull the latest code and restart the service.")
-
-    doc.build(story)
+    doc.build(story, onFirstPage=page_number, onLaterPages=page_number)
+    copyfile(OUTPUT, DOCS_OUTPUT)
 
 
 if __name__ == "__main__":
     build_pdf()
     print(OUTPUT)
+    print(DOCS_OUTPUT)
