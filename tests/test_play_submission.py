@@ -7,7 +7,9 @@ import pytest
 
 import src.bot as bot_module
 import src.play_submission as module
-from src.play_submission import AutoImageView, AutoUnitsModal, ConfirmImageView, LegModal, PlayModal, PlaySubmission
+from src.play_submission import (
+    AutoImageView, AutoUnitsModal, ConfirmImageView, EditImageBetModal, LegModal, PlayModal, PlaySubmission,
+)
 
 
 def submission():
@@ -260,6 +262,55 @@ def test_image_confirmation_rejects_other_uploader():
     asyncio.run(check())
     assert stranger.response.send_message.call_args.kwargs["ephemeral"]
     cog.official.create_play_record.assert_not_called()
+
+
+def test_image_review_bet_can_be_edited_before_recording():
+    cog = submission()
+    values = parsed()
+    review_message = SimpleNamespace(id=303)
+    interaction = request()
+
+    async def check():
+        view = ConfirmImageView(cog, 42, values, 8)
+        await view.edit_bet.callback(interaction)
+        modal = interaction.response.send_modal.call_args.args[0]
+        assert isinstance(modal, EditImageBetModal)
+        modal.units._value = "3"
+        modal.team._value = "Away"
+        modal.selections._value = "Away ML\nOver 2.5"
+        modal.odds._value = "-110\n+120"
+        interaction.message = review_message
+        await modal.on_submit(interaction)
+
+    interaction.message = review_message
+    asyncio.run(check())
+    assert values["units"] == 3
+    assert values["team_name"] == "Away"
+    assert values["legs"] == [
+        {"selection": "Away ML", "odds": -110},
+        {"selection": "Over 2.5", "odds": 120},
+    ]
+    updated_view = interaction.followup.edit_message.call_args.kwargs["view"]
+    assert isinstance(updated_view, ConfirmImageView)
+    assert updated_view.parsed is values
+    cog.official.create_play_record.assert_not_called()
+
+
+def test_image_edit_rejects_mismatched_selection_and_odds_counts():
+    cog = submission()
+    interaction = request()
+
+    async def check():
+        modal = EditImageBetModal(cog, 42, parsed(), 8, SimpleNamespace(id=303))
+        modal.units._value = "2"
+        modal.team._value = "Home"
+        modal.selections._value = "Home ML\nAway ML"
+        modal.odds._value = "+150"
+        await modal.on_submit(interaction)
+
+    asyncio.run(check())
+    assert "exactly one odds" in interaction.response.send_message.call_args.args[0]
+    assert interaction.followup.edit_message.call_count == 0
 
 
 def test_image_review_carries_owner_through_units_entry():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -300,6 +301,12 @@ class ConfirmImageView(discord.ui.View):
         await interaction.response.send_message("Only the original uploader can confirm or cancel this image.", ephemeral=True)
         return False
 
+    @discord.ui.button(label="Edit bet", style=discord.ButtonStyle.primary)
+    async def edit_bet(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(EditImageBetModal(
+            self.submission, self.owner_id, self.parsed, self.source_message_id, interaction.message,
+        ))
+
     @discord.ui.button(label="Confirm and record", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -354,6 +361,83 @@ class ConfirmImageView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.edit_message(content="Image import cancelled.", embed=None, view=None)
         self.stop()
+
+
+class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
+    def __init__(
+        self, submission: PlaySubmission, owner_id: int, parsed: dict,
+        source_message_id: int | None, review_message: discord.Message,
+    ):
+        super().__init__()
+        self.submission, self.owner_id, self.parsed = submission, owner_id, parsed
+        self.source_message_id, self.review_message = source_message_id, review_message
+        legs = parsed["legs"]
+        self.units = discord.ui.TextInput(
+            label="Units", default=str(parsed.get("units") or ""), required=True, max_length=20,
+        )
+        self.team = discord.ui.TextInput(
+            label="Team", default=parsed.get("team_name") or "", required=False, max_length=100,
+        )
+        self.selections = discord.ui.TextInput(
+            label="Selections, one per line", default="\n".join(leg["selection"] for leg in legs),
+            style=discord.TextStyle.paragraph, required=True, max_length=2000,
+        )
+        self.odds = discord.ui.TextInput(
+            label="Odds, one per line", default="\n".join(str(leg["odds"]) for leg in legs),
+            style=discord.TextStyle.paragraph, required=True, max_length=500,
+        )
+        for item in (self.units, self.team, self.selections, self.odds):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Only the original uploader can edit this image.", ephemeral=True)
+            return
+        selections = [line.strip() for line in self.selections.value.splitlines() if line.strip()]
+        odds_lines = [line.strip() for line in self.odds.value.splitlines() if line.strip()]
+        if not 1 <= len(selections) <= 10:
+            await interaction.response.send_message("Enter between 1 and 10 selections.", ephemeral=True)
+            return
+        if len(odds_lines) != len(selections):
+            await interaction.response.send_message("Enter exactly one odds value for each selection.", ephemeral=True)
+            return
+        try:
+            units = float(self.units.value)
+            if not math.isfinite(units) or units <= 0:
+                raise ValueError("Units must be greater than zero.")
+            odds = [PlayService.normalize_odds(value) for value in odds_lines]
+            validation_error = PlayService.validate_play(
+                units, len(selections), PlayService.combine_american_odds(odds),
+            )
+            if validation_error:
+                raise ValueError(validation_error["message"])
+        except (TypeError, ValueError) as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        remaining = list(self.parsed["legs"])
+        edited_legs = []
+        for selection, leg_odds in zip(selections, odds):
+            previous = next(
+                (index for index, leg in enumerate(remaining) if leg["selection"] == selection),
+                None,
+            )
+            if previous is None:
+                edited_legs.append({"selection": selection, "odds": leg_odds})
+            else:
+                leg = remaining.pop(previous).copy()
+                leg.update(selection=selection, odds=leg_odds)
+                edited_legs.append(leg)
+        self.parsed.update(
+            units=units, team_name=self.team.value.strip(), legs=edited_legs,
+        )
+        await interaction.response.defer()
+        await interaction.followup.edit_message(
+            self.review_message.id, content="User Reviewing Bet", embed=build_image_review_embed(self.parsed),
+            view=ConfirmImageView(
+                self.submission, self.owner_id, self.parsed, self.source_message_id,
+            ),
+        )
 
 
 class AutoUnitsModal(discord.ui.Modal, title="Enter Units"):
