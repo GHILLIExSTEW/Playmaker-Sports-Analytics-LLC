@@ -1,6 +1,36 @@
 import { expect, test, type Page } from '@playwright/test'
 import { sportsCatalog } from '../src/sportsCatalog'
 
+test('homepage shows all settled results in pages of ten without sport filters', async ({ page }) => {
+  await mockSports(page)
+  const results = Array.from({ length: 23 }, (_, index) => ({
+    settled_at: '2026-10-10T12:00:00Z', sport: index % 2 ? 'NFL' : 'NBA',
+    capper: 'Test Capper', selection: `Ledger play ${index + 1}`, odds: -110,
+    units: 1, status: index % 2 ? 'loss' : 'win', net_units: index % 2 ? -1 : 0.91,
+  }))
+  await page.route('**/rest/v1/rpc/public_settled_results*', (route) => route.fulfill({ json: results }))
+  await page.goto('/')
+  const ledger = page.locator('#results')
+  const pages = ledger.getByRole('navigation', { name: 'Settled results pages' })
+  await expect(ledger.getByRole('group', { name: 'Filter settled results by sport' })).toHaveCount(0)
+  await expect(ledger.locator('.result-row:not(.result-head)')).toHaveCount(10)
+  await expect(ledger).toContainText('Showing 1-10 of 23 settled plays')
+  await expect(pages.getByRole('button', { name: 'Previous' })).toBeDisabled()
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(ledger).toContainText('Ledger play 11')
+  await expect(ledger).toContainText('Showing 11-20 of 23 settled plays')
+  await expect(ledger.locator('.result-row:not(.result-head)')).toHaveCount(10)
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(ledger.locator('.result-row:not(.result-head)')).toHaveCount(3)
+  await expect(ledger).toContainText('Ledger play 23')
+  await expect(ledger).toContainText('Showing 21-23 of 23 settled plays')
+  await expect(pages.getByRole('button', { name: 'Next' })).toBeDisabled()
+  await pages.getByRole('button', { name: 'Previous' }).click()
+  await expect(ledger).toContainText('Showing 11-20 of 23 settled plays')
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 async function mockSports(page: Page, failingSport?: string) {
   const calls: { slug: string; offset: number }[] = []
   await page.clock.install({ time: new Date('2026-10-10T15:00:00Z') })

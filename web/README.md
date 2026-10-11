@@ -104,6 +104,10 @@ validated as a betting model.
 
 ## Live Results Setup
 
+The homepage settled ledger includes all published settled results without a
+sport filter, paginated at ten plays per page with Previous/Next controls.
+The dedicated results page retains its sport filters.
+
 The public site reads settled play records through the restricted Supabase
 `public.public_settled_results()` RPC. It returns only posted, settled plays
 and fields needed for the public ledger and capper summaries. Open plays,

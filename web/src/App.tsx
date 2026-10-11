@@ -246,6 +246,7 @@ function Website() {
   const sportRouteSlug = routePath.startsWith('/sports/') ? routePath.slice('/sports/'.length) : null
   const [menuOpen, setMenuOpen] = useState(false)
   const [sport, setSport] = useState('All')
+  const [resultsPage, setResultsPage] = useState(0)
   const [results, setResults] = useState<Result[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [retryCount, setRetryCount] = useState(0)
@@ -334,7 +335,9 @@ function Website() {
   }
   const capperDirectory = <CapperDirectory cappers={cappers} directoryState={directoryState} loadState={loadState} onRetry={retryCapperDirectory} standalone={routePath === '/cappers'} />
   const sectionHref = (section: string) => routePath === '/' ? `#${section}` : `/#${section}`
-  const homepageResults = visibleResults.slice(0, 10)
+  const homepagePageCount = Math.max(1, Math.ceil(results.length / 10))
+  const homepagePage = Math.min(resultsPage, homepagePageCount - 1)
+  const homepageResults = results.slice(homepagePage * 10, (homepagePage + 1) * 10)
 
   return (
     <div className="site-shell">
@@ -488,10 +491,7 @@ function Website() {
             <p>Official plays appear here after they settle, with the original published line, risk, capper, and final grade. Open plays and private account details are never returned by the public data endpoint.</p>
           </div>
           <div className="results-toolbar">
-            <div className="filter-group" aria-label="Filter settled results by sport">
-              {sports.map((item) => <button className={sport === item ? 'active' : ''} type="button" key={item} onClick={() => setSport(item)}>{item}</button>)}
-            </div>
-            <span aria-live="polite">{loadState === 'ready' ? `Showing ${homepageResults.length} of ${results.length} settled plays` : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>
+            <span aria-live="polite">{loadState === 'ready' ? results.length > 0 ? `Showing ${homepagePage * 10 + 1}-${homepagePage * 10 + homepageResults.length} of ${results.length} settled plays` : '0 settled plays' : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>
             {loadState === 'error' && <button className="results-retry" type="button" onClick={() => { setLoadState('loading'); setRetryCount((count) => count + 1) }}>Retry</button>}
           </div>
           {loadState === 'configuration' && <p className="data-notice">Add the public Supabase URL and anon key to <code>web/.env.local</code>, then apply the public-results SQL migration.</p>}
@@ -507,9 +507,14 @@ function Website() {
                 <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(result.net_units)}</span>
               </div>
             ))}
-            {loadState === 'ready' && visibleResults.length === 0 && <div className="results-empty">No settled results{sport !== 'All' ? ` for ${sport}` : ''} yet.</div>}
+            {loadState === 'ready' && results.length === 0 && <div className="results-empty">No settled results yet.</div>}
             {loadState === 'loading' && <div className="results-empty">Loading the official record…</div>}
           </div>
+          {loadState === 'ready' && results.length > 0 && <nav className="results-pagination" aria-label="Settled results pages">
+            <button className="account-secondary-button" type="button" disabled={homepagePage === 0} onClick={() => setResultsPage(homepagePage - 1)}>Previous</button>
+            <span aria-live="polite">Page {homepagePage + 1} of {homepagePageCount}</span>
+            <button className="account-secondary-button" type="button" disabled={homepagePage + 1 === homepagePageCount} onClick={() => setResultsPage(homepagePage + 1)}>Next</button>
+          </nav>}
           <div className="results-view-all-wrap"><Link className="button results-view-all" to="/results">View all settled results <ArrowRight size={17} /></Link></div>
           <div className="proof-band">
             <div className="proof-copy">

@@ -135,6 +135,8 @@
 .results-section { background: var(--white); }
 .results-page .section-heading h1, .cappers-page .section-heading h1 { margin: 0; font: 700 clamp(48px, 6vw, 86px)/0.95 var(--display); text-transform: uppercase; }
 .results-view-all-wrap { display: flex; justify-content: flex-end; margin-top: 22px; }
+.results-pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 22px; flex-wrap: wrap; }
+.results-pagination button:disabled { opacity: .45; cursor: not-allowed; }
 .results-view-all { color: #040916; background: var(--green); border-color: var(--green); }
 .membership-promo { padding: 64px clamp(20px, 7vw, 108px); display: flex; align-items: center; justify-content: space-between; gap: 32px; color: var(--ink); background: #0f0821; }
 .membership-promo h2 { margin: 0; font: 700 clamp(40px, 5vw, 66px)/0.95 var(--display); text-transform: uppercase; }
