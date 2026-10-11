@@ -40,6 +40,7 @@ const AllResultsPage = lazy(() => import('./AllResultsPage'))
 const NflPage = lazy(() => import('./NflPage'))
 const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
 const DataModelsPage = lazy(() => import('./DataModelsPage'))
+const UserGuidePage = lazy(() => import('./UserGuidePage'))
 const SportsHomePreview = lazy(() => import('./SportsHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
 const MemberPublicPage = lazy(() => import('./MemberPublicPage'))
@@ -306,6 +307,8 @@ function Website() {
           ? 'Expert Picks | Playmaker Picks'
         : routePath === '/account'
           ? 'Member Account | Playmaker Picks'
+        : routePath === '/guide'
+          ? 'User Guide | Playmaker Picks'
             : routePath === '/membership'
               ? 'Membership | Playmaker Picks'
               : sportRouteSlug
@@ -351,6 +354,7 @@ function Website() {
           <SportsDropdown onNavigate={closeMenu} />
           <a href="/account" onClick={closeMenu}>Account</a>
           <Link to="/cappers" onClick={closeMenu}>Cappers</Link>
+          <Link to="/guide" onClick={closeMenu}>Guide (team only)</Link>
           <Link to="/membership" onClick={closeMenu}>Membership</Link>
           <a href={sectionHref('method')} onClick={closeMenu}>Method</a>
           <a className="nav-community" href="https://discord.gg/mwxRsWUp5W" target="_blank" rel="noreferrer" onClick={closeMenu}>Join Discord <ArrowRight size={16} /></a>
@@ -383,6 +387,8 @@ function Website() {
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense></OperatorResearchAccess>
         ) : routePath === '/models' ? (
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense></OperatorResearchAccess>
+        ) : routePath === '/guide' ? (
+          <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading user guide...</p>}><UserGuidePage /></Suspense></OperatorResearchAccess>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
             <SportPage slug={sportRouteSlug} results={results} loadState={loadState} />

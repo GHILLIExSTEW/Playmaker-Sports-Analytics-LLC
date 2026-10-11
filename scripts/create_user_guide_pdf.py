@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "Playmaker_Picks_User_Guide.pdf"
 DOCS_OUTPUT = ROOT / "docs" / "Playmaker_Bot_User_Guide.pdf"
 SOURCE = ROOT / "Playmaker_Picks_User_Guide.html"
+GUIDE_MIGRATION = ROOT / "supabase" / "migrations" / "20261011230000_operator_user_guide.sql"
 EMOJI_FONT = r"C:\Windows\Fonts\seguiemj.ttf"
 # Segoe UI Emoji stores its color layers at 109px; other sizes render flat.
 EMOJI_RENDER_PX = 109
@@ -214,9 +215,37 @@ def build_pdf() -> None:
 
     doc.build(story, onFirstPage=page_number, onLaterPages=page_number)
     copyfile(OUTPUT, DOCS_OUTPUT)
+    guide_html = SOURCE.read_text(encoding="utf-8").split("<main>", 1)[1].split("</main>", 1)[0]
+    sql_literal = "'" + guide_html.replace("'", "''") + "'"
+    GUIDE_MIGRATION.write_text(
+        "-- Generated from Playmaker_Picks_User_Guide.html by scripts/create_user_guide_pdf.py.\n"
+        "begin;\n\n"
+        "create table public.operator_user_guide_content (\n"
+        "  id boolean primary key default true check (id),\n"
+        "  html text not null check (length(html) > 0)\n"
+        ");\n"
+        "alter table public.operator_user_guide_content enable row level security;\n"
+        "revoke all on table public.operator_user_guide_content from public, anon, authenticated;\n\n"
+        f"insert into public.operator_user_guide_content (html) values ({sql_literal});\n\n"
+        "create function public.operator_user_guide()\n"
+        "returns text language plpgsql stable security definer set search_path = ''\n"
+        "as $$\n"
+        "declare content text;\n"
+        "begin\n"
+        "  perform public.require_operator_research_access();\n"
+        "  select html into strict content from public.operator_user_guide_content where id;\n"
+        "  return content;\n"
+        "end;\n"
+        "$$;\n"
+        "revoke all on function public.operator_user_guide() from public, anon, authenticated;\n"
+        "grant execute on function public.operator_user_guide() to authenticated;\n\n"
+        "commit;\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
     build_pdf()
     print(OUTPUT)
     print(DOCS_OUTPUT)
+    print(GUIDE_MIGRATION)

@@ -120,7 +120,7 @@ export function OperatorResearchAccess({ children }: { children: ReactNode }) {
   if (access.state === 'active' && (access.kind === 'operator' || access.kind === 'owner')) return children
   return <main className="account-state">
     <h1>Team research access required.</h1>
-    <p>Sports insights and Data Models are restricted to verified Discord OPERATOR or Owner roles. Paid and trial membership do not include these tools.</p>
+    <p>Sports insights, Data Models and the user guide are restricted to verified Discord OPERATOR or Owner roles. Paid and trial membership do not include these tools.</p>
     <Link to="/account">Sign in with Discord or verify your account</Link>
     <button className="account-secondary-button" onClick={refresh}>Retry access check</button>
   </main>

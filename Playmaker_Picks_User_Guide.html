@@ -107,6 +107,7 @@
 
   <section><h2><span>🌐</span>Website: results, picks and profiles</h2>
     <p>Visit <a href="https://playmakersportsanalytics.com">playmakersportsanalytics.com</a>. The homepage settled ledger shows all sports and grades, ten results per page with Previous/Next controls. The dedicated <code>/results</code> page retains sport filters. Open plays and private account data are excluded from the public ledger.</p>
+    <p>This guide is available on the website at <code>/guide</code>, through the <b>Guide (team only)</b> navigation link. Only verified OPERATOR/Owner accounts can open it; paid/trial access alone is insufficient. The page uses the same tab-session access checks as the research tools, and its content RPC checks current access on every fetch.</p>
     <p><code>/cappers</code> lists current verified OPERATOR cappers, with public profiles and settled performance. <code>/picks</code> contains published open picks for verified member/team access. Filter by sport or capper, and open the insight control where available.</p>
     <p>On <code>/account</code>, sign in with Discord, complete age verification, check membership, edit your profile, choose sports/capper follows, and manage alert preferences. The personalized homepage uses those follows. A preference does not guarantee delivery of every alert.</p>
     <p>Verified capper page owners can edit their own page appearance and their own open-pick insights. A verified Owner can edit all capper pages/insights. Available appearance controls include colors, heading font, bio, social links, avatar, banner and section order. Saving or uploading can fail explicitly; verify the saved result.</p>
@@ -160,6 +161,7 @@
       <tr><td>member_current_picks</td><td>Verified member/team access; published open picks only. No arguments: {}.</td></tr>
       <tr><td>public_nfl_model_games / public_nfl_team_efficiency</td><td>Verified OPERATOR/Owner research. No arguments: {}.</td></tr>
       <tr><td>public_sport_model_events</td><td>Verified OPERATOR/Owner research. Example NBA body: {"p_sport_slug":"basketball","p_league_id":"12"}.</td></tr>
+      <tr><td>operator_user_guide</td><td>Verified OPERATOR/Owner guide content. No arguments: {}. Returns HTML text; the underlying content table is not accessible to browser accounts.</td></tr>
     </tbody></table>
     <p>With the existing authenticated Supabase JavaScript client, an NBA model-history page is requested as:</p>
     <p><code>supabase.rpc('public_sport_model_events', { p_sport_slug: 'basketball', p_league_id: '12' }).order('start_at').order('event_id').range(0, 999)</code></p>
@@ -199,6 +201,7 @@
     <p><code>cd /opt/discord-bot</code><br><code>git pull</code><br><code>./.venv/bin/python3 -m pip install -r requirements.txt</code><br><code>systemctl restart discord-bot.service</code><br><code>journalctl -u discord-bot.service --since "2 minutes ago" --no-pager</code></p>
     <p>Install dependencies only when requirements change or packages are missing, and always into the service's virtual environment. Use -r for requirements.txt; python3 is the server executable. nflreadpy&gt;=0.1.5 is the supported minimum in the requirements.</p>
     <p>In Supabase SQL Editor, apply the relevant migrations in order after their prerequisites: 20261011170000_sports_model_history.sql, 20261011180000_nflverse_team_efficiency.sql, 20261011193500_shared_api_daily_budget.sql and 20261011214000_operator_research_access.sql. Pulling Git does not execute SQL. Deploy the website separately; a bot restart does not publish frontend fixes.</p>
+    <p>For the protected website guide, apply 20261011230000_operator_user_guide.sql after the research-access migration. Its table stores this guide privately and its RPC checks current OPERATOR/Owner access. Deploy the frontend to expose /guide; no bot restart is needed for this page.</p>
     <p>After restart, check the command-sync log for /model. Verify a live refresh in Laboratory and the website with a real eligible account. Automated tests do not prove production provider coverage, purchases or Discord role mappings.</p>
   </section>
 

@@ -30,6 +30,9 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
     const rpcs = ['public_nfl_model_games()', "public_sport_model_events('hockey','57')", 'public_nfl_team_efficiency()']
     const original = await Promise.all(rpcs.map(async (rpc) => (await db.query(`select * from public.${rpc}`)).rows))
     await load('20261011214000_operator_research_access.sql')
+    await load('20261011230000_operator_user_guide.sql')
+    const guideHtml = (await readFile(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8'))
+      .split('<main>')[1].split('</main>')[0]
     const call = async (rpc, role = 'authenticated') => {
       await db.exec(`set role ${role}`)
       try { return (await db.query(`select * from public.${rpc}`)).rows }
@@ -45,6 +48,9 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
         if (access.kind === 'operator' || access.kind === 'owner') assert.deepEqual(await call(rpc), original[index])
         else await assert.rejects(call(rpc), /OPERATOR or Owner/)
       }
+      if (access.kind === 'operator' || access.kind === 'owner') {
+        assert.equal((await call('operator_user_guide()'))[0].operator_user_guide, guideHtml)
+      } else await assert.rejects(call('operator_user_guide()'), /OPERATOR or Owner/)
     }
     await db.exec("select set_config('test.uid', '', false)")
     for (const rpc of rpcs) {
@@ -53,14 +59,22 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
       for (const role of ['anon', 'authenticated']) await assert.rejects(call(`internal_${rpc}`, role), /permission denied/)
     }
     await assert.rejects(call('require_operator_research_access()'), /permission denied/)
+    await assert.rejects(call('operator_user_guide()'), /OPERATOR or Owner/)
+    await assert.rejects(call('operator_user_guide()', 'anon'), /permission denied/)
     assert.equal((await call('public_nfl_games()', 'anon')).length, 1)
     assert.equal((await call("public_sport_events('hockey')", 'anon')).length, 1)
-    for (const table of ['api_sports_model_backfill_state', 'nflverse_team_game_efficiency']) {
+    for (const table of ['api_sports_model_backfill_state', 'nflverse_team_game_efficiency', 'operator_user_guide_content']) {
       for (const role of ['anon', 'authenticated']) {
         await db.exec(`set role ${role}`)
         try { await assert.rejects(db.query(`select * from public.${table}`), /permission denied/) }
         finally { await db.exec('reset role') }
       }
+    }
+    for (const role of ['anon', 'authenticated']) {
+      await db.exec(`set role ${role}`)
+      try {
+        await assert.rejects(db.query("update public.operator_user_guide_content set html = '<script>bad</script>'"), /permission denied/)
+      } finally { await db.exec('reset role') }
     }
   } finally { await db.close() }
 })

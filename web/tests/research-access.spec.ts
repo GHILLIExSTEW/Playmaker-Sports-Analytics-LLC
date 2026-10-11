@@ -1,4 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+
+const guideHtml = readFileSync(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8')
+const guideContent = guideHtml.split('<main>')[1].split('</main>')[0]
 
 test('tab access persists across time, focus and reload without rechecking', async ({ page }) => {
   await page.clock.install()
@@ -69,7 +73,11 @@ test('expired access is hidden while rechecking and failure removes it', async (
   await expect(page.getByRole('heading', { name: 'Sports data models.' })).toHaveCount(0)
 })
 
-for (const path of ['/models', '/nfl/lab']) {
+function pageHeading(path: string) {
+  return path === '/models' ? 'Sports data models.' : path === '/guide' ? 'Playmaker Picks' : 'NFL matchup lab.'
+}
+
+for (const path of ['/models', '/nfl/lab', '/guide']) {
   for (const state of [
     { state: 'signed-out' },
     { state: 'active', kind: 'paid', expires_at: null },
@@ -77,39 +85,48 @@ for (const path of ['/models', '/nfl/lab']) {
   ]) {
     test(`${path} denies ${'kind' in state ? state.kind : state.state} without fetching research`, async ({ page }) => {
       const research: string[] = []
+      const guideRequests: string[] = []
+      page.on('request', (request) => {
+        if (request.url().includes('UserGuidePage') || request.url().includes('Playmaker_Picks_User_Guide.html')) guideRequests.push(request.url())
+      })
       await page.route('**/rest/v1/rpc/**', async (route) => {
         const rpc = new URL(route.request().url()).pathname.split('/').at(-1)
         if (rpc === 'website_member_access') await route.fulfill({ json: state })
         else {
-          if (rpc && ['public_nfl_games', 'public_nfl_model_games', 'public_sport_model_events', 'public_nfl_team_efficiency'].includes(rpc)) research.push(rpc)
+          if (rpc && ['public_nfl_games', 'public_nfl_model_games', 'public_sport_model_events', 'public_nfl_team_efficiency', 'operator_user_guide'].includes(rpc)) research.push(rpc)
           await route.fulfill({ json: [] })
         }
       })
       await page.goto(path)
       await expect(page.getByRole('heading', { name: 'Team research access required.' })).toBeVisible()
       expect(research).toEqual([])
+      await expect(page.getByRole('article', { name: 'Playmaker user guide' })).toHaveCount(0)
+      expect(guideRequests).toEqual([])
     })
   }
   test(`${path} allows owner access`, async ({ page }) => {
     await page.route('**/rest/v1/rpc/**', (route) => route.fulfill({
       json: route.request().url().includes('website_member_access')
-        ? { state: 'active', kind: 'owner', expires_at: null } : [],
+        ? { state: 'active', kind: 'owner', expires_at: null }
+        : route.request().url().includes('operator_user_guide') ? guideContent : [],
     }))
     await page.goto(path)
-    await expect(page.getByRole('heading', { name: path === '/models' ? 'Sports data models.' : 'NFL matchup lab.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: pageHeading(path), exact: true })).toBeVisible()
   })
   test(`${path} fails closed, retries, and removes research after access expiry`, async ({ page }) => {
     await page.clock.install({ time: new Date('2026-10-11T22:00:00Z') })
     let access: 'error' | 'operator' | 'paid' = 'error'
     await page.route('**/rest/v1/rpc/**', (route) => {
-      if (!route.request().url().includes('website_member_access')) return route.fulfill({ json: [] })
+      if (!route.request().url().includes('website_member_access')) return route.fulfill({
+        json: route.request().url().includes('operator_user_guide') ? guideContent : [],
+      })
       return access === 'error'
         ? route.fulfill({ status: 500, json: { message: 'Access check unavailable' } })
         : route.fulfill({ json: { state: 'active', kind: access, expires_at: '2026-10-11T22:00:05Z' } })
     })
     await page.goto(path)
     await expect(page.getByRole('alert')).toContainText('Membership access could not be verified')
-    const heading = page.getByRole('heading', { name: path === '/models' ? 'Sports data models.' : 'NFL matchup lab.' })
+    const heading = page.getByRole('heading', { name: pageHeading(path), exact: true })
     await expect(heading).not.toBeVisible()
     access = 'operator'
     await page.getByRole('button', { name: 'Retry access check' }).click()
@@ -120,3 +137,42 @@ for (const path of ['/models', '/nfl/lab']) {
     await expect(heading).not.toBeVisible()
   })
 }
+
+test('guide navigation opens the canonical content for operators without mobile overflow', async ({ page }) => {
+  await page.route('**/rest/v1/rpc/**', (route) => route.fulfill({
+    json: route.request().url().includes('website_member_access')
+      ? { state: 'active', kind: 'operator', expires_at: null }
+      : route.request().url().includes('operator_user_guide') ? guideContent : [],
+  }))
+  await page.goto('/models')
+  await page.getByRole('link', { name: 'Guide (team only)', exact: true }).click()
+  await expect(page).toHaveURL(/\/guide$/)
+  await expect(page).toHaveTitle('User Guide | Playmaker Picks')
+  const guide = page.getByRole('article', { name: 'Playmaker user guide' })
+  await expect(guide.getByRole('heading', { level: 2 })).toHaveCount(20)
+  await expect(guide).toContainText('7,500')
+  await expect(guide).toContainText('public_sport_model_events')
+  await expect(guide).toContainText('Laboratory /model')
+  await page.setViewportSize({ width: 375, height: 812 })
+  const size = await guide.evaluate((element) => ({ width: element.clientWidth, scroll: element.scrollWidth }))
+  expect(size.scroll).toBeLessThanOrEqual(size.width)
+})
+
+test('guide server denial is explicit and retry fetches the guide again', async ({ page }) => {
+  let fail = true
+  await page.route('**/rest/v1/rpc/**', (route) => {
+    if (route.request().url().includes('website_member_access')) return route.fulfill({
+      json: { state: 'active', kind: 'operator', expires_at: null },
+    })
+    if (route.request().url().includes('operator_user_guide')) return fail
+      ? route.fulfill({ status: 403, json: { message: 'Verified OPERATOR or Owner research access required' } })
+      : route.fulfill({ json: guideContent })
+    return route.fulfill({ json: [] })
+  })
+  await page.goto('/guide')
+  await expect(page.getByRole('alert')).toContainText('Verified OPERATOR or Owner')
+  await expect(page.getByRole('article', { name: 'Playmaker user guide' })).toHaveCount(0)
+  fail = false
+  await page.getByRole('button', { name: 'Retry guide' }).click()
+  await expect(page.getByRole('article', { name: 'Playmaker user guide' })).toBeVisible()
+})

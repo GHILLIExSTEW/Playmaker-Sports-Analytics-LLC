@@ -7,9 +7,19 @@ The current Discord, website, research and API guide is
 It is the canonical content source for both
 [`Playmaker_Picks_User_Guide.pdf`](../Playmaker_Picks_User_Guide.pdf) and
 [`docs/Playmaker_Bot_User_Guide.pdf`](../docs/Playmaker_Bot_User_Guide.pdf).
+The website `/guide` route loads the same HTML content behind
+`OperatorResearchAccess` and the protected `operator_user_guide()` RPC;
+only verified OPERATOR/Owner access can fetch or render it.
+Paid/trial and signed-out users see the access notice, not the guide.
+The primary navigation includes **Guide (team only)**.
 After editing the HTML, run `scripts/create_user_guide_pdf.py` from the repository
 root with the project's Python environment. The generator requires Pillow,
-ReportLab and Windows Segoe fonts, and updates both PDF copies.
+ReportLab and Windows Segoe fonts, and updates both PDF copies and the generated
+`20261011230000_operator_user_guide.sql` migration. Apply that migration after
+`20261011214000_operator_research_access.sql` in Supabase SQL Editor, then deploy
+the frontend. The guide content table has no browser read/write grants.
+After this migration has been deployed, publish future content updates in a new
+migration rather than modifying an already-applied migration.
 
 ## NFL Matchup Lab
 

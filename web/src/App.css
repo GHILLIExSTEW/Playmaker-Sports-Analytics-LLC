@@ -1,4 +1,18 @@
 #root { min-height: 100vh; }
+.user-guide-page { max-width: 1100px; margin: 0 auto; padding: 64px clamp(20px, 5vw, 64px) 100px; overflow-wrap: anywhere; }
+.user-guide-content h1 { margin: 0; font: 800 clamp(48px, 6vw, 80px)/1 var(--display); }
+.user-guide-content > header { padding-bottom: 24px; }
+.user-guide-content > section { border-top: 1px solid var(--line); padding: 28px 0; }
+.user-guide-content h2 { margin: 0 0 16px; color: var(--green); font: 700 clamp(26px, 3vw, 36px)/1.2 var(--display); }
+.user-guide-content h2 span { margin-right: 8px; }
+.user-guide-content p, .user-guide-content li { line-height: 1.7; }
+.user-guide-content a { color: var(--green); }
+.user-guide-content code { padding: 2px 4px; background: var(--white); }
+.user-guide-content .callout { padding: 16px; border-left: 3px solid var(--green); background: var(--white); line-height: 1.7; }
+.user-guide-content table { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+.user-guide-content th, .user-guide-content td { padding: 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.user-guide-content th { color: var(--green); background: var(--white); }
+.user-guide-content footer { color: var(--muted); font-size: 13px; line-height: 1.7; }
 .data-models-page { min-height: 72vh; padding: 72px clamp(20px, 7vw, 108px) 100px; color: var(--ink); background: var(--paper); }
 .data-models-heading { max-width: 900px; padding-bottom: 38px; border-bottom: 1px solid var(--line); }
 .data-models-heading h1 { margin: 0; color: var(--ink); font: 800 clamp(58px, 8vw, 108px)/0.88 var(--display); text-transform: uppercase; }
