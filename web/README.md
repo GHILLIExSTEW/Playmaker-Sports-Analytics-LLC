@@ -41,8 +41,15 @@ interrupted history syncs resume on the next daily run. API request reservations
 continue through the shared API-Sports budget when it is enabled.
 Initial season requests omit `page` for endpoints that do not accept it;
 additional pages are requested only when the provider reports them. The default
-database budget allows 80 automated calls per product per UTC day, independently
-of the provider plan's quota. Restarting the bot does not reset that budget.
+database budget originally allowed 80 automated calls per product per UTC day.
+Apply `supabase/migrations/20261011193500_shared_api_daily_budget.sql` to replace
+that automated cap with a shared 7,500-call ceiling across all API-Sports
+products per UTC day, including member single/batch reservations. Existing
+usage counts toward the ceiling; restarting the bot does not reset it.
+Member limits remain 20 calls per product/day, five calls per user/day, and
+a five-minute per-product cooldown. Keep `API_SPORTS_BUDGET_ENABLED=true` to
+enforce these limits. This budget covers this bot's reserved requests, not
+provider usage from external applications using the same key.
 
 The page derives projected scores from each team's 10 most recent completed
 scores and estimates win probability from the competition's historical
