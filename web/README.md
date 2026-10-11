@@ -18,6 +18,8 @@ ReportLab and Windows Segoe fonts, and updates both PDF copies and the generated
 `20261011230000_operator_user_guide.sql` migration. Apply that migration after
 `20261011214000_operator_research_access.sql` in Supabase SQL Editor, then deploy
 the frontend. The guide content table has no browser read/write grants.
+This guide setup can be rerun: it replaces the singleton content and function,
+and reapplies the table/function access restrictions without dropping data.
 After this migration has been deployed, publish future content updates in a new
 migration rather than modifying an already-applied migration.
 

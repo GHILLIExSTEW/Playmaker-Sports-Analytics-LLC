@@ -31,6 +31,13 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
     const original = await Promise.all(rpcs.map(async (rpc) => (await db.query(`select * from public.${rpc}`)).rows))
     await load('20261011214000_operator_research_access.sql')
     await load('20261011230000_operator_user_guide.sql')
+    await db.exec(`
+      update public.operator_user_guide_content set html = 'Old guide content';
+      grant select, update on public.operator_user_guide_content to anon, authenticated;
+      grant execute on function public.operator_user_guide() to anon;
+    `)
+    await load('20261011230000_operator_user_guide.sql')
+    assert.equal((await db.query('select count(*)::int as count from public.operator_user_guide_content')).rows[0].count, 1)
     const guideHtml = (await readFile(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8'))
       .split('<main>')[1].split('</main>')[0]
     const call = async (rpc, role = 'authenticated') => {

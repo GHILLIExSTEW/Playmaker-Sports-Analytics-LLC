@@ -1,14 +1,14 @@
 -- Generated from Playmaker_Picks_User_Guide.html by scripts/create_user_guide_pdf.py.
 begin;
 
-create table public.operator_user_guide_content (
+create table if not exists public.operator_user_guide_content (
   id boolean primary key default true check (id),
   html text not null check (length(html) > 0)
 );
 alter table public.operator_user_guide_content enable row level security;
 revoke all on table public.operator_user_guide_content from public, anon, authenticated;
 
-insert into public.operator_user_guide_content (html) values ('
+insert into public.operator_user_guide_content (id, html) values (true, '
   <header>
     <h1>Playmaker Picks</h1>
     <p>Discord, website, research tools and API usage<br>Updated October 11, 2026</p>
@@ -209,9 +209,10 @@ insert into public.operator_user_guide_content (html) values ('
   </section>
 
   <footer>Key settings: GUILD_ID · OFFICIAL_CHANNEL_ID · IMAGE_INPUT_CHANNEL_ID · CONFIRMATION_CHANNEL_ID · MEMBER_BET_CHANNEL_ID · API_SPORTS_KEY · API_SPORTS_BUDGET_ENABLED · MEMBER_STATS_REFRESH_ENABLED · TRACKER_START_DATE<br>nflverse data attribution: <a href="https://nflverse.nflverse.com/">nflverse</a> / <a href="https://nflreadpy.nflverse.com/">nflreadpy</a>, CC-BY 4.0.</footer>
-');
+')
+on conflict (id) do update set html = excluded.html;
 
-create function public.operator_user_guide()
+create or replace function public.operator_user_guide()
 returns text language plpgsql stable security definer set search_path = ''
 as $$
 declare content text;
