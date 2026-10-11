@@ -123,7 +123,7 @@ export default function DataModelsPage() {
       <h2>Past scores only. No hidden inputs.</h2>
       <p>Projected scores blend each team's average points scored across its 10 most recent completed games with its opponent's average allowed. Win probability applies the historical competition scoring-margin distribution to that projected margin. Only games before the selected start time are used; the previous and current seasons are included when available.</p>
       <p>It does not account for injuries, player availability, home advantage, weather, lineups, sportsbook odds, market movement, or tie/draw probability. Estimates have not been calibrated or independently validated. Samples and source sync time are shown so missing or stale data is visible.</p>
-      <Link to="/nfl/lab">Open NFL matchup history and odds research</Link>
+      {competition.key === 'nfl' && <Link to="/nfl/lab">Open NFL matchup history and odds research</Link>}
     </section>
   </main>
 }

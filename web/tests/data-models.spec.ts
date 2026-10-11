@@ -97,6 +97,20 @@ test('Data Models reports missing history rather than manufacturing a probabilit
   await expect(page.getByText('Team 0 estimated win')).toHaveCount(0)
 })
 
+test('NFL Lab link appears only on the NFL model tab', async ({ page }) => {
+  await mockSupabase(page, [])
+  await page.goto('/models')
+  const link = page.getByRole('link', { name: 'Open NFL matchup history and odds research' })
+  await expect(link).toBeVisible()
+  await expect(link).toHaveAttribute('href', '/nfl/lab')
+  for (const name of ['NBA', 'MLB', 'NHL', 'NCAA Football', "NCAA Men's Basketball"]) {
+    await page.getByRole('button', { name, exact: true }).click()
+    await expect(link).toHaveCount(0)
+  }
+  await page.getByRole('button', { name: 'NFL', exact: true }).click()
+  await expect(link).toBeVisible()
+})
+
 test('NCAA placeholder teams are excluded visibly without truncating paginated history', async ({ page }) => {
   await mockSupabase(page, [])
   const offsets: string[] = []
