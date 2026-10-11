@@ -11,6 +11,7 @@ from src.member_bet_vault import MemberBetVault
 from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
 from src.member_stats import MemberStats
+from src.data_models import DataModels
 from src.member_onboarding import MemberOnboarding
 from src.member_activity import MemberActivity
 from src.administration import Administration
@@ -87,6 +88,7 @@ class OfficialBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.add_cog(MemberStats())
+        await self.add_cog(DataModels())
         await self.add_cog(MemberOnboarding())
         await self.add_cog(MemberActivity(
             self, features=play_features_service, resolve_channel=resolve_channel,

@@ -67,6 +67,10 @@ test('score-only projections exclude future games and require enough prior sampl
   expect(projection!.homeWinProbability).toBeLessThanOrEqual(1)
   expect(completedModelGameCount([...games, future], matchup.start_at)).toBe(30)
   expect(projectMatchup(games.slice(0, 20), matchup)).toBeNull()
+  // Shared numeric baseline with the Discord /model implementation.
+  expect(projection!.homeScore).toBeCloseTo(72.9, 10)
+  expect(projection!.awayScore).toBeCloseTo(72.05, 10)
+  expect(projection!.homeWinProbability).toBeCloseTo(0.5726246983635468, 10)
 })
 
 test('Data Models shows an experimental NFL projection and a transparent insufficient-data state', async ({ page }) => {

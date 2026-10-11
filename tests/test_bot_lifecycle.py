@@ -176,3 +176,24 @@ def test_command_sync_failure_cleans_up_partially_loaded_bot(monkeypatch):
         assert not bot.cogs
         assert not bot.extra_events.get("on_interaction")
     asyncio.run(check())
+
+
+def test_setup_registers_model_in_guild_command_sync(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 10)
+    monkeypatch.setattr(module, "PAID_MEMBER_ROLE_ID", None)
+    monkeypatch.setattr(module, "member_bet_vault", None)
+    monkeypatch.setattr(module, "whop_membership_sync", None)
+
+    async def check():
+        bot = module.OfficialBot(command_prefix="!", intents=discord.Intents.none())
+        bot.tree.sync = AsyncMock(return_value=[])
+        try:
+            await bot.setup_hook()
+            command = bot.tree.get_command("model", guild=discord.Object(id=10))
+            assert command is not None
+            assert command.guild_only is True
+            assert command.description.startswith("Laboratory:")
+            bot.tree.sync.assert_awaited_once()
+        finally:
+            await bot.close()
+    asyncio.run(check())

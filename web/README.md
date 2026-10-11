@@ -42,6 +42,25 @@ production rollout. No live provider/licensing approval is claimed here.
 
 ## Sports Data Models
 
+Discord `/model` is restricted to current OPERATOR/Owner members in the guild's
+Laboratory channel (`CONFIRMATION_CHANNEL_ID`, currently `1328130555568455710`).
+Choose a league dropdown, enter an Eastern-time game date and optional team
+filter in a modal, then choose a game from paginated dropdowns and type `POST`
+in the confirmation modal. Picker messages are private; the finished report
+posts only in Laboratory. Roles, channel, and picker ownership are checked
+at every step. Snapshots expire after three minutes and cannot be posted twice.
+
+The command refreshes the selected competition's current and prior seasons
+directly from API-Sports, follows all reported pages, and persists refreshed
+games. `API_SPORTS_BUDGET_ENABLED=true` and `API_SPORTS_KEY` are required.
+These staff requests use the shared automated daily allowance, not member
+refresh quotas; only one command refresh runs at a time. Provider/quota failures
+are reported explicitly without a cached-success fallback. Only the six
+supported model competitions are offered. The score-only baseline matches the
+website; current provider data does not add injuries, lineups, prices, or EPA.
+Restart the bot to register `/model`; no extra SQL migration is required for
+the Discord command beyond the existing sports-cache migrations.
+
 Visit `/models` for score-history baselines across NFL, NBA, MLB, NHL, NCAA
 football, and NCAA men's basketball. Apply
 `supabase/migrations/20261011170000_sports_model_history.sql` before deploying
