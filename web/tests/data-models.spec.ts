@@ -96,3 +96,36 @@ test('Data Models reports missing history rather than manufacturing a probabilit
   await expect(page.getByText('10 completed games are available before this matchup.')).toBeVisible()
   await expect(page.getByText('Team 0 estimated win')).toHaveCount(0)
 })
+
+test('NCAA placeholder teams are excluded visibly without truncating paginated history', async ({ page }) => {
+  await mockSupabase(page, [])
+  const offsets: string[] = []
+  await page.route('**/rest/v1/rpc/public_sport_model_events**', async (route) => {
+    const offset = new URL(route.request().url()).searchParams.get('offset') ?? '0'
+    offsets.push(offset)
+    const valid = history().map((event) => ({ ...event, home_id: String(Number(event.home_id) + 10), away_id: String(Number(event.away_id) + 10) }))
+    const placeholder = {
+      ...modelEvent(23506, '2026-09-18', '0', '0', 999, 0),
+      home_name: null, away_name: null, status_code: 'NS',
+    }
+    await route.fulfill({ json: offset === '0'
+      ? [...valid, ...Array.from({ length: 970 }, (_, index) => ({ ...placeholder, event_id: String(23506 + index) }))]
+      : [{ ...modelEvent(99999, '2026-11-01', '0', '1', 0, 0), home_id: '6', away_id: '7', status_code: 'NS' }] })
+  })
+  await page.goto('/models')
+  await page.getByRole('button', { name: 'NCAA Football', exact: true }).click()
+  await expect(page.getByText('970 provider games excluded because their teams are unresolved. They are not used in projections or history samples.')).toBeVisible()
+  await expect(page.getByText('Not enough history for a projection yet.')).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect([...new Set(offsets)]).toEqual(['0', '1000'])
+})
+
+test('malformed model history remains an explicit error', async ({ page }) => {
+  await mockSupabase(page, [])
+  await page.route('**/rest/v1/rpc/public_sport_model_events**', (route) => route.fulfill({
+    json: [{ ...modelEvent(1, '2026-09-01', '1', '2', 7, 3), start_at: 'invalid' }],
+  }))
+  await page.goto('/models')
+  await page.getByRole('button', { name: 'NCAA Football', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Model history response was invalid')
+})

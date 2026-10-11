@@ -20,18 +20,29 @@ export const modelCompetitions: ModelCompetition[] = [
   { key: 'ncaa-basketball', name: "NCAA Men's Basketball", source: 'events', sportSlug: 'basketball', leagueId: '8' },
 ]
 
-function validEvent(value: unknown): value is ModelEvent {
+type ProviderModelEvent = Omit<ModelEvent, 'home_name' | 'away_name'> & {
+  home_name: string | null
+  away_name: string | null
+}
+
+function validEvent(value: unknown): value is ProviderModelEvent {
   if (!value || typeof value !== 'object') return false
   const event = value as Partial<ModelEvent>
   return typeof event.event_id === 'string'
     && (event.season === null || typeof event.season === 'string')
     && typeof event.start_at === 'string' && Number.isFinite(Date.parse(event.start_at))
     && (event.home_id === null || typeof event.home_id === 'string')
-    && typeof event.home_name === 'string'
+    && (event.home_name === null || typeof event.home_name === 'string')
     && (event.away_id === null || typeof event.away_id === 'string')
-    && typeof event.away_name === 'string'
+    && (event.away_name === null || typeof event.away_name === 'string')
     && typeof event.status_code === 'string'
     && typeof event.synced_at === 'string' && Number.isFinite(Date.parse(event.synced_at))
+}
+
+function resolvedEvent(event: ProviderModelEvent): event is ModelEvent {
+  return typeof event.home_name === 'string' && event.home_name.trim().length > 0
+    && typeof event.away_name === 'string' && event.away_name.trim().length > 0
+    && event.home_id !== '0' && event.away_id !== '0'
 }
 
 function fromNflGame(game: NflGame): ModelEvent {
@@ -45,14 +56,15 @@ function fromNflGame(game: NflGame): ModelEvent {
   }
 }
 
-export async function fetchModelEvents(competition: ModelCompetition): Promise<ModelEvent[]> {
+export async function fetchModelEvents(competition: ModelCompetition): Promise<{ events: ModelEvent[]; unresolved: number }> {
   if (!supabase) throw new Error('Public Supabase configuration is missing.')
   if (competition.source === 'nfl') {
     const games = await fetchNflGames('public_nfl_model_games')
-    return games.map(fromNflGame)
+    return { events: games.map(fromNflGame), unresolved: 0 }
   }
 
   const events: ModelEvent[] = []
+  let unresolved = 0
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase.rpc('public_sport_model_events', {
       p_sport_slug: competition.sportSlug,
@@ -60,7 +72,9 @@ export async function fetchModelEvents(competition: ModelCompetition): Promise<M
     }).order('start_at').order('event_id').range(offset, offset + 999)
     if (error) throw error
     if (!Array.isArray(data) || !data.every(validEvent)) throw new Error('Model history response was invalid.')
-    events.push(...data)
-    if (data.length < 1000) return events
+    const resolved = data.filter(resolvedEvent)
+    events.push(...resolved)
+    unresolved += data.length - resolved.length
+    if (data.length < 1000) return { events, unresolved }
   }
 }

@@ -17,6 +17,7 @@ function percent(value: number): string {
 export default function DataModelsPage() {
   const [selectedCompetition, setSelectedCompetition] = useState(modelCompetitions[0].key)
   const [events, setEvents] = useState<ModelEvent[]>([])
+  const [unresolved, setUnresolved] = useState(0)
   const [selectedEvent, setSelectedEvent] = useState('')
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
@@ -28,7 +29,8 @@ export default function DataModelsPage() {
     let cancelled = false
     void fetchModelEvents(competition).then((data) => {
       if (cancelled) return
-      setEvents(data)
+      setEvents(data.events)
+      setUnresolved(data.unresolved)
       setSelectedEvent('')
       setError('')
       setState('ready')
@@ -90,6 +92,7 @@ export default function DataModelsPage() {
       </div>
       {state === 'loading' && <p role="status">Loading {competition.name} model data…</p>}
       {state === 'error' && <p role="alert">Model data could not be loaded. {error} <button type="button" onClick={() => { setState('loading'); setRetry((value) => value + 1) }}>Retry</button></p>}
+      {state === 'ready' && unresolved > 0 && <p role="status">{unresolved} provider games excluded because their teams are unresolved. They are not used in projections or history samples.</p>}
       {state === 'ready' && !matchup && <p>No upcoming {competition.name} games are available in the cache.</p>}
       {state === 'ready' && matchup && !projection && <div className="model-empty-state">
         <h3>Not enough history for a projection yet.</h3>

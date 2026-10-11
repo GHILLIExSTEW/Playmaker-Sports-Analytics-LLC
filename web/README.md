@@ -86,7 +86,11 @@ The page derives projected scores from each team's 10 most recent completed
 scores and estimates win probability from the competition's historical
 score-margin distribution. It requires three prior scored games per team and
 30 competition games, displays source freshness and sample sizes, and shows no
-projection when those requirements are unmet. This baseline has no injury,
+projection when those requirements are unmet.
+Non-NFL provider placeholder games with missing team names or zero team IDs are
+excluded from selections and history, with the excluded count displayed.
+Malformed IDs, timestamps, and other response fields still produce an error.
+This baseline has no injury,
 lineup, home-advantage, weather, or sportsbook inputs and is not calibrated or
 validated as a betting model.
 
