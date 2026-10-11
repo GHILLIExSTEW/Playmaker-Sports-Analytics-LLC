@@ -1,12 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchNflGames, type NflGame } from './nflData'
+import { fetchNflGames, fetchNflTeamGameEfficiency, type NflGame, type NflTeamGameEfficiency } from './nflData'
+import { teamEfficiency, type NflTeamEfficiencySummary } from './nflEfficiency'
 import { downloadResearchCsv, oddsResearch, teamResearch, validateResearchGames, type TeamResearch } from './nflResearch'
 
 function timestamp(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(new Date(value))
 }
-function TeamPanel({ name, stats }: { name: string; stats: TeamResearch }) {
+function percent(value: number | null) {
+  return value === null ? 'Unavailable' : `${(value * 100).toFixed(1)}%`
+}
+const unavailableEfficiency: NflTeamEfficiencySummary = {
+  games: 0,
+  offenseEpaPerPlay: null,
+  offenseSuccessRate: null,
+  defenseEpaPerPlayAllowed: null,
+  defenseSuccessRateAllowed: null,
+  lastUpdated: null,
+}
+function TeamPanel({ name, stats, efficiency }: {
+  name: string
+  stats: TeamResearch
+  efficiency: NflTeamEfficiencySummary
+}) {
   return <article className="nfl-lab-team">
     <h3>{name}</h3>
     <dl>
@@ -19,6 +35,16 @@ function TeamPanel({ name, stats }: { name: string; stats: TeamResearch }) {
       <dt>Away record</dt><dd>{stats.awayRecord === '0-0-0' ? 'No sample' : stats.awayRecord}</dd>
       <dt>Days between kickoffs</dt><dd>{stats.daysBetween?.toFixed(1) ?? 'Unavailable'}</dd>
     </dl>
+    <h4>nflverse efficiency · {efficiency.games} prior games</h4>
+    {efficiency.games === 0 && <p>No matching prior nflverse games are available yet. Check team IDs and the latest data sync.</p>}
+    {efficiency.games > 0 && efficiency.games < 3 && <p>At least 3 prior regular-season games are required for efficiency estimates.</p>}
+    <dl>
+      <dt>Offensive EPA / play</dt><dd>{efficiency.offenseEpaPerPlay?.toFixed(3) ?? 'Unavailable'}</dd>
+      <dt>Offensive success rate</dt><dd>{percent(efficiency.offenseSuccessRate)}</dd>
+      <dt>EPA / play allowed</dt><dd>{efficiency.defenseEpaPerPlayAllowed?.toFixed(3) ?? 'Unavailable'}</dd>
+      <dt>Success rate allowed</dt><dd>{percent(efficiency.defenseSuccessRateAllowed)}</dd>
+    </dl>
+    {efficiency.lastUpdated && <p className="nfl-lab-efficiency-freshness">nflverse synced {timestamp(efficiency.lastUpdated)} ET.</p>}
   </article>
 }
 
@@ -28,6 +54,10 @@ export default function NflMatchupLab() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  const [efficiency, setEfficiency] = useState<NflTeamGameEfficiency[]>([])
+  const [efficiencyState, setEfficiencyState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [efficiencyError, setEfficiencyError] = useState('')
+  const [efficiencyRetry, setEfficiencyRetry] = useState(0)
   const [odds, setOdds] = useState('-110')
   const [stake, setStake] = useState('100')
   const [probability, setProbability] = useState('')
@@ -46,11 +76,27 @@ export default function NflMatchupLab() {
     })()
     return () => { cancelled = true }
   }, [retry])
+  useEffect(() => {
+    let cancelled = false
+    void fetchNflTeamGameEfficiency().then((rows) => {
+      if (cancelled) return
+      setEfficiency(rows)
+      setEfficiencyError('')
+      setEfficiencyState('ready')
+    }).catch((failure: unknown) => {
+      if (cancelled) return
+      setEfficiencyError(failure instanceof Error ? failure.message : 'Please retry.')
+      setEfficiencyState('error')
+    })
+    return () => { cancelled = true }
+  }, [efficiencyRetry])
   const matchups = games.filter((game) => ['NS', 'TBD', 'FT', 'AOT'].includes(game.status_short))
   const defaultGame = matchups.find((game) => ['NS', 'TBD'].includes(game.status_short)) ?? matchups.at(-1)
   const matchup = matchups.find((game) => String(game.game_id) === selected) ?? defaultGame
   const home = matchup ? teamResearch(games, matchup, matchup.home_team_id) : null
   const away = matchup ? teamResearch(games, matchup, matchup.away_team_id) : null
+  const homeEfficiency = matchup ? teamEfficiency(efficiency, matchup, matchup.home_team_id) : null
+  const awayEfficiency = matchup ? teamEfficiency(efficiency, matchup, matchup.away_team_id) : null
   let calculation: ReturnType<typeof oddsResearch> | null = null
   let calculationError = ''
   try { calculation = oddsResearch(odds, stake, probability) }
@@ -59,15 +105,19 @@ export default function NflMatchupLab() {
   function exportMatchup() {
     if (!matchup || !home || !away) return
     downloadResearchCsv(`nfl-matchup-${matchup.game_id}.csv`,
-      ['game_id','season','stage','kickoff_utc','team','side','completed_games','wins','losses','ties','points_for_per_game','points_against_per_game','recent_newest_first','home_record','away_record','previous_kickoff_utc','days_between_kickoffs','source_synced_at'],
-      [[matchup.away_team_name, 'away', away] as const, [matchup.home_team_name, 'home', home] as const].map(([name, side, stats]) => [
+      ['game_id','season','stage','kickoff_utc','team','side','completed_games','wins','losses','ties','points_for_per_game','points_against_per_game','recent_newest_first','home_record','away_record','previous_kickoff_utc','days_between_kickoffs','source_synced_at','efficiency_sample_games','offense_epa_per_play','offense_success_rate','defense_epa_per_play_allowed','defense_success_rate_allowed','nflverse_synced_at'],
+      [[matchup.away_team_name, 'away', away, awayEfficiency] as const, [matchup.home_team_name, 'home', home, homeEfficiency] as const].map(([name, side, stats, teamMetrics]) => [
         matchup.game_id, matchup.season, matchup.stage, matchup.kickoff_at, name, side,
         stats.games, stats.wins, stats.losses, stats.ties, stats.pointsFor, stats.pointsAgainst,
         stats.recent, stats.homeRecord, stats.awayRecord, stats.previousKickoff, stats.daysBetween, matchup.synced_at,
+        teamMetrics?.games ?? 0, teamMetrics?.offenseEpaPerPlay ?? null,
+        teamMetrics?.offenseSuccessRate ?? null, teamMetrics?.defenseEpaPerPlayAllowed ?? null,
+        teamMetrics?.defenseSuccessRateAllowed ?? null, teamMetrics?.lastUpdated ?? null,
       ]))
   }
   return <main className="nfl-page nfl-matchup-lab">
     <Link to="/nfl">NFL scores & schedule</Link>
+    <Link to="/models" className="model-return-link">All-sports data models</Link>
     <header className="nfl-page-heading"><p className="eyebrow">Research tools · No guaranteed outcomes</p><h1>NFL matchup lab.</h1>
       <p>Compare completed-game history and calculate what a price requires to break even. This is descriptive research, not a prediction model or betting recommendation.</p>
     </header>
@@ -86,7 +136,10 @@ export default function NflMatchupLab() {
         <p>Source: existing API-Sports NFL cache. History is limited to this season and stage, strictly before the selected kickoff; completed FT/AOT games with both scores only. Canceled games are excluded. Days between kickoffs is not a verified rest/injury assessment.</p>
         {(matchup.stage === null || matchup.home_team_id === null || matchup.away_team_id === null) && <p role="status">Stage or team identity is missing; affected history is unavailable.</p>}
         <p>Oldest cached game sync: {timestamp(games.reduce((oldest, game) => Date.parse(game.synced_at) < Date.parse(oldest) ? game.synced_at : oldest, matchup.synced_at))} ET. Data may be delayed or incomplete.</p>
-        <div className="nfl-lab-teams"><TeamPanel name={matchup.away_team_name} stats={away} /><TeamPanel name={matchup.home_team_name} stats={home} /></div>
+        {efficiencyState === 'loading' && <p role="status">Loading nflverse efficiency metrics…</p>}
+        {efficiencyState === 'error' && <p role="alert">nflverse efficiency metrics could not be loaded. {efficiencyError} <button type="button" onClick={() => { setEfficiencyState('loading'); setEfficiencyRetry((value) => value + 1) }}>Retry efficiency metrics</button></p>}
+        <div className="nfl-lab-teams"><TeamPanel name={matchup.away_team_name} stats={away} efficiency={awayEfficiency ?? unavailableEfficiency} /><TeamPanel name={matchup.home_team_name} stats={home} efficiency={homeEfficiency ?? unavailableEfficiency} /></div>
+        <p className="nfl-lab-efficiency-method">Efficiency uses nflverse play-by-play EPA and success outcomes for pass/run plays, averaged across each team's up to 10 most recent prior regular-season games. Same-day games are excluded to avoid using results that may not have been available at kickoff. Data: <a href="https://github.com/nflverse/nflreadpy" target="_blank" rel="noreferrer">nflreadpy / nflverse</a> (CC-BY 4.0 data).</p>
         <p>Injury reports, weather, player projections, live sportsbook odds, and odds movement are not available in this release. Historical matchup views are not point-in-time backtests: source scores may have been corrected later.</p>
         <div className="nfl-lab-actions"><button type="button" onClick={exportMatchup}>Export matchup CSV</button>
           <button type="button" onClick={() => downloadResearchCsv('nfl-season-games.csv',

@@ -46,6 +46,22 @@ export type NflStanding = {
 
 export type NflSyncStatus = { sync_key: string; last_success_at: string | null; success: boolean }
 
+export type NflTeamGameEfficiency = {
+  team_id: number
+  season: number
+  game_id: string
+  game_date: string
+  offense_epa_sum: number
+  offense_plays: number
+  offense_successes: number
+  offense_success_plays: number
+  defense_epa_sum: number
+  defense_plays: number
+  defense_successes_allowed: number
+  defense_success_plays: number
+  synced_at: string
+}
+
 async function fetchRpc<T>(name: string, orderColumns: string[] = []): Promise<T[]> {
   const rows: T[] = []
   for (let offset = 0; ; offset += 1000) {
@@ -59,8 +75,8 @@ async function fetchRpc<T>(name: string, orderColumns: string[] = []): Promise<T
   }
 }
 
-export async function fetchNflGames(): Promise<NflGame[]> {
-  return (await fetchRpc<NflGame>('public_nfl_games', ['kickoff_at', 'game_id']))
+export async function fetchNflGames(rpc = 'public_nfl_games'): Promise<NflGame[]> {
+  return (await fetchRpc<NflGame>(rpc, ['kickoff_at', 'game_id']))
     .filter((game) => hasNamedMatchup(`${game.away_team_name} vs ${game.home_team_name}`, game.home_team_name, game.away_team_name))
 }
 
@@ -70,4 +86,31 @@ export async function fetchNflStandings(): Promise<NflStanding[]> {
 
 export async function fetchNflSyncStatus(): Promise<NflSyncStatus[]> {
   return fetchRpc<NflSyncStatus>('public_nfl_data_status')
+}
+
+export async function fetchNflTeamGameEfficiency(): Promise<NflTeamGameEfficiency[]> {
+  const rows = await fetchRpc<NflTeamGameEfficiency>(
+    'public_nfl_team_efficiency', ['season', 'game_date', 'game_id', 'team_id'],
+  )
+  for (const row of rows) {
+    const counts = [
+      row.offense_plays, row.offense_successes, row.offense_success_plays,
+      row.defense_plays, row.defense_successes_allowed, row.defense_success_plays,
+    ]
+    const sums = [row.offense_epa_sum, row.defense_epa_sum]
+    if (!Number.isSafeInteger(row.team_id) || !Number.isInteger(row.season)
+      || typeof row.game_id !== 'string'
+      || typeof row.game_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.game_date)
+      || !Number.isFinite(Date.parse(row.game_date))
+      || typeof row.synced_at !== 'string' || !Number.isFinite(Date.parse(row.synced_at))
+      || counts.some((value) => !Number.isSafeInteger(value) || value < 0)
+      || row.offense_successes > row.offense_success_plays
+      || row.offense_success_plays > row.offense_plays
+      || row.defense_successes_allowed > row.defense_success_plays
+      || row.defense_success_plays > row.defense_plays
+      || sums.some((value) => !Number.isFinite(value))) {
+      throw new Error('NFL team-efficiency response was invalid.')
+    }
+  }
+  return rows
 }

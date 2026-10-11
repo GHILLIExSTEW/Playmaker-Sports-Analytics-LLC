@@ -1,11 +1,14 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 import httpx
 
 from src.services import supabase_service as supabase_module
-from src.services.api_sports_multi_service import ApiSportsMultiService, DATE_PRODUCTS, DATE_PRODUCT_PARAMS, normalize_event
+from src.services.api_sports_multi_service import (
+    ApiSportsMultiService, DATE_PRODUCTS, DATE_PRODUCT_PARAMS, MODEL_COMPETITIONS,
+    model_history_seasons, normalize_event,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -184,6 +187,65 @@ def test_live_sync_with_no_active_sports_uses_no_api_requests(synced_at):
 def test_ncaa_feed_uses_american_football_ncaa_league_filter():
     assert DATE_PRODUCTS["ncaa"] == ("https://v1.american-football.api-sports.io", "games")
     assert DATE_PRODUCT_PARAMS["ncaa"] == {"league": 2}
+
+
+def test_model_competitions_and_season_boundaries():
+    assert [item[2] for item in MODEL_COMPETITIONS] == [
+        "NBA", "NCAA Men's Basketball", "MLB", "NHL", "NCAA Football",
+    ]
+    assert model_history_seasons("baseball", date(2026, 10, 1)) == ("2025", "2026")
+    assert model_history_seasons("ncaa", date(2026, 10, 1)) == ("2025", "2026")
+    assert model_history_seasons("basketball", date(2026, 10, 1)) == ("2025-2026", "2026-2027")
+    assert model_history_seasons("hockey", date(2026, 3, 1)) == ("2024-2025", "2025-2026")
+
+
+def test_model_history_backfill_paginates_and_persists_completion(monkeypatch, synced_at):
+    calls = []
+    states = {}
+    stored = []
+
+    def fake_get(_url, params, **_kwargs):
+        calls.append(params.copy())
+        page = params["page"]
+        event = {
+            "id": 100 + page, "date": f"2026-10-0{page}T12:00:00+00:00",
+            "league": {"id": 12, "name": "NBA", "season": "2026-2027"},
+            "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Away"}},
+            "scores": {"home": {"total": 90}, "away": {"total": 80}},
+            "status": {"short": "FT", "long": "Finished"},
+        }
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"errors": {}, "response": [event], "paging": {"current": page, "total": 2}}
+
+        return Response()
+
+    service = ApiSportsMultiService(api_key="test-key", client=FakeSupabase(), get=fake_get, clock=lambda: synced_at)
+    monkeypatch.setattr("src.services.api_sports_multi_service.MODEL_COMPETITIONS", (("basketball", 12, "NBA"),))
+    monkeypatch.setattr("src.services.api_sports_multi_service.model_history_seasons", lambda *_args: ("2026-2027", "2026-2027"))
+    monkeypatch.setattr(service, "_model_backfill_state", lambda sport, league, season: states.get((sport, league, season)))
+    monkeypatch.setattr(
+        service, "_save_model_backfill_state",
+        lambda sport, league, season, page, total, complete: states.update({
+            (sport, league, season): {"next_page": page, "total_pages": total, "complete": complete},
+        }),
+    )
+    monkeypatch.setattr(service, "_store_events", lambda rows: stored.extend(rows))
+
+    first = service.sync_model_history()
+    second = service.sync_model_history()
+
+    assert [call["page"] for call in calls] == [1, 2]
+    assert all(call["league"] == 12 and call["season"] == "2026-2027" for call in calls)
+    assert first["total_requests"] == 2
+    assert first["competitions"]["NBA:2026-2027"] == {"pages": 2, "events": 2}
+    assert second == {"total_requests": 0, "competitions": {}}
+    assert states[("basketball", 12, "2026-2027")] == {"next_page": 3, "total_pages": 2, "complete": True}
+    assert [row["event_id"] for row in stored] == ["101", "102"]
 
 def test_formula_one_is_active_and_live_sync_uses_season_request(synced_at):
     client = SimpleNamespace(table=lambda _name: FakeQuery([

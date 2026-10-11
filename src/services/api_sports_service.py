@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 import requests
@@ -105,11 +106,19 @@ class ApiSportsService:
         self.get = get or requests.get
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.request_count = 0
+        self._model_history_lock = Lock()
 
     def _client(self):
         return self.client or supabase_service._ensure_client()
 
     def _request(self, endpoint: str, params: dict | None = None) -> list[dict]:
+        payload = self._request_payload(endpoint, params)
+        rows = payload.get("response")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
+        return rows
+
+    def _request_payload(self, endpoint: str, params: dict | None = None) -> dict:
         if not self.api_key:
             raise RuntimeError("API_SPORTS_KEY is not configured.")
         reserve_request(self.base_url)
@@ -122,13 +131,30 @@ class ApiSportsService:
         self.request_count += 1
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
         errors = payload.get("errors") or {}
         if errors:
             raise RuntimeError(f"API-Sports {endpoint} failed: {errors}")
+        return payload
+
+    def _request_page(self, endpoint: str, params: dict) -> tuple[list[dict], int]:
+        payload = self._request_payload(endpoint, params)
         rows = payload.get("response")
         if not isinstance(rows, list):
             raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
-        return rows
+        paging = payload.get("paging")
+        if paging is None:
+            if int(params.get("page", 1)) != 1:
+                raise RuntimeError(f"API-Sports {endpoint} omitted pagination metadata during a resumed backfill.")
+            return rows, 1
+        if (not isinstance(paging, dict) or type(paging.get("current")) is not int
+                or type(paging.get("total")) is not int or paging["current"] < 1
+                or (paging["total"] == 0 and paging["current"] != 1)
+                or (paging["total"] > 0 and paging["total"] < paging["current"])
+                or paging["current"] != int(params.get("page", 1))):
+            raise RuntimeError(f"API-Sports {endpoint} returned invalid pagination metadata.")
+        return rows, paging["total"]
 
     def _upsert(self, table: str, rows: list[dict], conflict: str) -> None:
         if rows:
@@ -143,6 +169,54 @@ class ApiSportsService:
             "success": success,
             "error_message": error[:500] if error else None,
         }, on_conflict="sync_key").execute())
+
+    def _model_backfill_state(self, season: int) -> dict | None:
+        rows = supabase_service._execute(
+            lambda: self._client().table("api_sports_model_backfill_state")
+            .select("next_page,total_pages,complete")
+            .eq("sport_slug", "nfl").eq("league_id", str(NFL_LEAGUE_ID)).eq("season", str(season))
+            .limit(1).execute()
+        ).data or []
+        return rows[0] if rows else None
+
+    def _save_model_backfill_state(
+        self, season: int, next_page: int, total_pages: int, complete: bool,
+    ) -> None:
+        supabase_service._execute(
+            lambda: self._client().table("api_sports_model_backfill_state").upsert({
+                "sport_slug": "nfl", "league_id": str(NFL_LEAGUE_ID), "season": str(season),
+                "next_page": next_page, "total_pages": total_pages, "complete": complete,
+                "updated_at": self.clock().isoformat(),
+            }, on_conflict="sport_slug,league_id,season").execute()
+        )
+
+    def sync_model_history(self) -> dict:
+        with self._model_history_lock:
+            return self._sync_model_history()
+
+    def _sync_model_history(self) -> dict:
+        self.request_count = 0
+        current_season = nfl_season_for_date(self.clock().astimezone(TRACKER_TIMEZONE).date())
+        summary = {}
+        for season in (current_season - 1, current_season):
+            state = self._model_backfill_state(season)
+            if state and state.get("complete"):
+                continue
+            page = int(state.get("next_page", 1)) if state else 1
+            total_pages = int(state.get("total_pages", 1)) if state else 1
+            event_count = 0
+            first_page = page
+            while page <= total_pages:
+                rows, total_pages = self._request_page(
+                    "games", {"league": NFL_LEAGUE_ID, "season": season, "page": page},
+                )
+                synced_at = self.clock()
+                self._upsert("api_sports_nfl_games", [normalize_game(row, synced_at) for row in rows], "game_id")
+                event_count += len(rows)
+                page += 1
+                self._save_model_backfill_state(season, page, total_pages, page > total_pages)
+            summary[str(season)] = {"pages": page - first_page, "events": event_count}
+        return {"total_requests": self.request_count, "seasons": summary}
 
     def _already_synced_today(self) -> bool:
         rows = (

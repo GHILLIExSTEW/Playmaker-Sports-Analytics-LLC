@@ -1,8 +1,37 @@
 #root { min-height: 100vh; }
+.data-models-page { min-height: 72vh; padding: 72px clamp(20px, 7vw, 108px) 100px; color: var(--ink); background: var(--paper); }
+.data-models-heading { max-width: 900px; padding-bottom: 38px; border-bottom: 1px solid var(--line); }
+.data-models-heading h1 { margin: 0; color: var(--ink); font: 800 clamp(58px, 8vw, 108px)/0.88 var(--display); text-transform: uppercase; }
+.data-models-heading > p:last-child { max-width: 650px; margin: 22px 0 0; color: var(--muted); line-height: 1.65; }
+.model-competition-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0; }
+.model-competition-tabs button, .model-matchup button { padding: 11px 15px; color: var(--ink); background: var(--white); border: 1px solid var(--line); }
+.model-competition-tabs button.active { color: var(--paper); background: var(--green); border-color: var(--green); }
+.model-matchup { padding: 28px; border: 1px solid var(--line); background: var(--white); }
+.model-matchup-toolbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 24px; }
+.model-matchup-toolbar h2, .model-methodology h2 { margin: 0; font: 700 clamp(30px, 4vw, 48px)/1 var(--display); text-transform: uppercase; }
+.model-matchup-select { display: grid; gap: 8px; min-width: min(100%, 320px); }
+.model-matchup-select select { min-width: 0; max-width: 100%; padding: 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); }
+.model-empty-state { max-width: 720px; padding: 22px; border-left: 3px solid var(--amber); background: var(--paper); }
+.model-empty-state h3 { margin-top: 0; }
+.model-empty-state p, .model-sample { color: var(--muted); line-height: 1.65; }
+.model-projection-card { padding: 22px; border: 1px solid var(--line); background: var(--paper); }
+.model-game-label { margin: 0 0 18px; font-size: 18px; font-weight: 600; }
+.model-scoreline, .model-win-probabilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.model-scoreline > div, .model-win-probabilities > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border: 1px solid var(--line); }
+.model-scoreline strong { color: var(--green); font: 700 36px/1 var(--display); }
+.model-win-probabilities { margin-top: 12px; }
+.model-win-probabilities strong { font-size: 22px; }
+.model-methodology { max-width: 880px; margin-top: 52px; padding-top: 30px; border-top: 1px solid var(--line); }
+.model-methodology p:not(.eyebrow) { color: var(--muted); line-height: 1.7; }
+.model-methodology a, .model-return-link { color: var(--green); }
+.model-return-link { margin-left: 18px; }
 .nfl-lab-teams, .nfl-lab-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 20px; margin: 24px 0; }
 .nfl-lab-team { padding: 24px; border: 1px solid var(--line); background: var(--white); }
 .nfl-lab-team dl { display: grid; grid-template-columns: 1fr auto; gap: 14px; }
 .nfl-lab-team dd { margin: 0; text-align: right; }
+.nfl-lab-team h4 { margin: 24px 0 8px; }
+.nfl-lab-efficiency-freshness { font-size: .85rem; color: var(--muted); }
+.nfl-lab-efficiency-method { font-size: .9rem; }
 .nfl-lab-input { display: grid; gap: 10px; }
 .nfl-lab-input input, .nfl-lab-input select { min-width: 0; max-width: 100%; padding: 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); }
 .nfl-lab-actions { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -523,6 +552,11 @@
   .personalized-feed-item .status, .personalized-feed-item > b { grid-column: 2; grid-row: 1; justify-self: end; }
   .nfl-page { padding-top: 46px; }
   .nfl-page-heading h1 { font-size: 60px; }
+  .data-models-page { padding-top: 46px; }
+  .data-models-heading h1 { font-size: 60px; }
+  .model-matchup-toolbar { align-items: stretch; flex-direction: column; }
+  .model-scoreline, .model-win-probabilities { grid-template-columns: 1fr; }
+  .model-matchup { padding: 18px; }
   .nfl-standings-grid { grid-template-columns: 1fr; gap: 34px; }
   .nfl-standing-row { grid-template-columns: minmax(120px, 2fr) repeat(4, minmax(30px, 0.55fr)); gap: 4px; font-size: 10px; }
   .membership-page, .sport-page { padding-top: 46px; }

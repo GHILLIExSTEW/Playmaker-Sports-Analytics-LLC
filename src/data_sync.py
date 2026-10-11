@@ -10,6 +10,7 @@ from discord.ext import commands, tasks
 from src.reporting import TRACKER_TIMEZONE
 from src.services.api_sports_multi_service import ApiSportsMultiService
 from src.services.api_sports_service import ApiSportsService
+from src.services.nflverse_service import NflverseService, nflverse_service
 
 logger = logging.getLogger("official_play_bot")
 API_SPORTS_DAILY_SYNC_TIME = time(hour=6, minute=10, tzinfo=TRACKER_TIMEZONE)
@@ -20,9 +21,11 @@ class DataSync(commands.Cog):
     def __init__(
         self, bot: commands.Bot, *, nfl: ApiSportsService, multi: ApiSportsMultiService,
         enabled: bool, staff_alert: Callable[[str, str], Awaitable[None]],
+        nflverse: NflverseService | None = None,
     ) -> None:
         self.bot = bot
         self.nfl, self.multi = nfl, multi
+        self.nflverse = nflverse or nflverse_service
         self.enabled = enabled
         self.staff_alert = staff_alert
         self.initial_tasks: dict[str, asyncio.Task[None]] = {}
@@ -70,6 +73,10 @@ class DataSync(commands.Cog):
         try:
             result = await asyncio.to_thread(self.nfl.sync_daily)
             logger.info("api_sports_daily_sync_complete result=%s", result)
+            history = await asyncio.to_thread(self.nfl.sync_model_history)
+            logger.info("api_sports_nfl_model_history_sync_complete result=%s", history)
+            efficiency = await asyncio.to_thread(self.nflverse.sync_team_game_efficiency)
+            logger.info("nflverse_team_game_efficiency_sync_complete result=%s", efficiency)
         except Exception:
             await self.report_failure("api_sports_daily_sync")
 
@@ -88,6 +95,8 @@ class DataSync(commands.Cog):
         try:
             result = await asyncio.to_thread(self.multi.sync_daily)
             logger.info("api_sports_multi_daily_sync_complete result=%s", result)
+            history = await asyncio.to_thread(self.multi.sync_model_history)
+            logger.info("api_sports_multi_model_history_sync_complete result=%s", history)
         except Exception:
             await self.report_failure("api_sports_multi_daily_sync")
 
@@ -113,6 +122,10 @@ class DataSync(commands.Cog):
         try:
             result = await asyncio.to_thread(self.nfl.sync_daily)
             logger.info("api_sports_initial_sync_complete result=%s", result)
+            history = await asyncio.to_thread(self.nfl.sync_model_history)
+            logger.info("api_sports_nfl_model_history_sync_complete result=%s", history)
+            efficiency = await asyncio.to_thread(self.nflverse.sync_team_game_efficiency)
+            logger.info("nflverse_team_game_efficiency_sync_complete result=%s", efficiency)
         except Exception:
             await self.report_failure("api_sports_initial_sync")
 
@@ -120,5 +133,7 @@ class DataSync(commands.Cog):
         try:
             result = await asyncio.to_thread(self.multi.sync_daily)
             logger.info("api_sports_multi_initial_sync_complete result=%s", result)
+            history = await asyncio.to_thread(self.multi.sync_model_history)
+            logger.info("api_sports_multi_model_history_sync_complete result=%s", history)
         except Exception:
             await self.report_failure("api_sports_multi_initial_sync")

@@ -39,6 +39,7 @@ const CapperAnalyticsCharts = lazy(() => import('./CapperAnalyticsCharts'))
 const AllResultsPage = lazy(() => import('./AllResultsPage'))
 const NflPage = lazy(() => import('./NflPage'))
 const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
+const DataModelsPage = lazy(() => import('./DataModelsPage'))
 const SportsHomePreview = lazy(() => import('./SportsHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
 const MemberPublicPage = lazy(() => import('./MemberPublicPage'))
@@ -377,6 +378,8 @@ function Website() {
           </Suspense>
         ) : routePath === '/nfl/lab' ? (
           <Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense>
+        ) : routePath === '/models' ? (
+          <Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
             <SportPage slug={sportRouteSlug} results={results} loadState={loadState} />

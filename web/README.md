@@ -3,13 +3,22 @@
 ## NFL Matchup Lab
 
 Visit `/nfl/lab` from the Sports dropdown or NFL scores page. The lab reuses
-the existing public API-Sports NFL cache; no new provider calls, paid feed,
-prediction model or database migration are added. All RPC pages are fetched
-before deriving a team's same-season/same-stage completed-game record,
-home/away splits, last-five results, scoring averages and days between kickoffs.
-Only FT/AOT games strictly before the selected kickoff with both scores count.
-Source sync timestamps, sample sizes, empty data and failures are displayed.
-Historical views are not point-in-time backtests.
+the existing public API-Sports NFL cache for schedules and scores, and adds
+nflverse play-by-play team efficiency data. All RPC pages are fetched before
+deriving a team's same-season/same-stage completed-game record, home/away
+splits, last-five results, scoring averages and days between kickoffs. Only
+FT/AOT games strictly before the selected kickoff with both scores count.
+Offensive EPA/play and success rate, plus defensive EPA/success allowed, are
+aggregated over up to 10 prior regular-season games. Same-day games are excluded
+to avoid including results that may not have been available at kickoff; at least
+3 prior games are required. Source sync timestamps, sample sizes, empty data
+and failures are displayed. Historical views are not point-in-time backtests.
+
+Apply `supabase/migrations/20261011180000_nflverse_team_efficiency.sql` before
+deploying the efficiency panel. Install `nflreadpy` from `requirements.txt` and
+restart the bot; its regular NFL sync loads the current and prior seasons and
+upserts team-game metrics. The nflverse data is licensed CC-BY 4.0; the page
+links to nflreadpy/nflverse attribution.
 
 The calculator accepts manually entered American odds/stake and an optional
 user-estimated probability. It shows implied/break-even probability, payout,
@@ -19,6 +28,24 @@ calculator inputs/outputs; exported string formulas are neutralized for Excel.
 Injuries, weather, live prices and player projections are explicitly unavailable.
 Confirm API-Sports licensing allows this data's public display/download before
 production rollout. No live provider/licensing approval is claimed here.
+
+## Sports Data Models
+
+Visit `/models` for score-history baselines across NFL, NBA, MLB, NHL, NCAA
+football, and NCAA men's basketball. Apply
+`supabase/migrations/20261011170000_sports_model_history.sql` before deploying
+the page. The bot backfills the most recent completed and current season for
+each competition, follows provider pagination, and persists its cursor so
+interrupted history syncs resume on the next daily run. API request reservations
+continue through the shared API-Sports budget when it is enabled.
+
+The page derives projected scores from each team's 10 most recent completed
+scores and estimates win probability from the competition's historical
+score-margin distribution. It requires three prior scored games per team and
+30 competition games, displays source freshness and sample sizes, and shows no
+projection when those requirements are unmet. This baseline has no injury,
+lineup, home-advantage, weather, or sportsbook inputs and is not calibrated or
+validated as a betting model.
 
 ## Live Results Setup
 

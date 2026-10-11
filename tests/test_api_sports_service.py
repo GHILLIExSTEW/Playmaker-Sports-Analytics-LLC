@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from src.services.api_sports_service import normalize_game, normalize_standing, normalize_team, nfl_season_for_date
+from src.services.api_sports_service import ApiSportsService, normalize_game, normalize_standing, normalize_team, nfl_season_for_date
 
 
 def test_nfl_season_rolls_over_in_august():
@@ -64,3 +64,54 @@ def test_normalize_team_preserves_directory_fields():
     assert row["team_id"] == 10
     assert row["code"] == "HOM"
     assert row["stadium"]["name"] == "Example Stadium"
+
+
+def test_nfl_model_history_backfills_prior_and_current_season(monkeypatch):
+    calls = []
+    saved = {}
+    stored = []
+
+    def fake_get(_url, params, **_kwargs):
+        calls.append(params.copy())
+        season = params["season"]
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "errors": {},
+                    "response": [{
+                        "game": {
+                            "id": season, "date": {"date": f"{season}-10-01", "time": "12:00", "timestamp": 1790856000},
+                            "status": {"short": "FT", "long": "Finished"},
+                        },
+                        "league": {"id": 1, "season": season},
+                        "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Away"}},
+                        "scores": {"home": {"total": 20}, "away": {"total": 10}},
+                    }],
+                    "paging": {"current": 1, "total": 1},
+                }
+
+        return Response()
+
+    service = ApiSportsService(api_key="test-key", client=object(), get=fake_get,
+                               clock=lambda: datetime(2026, 10, 1, tzinfo=timezone.utc))
+    monkeypatch.setattr("src.services.api_sports_service.reserve_request", lambda _url: None)
+    monkeypatch.setattr(service, "_model_backfill_state", lambda season: saved.get(season))
+    monkeypatch.setattr(
+        service, "_save_model_backfill_state",
+        lambda season, page, total, complete: saved.update({
+            season: {"next_page": page, "total_pages": total, "complete": complete},
+        }),
+    )
+    monkeypatch.setattr(service, "_upsert", lambda _table, rows, _conflict: stored.extend(rows))
+
+    result = service.sync_model_history()
+
+    assert [call["season"] for call in calls] == [2025, 2026]
+    assert result["total_requests"] == 2
+    assert result["seasons"] == {"2025": {"pages": 1, "events": 1}, "2026": {"pages": 1, "events": 1}}
+    assert len(stored) == 2
+    assert all(saved[season]["complete"] for season in (2025, 2026))

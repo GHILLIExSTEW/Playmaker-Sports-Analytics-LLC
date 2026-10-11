@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from threading import Lock
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,20 @@ DATE_PRODUCT_PARAMS = {
 SEASON_PRODUCTS = {
     "formula-1": ("https://v1.formula-1.api-sports.io", "races"),
 }
+MODEL_COMPETITIONS = (
+    ("basketball", 12, "NBA"),
+    ("basketball", 8, "NCAA Men's Basketball"),
+    ("baseball", 1, "MLB"),
+    ("hockey", 57, "NHL"),
+    ("ncaa", 2, "NCAA Football"),
+)
+
+
+def model_history_seasons(sport_slug: str, today: date) -> tuple[str, str]:
+    if sport_slug in {"baseball", "ncaa"}:
+        return str(today.year - 1), str(today.year)
+    season_start = today.year if today.month >= 10 else today.year - 1
+    return f"{season_start - 1}-{season_start}", f"{season_start}-{season_start + 1}"
 
 
 def _status(value: Any) -> tuple[str, str]:
@@ -156,20 +171,13 @@ class ApiSportsMultiService:
         self.get = get or requests.get
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.request_count = 0
+        self._model_history_lock = Lock()
 
     def _client(self):
         return self.client or supabase_service._ensure_client()
 
     def _request(self, base_url: str, endpoint: str, params: dict, *, require_complete: bool = False) -> list[dict]:
-        if not self.api_key:
-            raise RuntimeError("API_SPORTS_KEY is not configured.")
-        reserve_request(base_url)
-        response = self.get(f"{base_url}/{endpoint}", params=params, headers={"x-apisports-key": self.api_key}, timeout=30)
-        self.request_count += 1
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("errors"):
-            raise RuntimeError(f"API-Sports {endpoint} failed: {payload['errors']}")
+        payload = self._request_payload(base_url, endpoint, params)
         if require_complete:
             paging = payload.get("paging")
             if paging is not None:
@@ -179,6 +187,38 @@ class ApiSportsMultiService:
         if not isinstance(rows, list):
             raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
         return rows
+
+    def _request_payload(self, base_url: str, endpoint: str, params: dict) -> dict:
+        if not self.api_key:
+            raise RuntimeError("API_SPORTS_KEY is not configured.")
+        reserve_request(base_url)
+        response = self.get(f"{base_url}/{endpoint}", params=params, headers={"x-apisports-key": self.api_key}, timeout=30)
+        self.request_count += 1
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
+        if payload.get("errors"):
+            raise RuntimeError(f"API-Sports {endpoint} failed: {payload['errors']}")
+        return payload
+
+    def _request_page(self, base_url: str, endpoint: str, params: dict) -> tuple[list[dict], int]:
+        payload = self._request_payload(base_url, endpoint, params)
+        rows = payload.get("response")
+        if not isinstance(rows, list):
+            raise RuntimeError(f"API-Sports {endpoint} returned an unexpected response.")
+        paging = payload.get("paging")
+        if paging is None:
+            if int(params.get("page", 1)) != 1:
+                raise RuntimeError(f"API-Sports {endpoint} omitted pagination metadata during a resumed backfill.")
+            return rows, 1
+        if (not isinstance(paging, dict) or type(paging.get("current")) is not int
+                or type(paging.get("total")) is not int or paging["current"] < 1
+                or (paging["total"] == 0 and paging["current"] != 1)
+                or (paging["total"] > 0 and paging["total"] < paging["current"])
+                or paging["current"] != int(params.get("page", 1))):
+            raise RuntimeError(f"API-Sports {endpoint} returned invalid pagination metadata.")
+        return rows, paging["total"]
 
     def _daily_complete(self, sport_slug: str, today: date) -> bool:
         rows = supabase_service._execute(
@@ -206,6 +246,62 @@ class ApiSportsMultiService:
                 lambda: self._client().table("api_sports_events")
                 .upsert(rows, on_conflict="sport_slug,event_id").execute()
             )
+
+    def _model_backfill_state(self, sport_slug: str, league_id: int, season: str) -> dict | None:
+        rows = supabase_service._execute(
+            lambda: self._client().table("api_sports_model_backfill_state")
+            .select("next_page,total_pages,complete")
+            .eq("sport_slug", sport_slug).eq("league_id", str(league_id)).eq("season", season)
+            .limit(1).execute()
+        ).data or []
+        return rows[0] if rows else None
+
+    def _save_model_backfill_state(
+        self, sport_slug: str, league_id: int, season: str, next_page: int, total_pages: int, complete: bool,
+    ) -> None:
+        supabase_service._execute(
+            lambda: self._client().table("api_sports_model_backfill_state").upsert({
+                "sport_slug": sport_slug, "league_id": str(league_id), "season": season,
+                "next_page": next_page, "total_pages": total_pages, "complete": complete,
+                "updated_at": self.clock().isoformat(),
+            }, on_conflict="sport_slug,league_id,season").execute()
+        )
+
+    def sync_model_history(self) -> dict:
+        with self._model_history_lock:
+            return self._sync_model_history()
+
+    def _sync_model_history(self) -> dict:
+        self.request_count = 0
+        today = self.clock().astimezone(TRACKER_TIMEZONE).date()
+        summary: dict[str, dict] = {}
+        for sport_slug, league_id, name in MODEL_COMPETITIONS:
+            base_url, endpoint = DATE_PRODUCTS[sport_slug]
+            seasons = model_history_seasons(sport_slug, today)
+            for season in seasons:
+                state = self._model_backfill_state(sport_slug, league_id, season)
+                if state and state.get("complete"):
+                    continue
+                page = int(state.get("next_page", 1)) if state else 1
+                total_pages = int(state.get("total_pages", 1)) if state else 1
+                first_page = page
+                event_count = 0
+                while page <= total_pages:
+                    rows, total_pages = self._request_page(
+                        base_url, endpoint, {"league": league_id, "season": season, "page": page},
+                    )
+                    synced_at = self.clock()
+                    normalized = [normalize_event(sport_slug, row, synced_at) for row in rows]
+                    self._store_events(normalized)
+                    event_count += len(normalized)
+                    page += 1
+                    self._save_model_backfill_state(
+                        sport_slug, league_id, season, page, total_pages, page > total_pages,
+                    )
+                    summary[f"{name}:{season}"] = {
+                        "pages": page - first_page, "events": event_count,
+                    }
+        return {"total_requests": self.request_count, "competitions": summary}
 
     def sync_daily(self, force: bool = False) -> dict:
         self.request_count = 0

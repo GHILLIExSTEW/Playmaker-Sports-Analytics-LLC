@@ -17,7 +17,7 @@ LOOP_NAMES = (
 def make_cog(enabled=True):
     return DataSync(
         Mock(is_ready=Mock(return_value=False), wait_until_ready=AsyncMock()),
-        nfl=Mock(), multi=Mock(), enabled=enabled, staff_alert=AsyncMock(),
+        nfl=Mock(), multi=Mock(), nflverse=Mock(), enabled=enabled, staff_alert=AsyncMock(),
     )
 
 
@@ -154,6 +154,11 @@ def test_daily_and_initial_jobs_call_existing_services(job, service):
     coroutine = method.coro(cog) if job.startswith("daily") else method()
     asyncio.run(coroutine)
     getattr(cog, service).sync_daily.assert_called_once_with()
+    getattr(cog, service).sync_model_history.assert_called_once_with()
+    if service == "nfl":
+        cog.nflverse.sync_team_game_efficiency.assert_called_once_with()
+    else:
+        cog.nflverse.sync_team_game_efficiency.assert_not_called()
     other = cog.multi if service == "nfl" else cog.nfl
     other.sync_daily.assert_not_called()
     cog.staff_alert.assert_not_awaited()
@@ -206,6 +211,21 @@ def test_job_failures_log_and_alert_without_success(caplog, job, service, method
     assert f"{key}_failed" in caplog.text
     assert "provider unavailable" in caplog.text
     assert "_complete" not in caplog.text
+
+
+@pytest.mark.parametrize("job", ["daily_nfl_data_sync", "initial_nfl_data_sync"])
+def test_nflverse_sync_failure_is_logged_and_alerted(caplog, job):
+    cog = make_cog()
+    cog.nflverse.sync_team_game_efficiency.side_effect = RuntimeError("nflverse unavailable")
+    callback = getattr(cog, job)
+    coroutine = callback() if job.startswith("initial") else callback.coro(cog)
+
+    asyncio.run(coroutine)
+
+    cog.nflverse.sync_team_game_efficiency.assert_called_once_with()
+    cog.staff_alert.assert_awaited_once()
+    assert "nflverse unavailable" in caplog.text
+    assert "_failed" in caplog.text
 
 
 def test_staff_alert_failure_is_logged_without_killing_scheduler(caplog):
