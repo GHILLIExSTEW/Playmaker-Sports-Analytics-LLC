@@ -8,7 +8,7 @@ create table if not exists public.operator_user_guide_content (
 alter table public.operator_user_guide_content enable row level security;
 revoke all on table public.operator_user_guide_content from public, anon, authenticated;
 
-insert into public.operator_user_guide_content (id, html) values (true, '
+insert into public.operator_user_guide_content (id, html) values (true, $playmaker_guide$
   <header>
     <h1>Playmaker Picks</h1>
     <p>Discord, website, research tools and API usage<br>Updated October 11, 2026</p>
@@ -25,8 +25,8 @@ insert into public.operator_user_guide_content (id, html) values (true, '
   </section>
 
   <section><h2><span>📷</span>Recording a play from an image</h2>
-    <p>OPERATOR/tracker authors post a betting-slip image in the configured image-input channel (IMAGE_INPUT_CHANNEL_ID). No command is needed. Open the bot''s review controls, check selections, odds and units, and use <b>Edit bet</b> or <b>Enter units</b> if needed. Press <b>Confirm and record</b> only after checking the extracted data.</p>
-    <div class="callout">The normal confirmed flow replaces the upload with a tracked play message containing your slip and Tail controls; react on that message, not a deleted upload or review prompt. A play copy goes to the confirmation channel. If reposting fails, the original upload may remain the tracked message; verify the bot''s confirmation.</div>
+    <p>OPERATOR/tracker authors post a betting-slip image in the configured image-input channel (IMAGE_INPUT_CHANNEL_ID). No command is needed. Open the bot's review controls, check selections, odds and units, and use <b>Edit bet</b> or <b>Enter units</b> if needed. Press <b>Confirm and record</b> only after checking the extracted data.</p>
+    <div class="callout">The normal confirmed flow replaces the upload with a tracked play message containing your slip and Tail controls; react on that message, not a deleted upload or review prompt. A play copy goes to the confirmation channel. If reposting fails, the original upload may remain the tracked message; verify the bot's confirmation.</div>
   </section>
 
   <section><h2><span>✍️</span>Recording a play manually</h2>
@@ -35,7 +35,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
   </section>
 
   <section><h2><span>✅</span>Settling a play with reactions</h2>
-    <p>React directly on the tracked play message in a configured settlement channel (official or confirmation). The play owner or Discord Owner can settle by reaction; an OPERATOR role alone does not authorize settling another author''s play. Officials can use the /settle picker. Reactions on unrelated messages/channels are ignored.</p>
+    <p>React directly on the tracked play message in a configured settlement channel (official or confirmation). The play owner or Discord Owner can settle by reaction; an OPERATOR role alone does not authorize settling another author's play. Officials can use the /settle picker. Reactions on unrelated messages/channels are ignored.</p>
     <table>
       <thead><tr><th>Icon</th><th>Result</th><th>What happens</th></tr></thead>
       <tbody>
@@ -55,8 +55,8 @@ insert into public.operator_user_guide_content (id, html) values (true, '
         <tr><td><code>/rankings</code></td><td>Posts the current team ranking summary.</td></tr>
         <tr><td><code>/summary</code></td><td>Posts the current team summary and Top Playmakers. Use the configured team-stats channel, as with /rankings.</td></tr>
         <tr><td><code>/play_results</code></td><td>Search published settled official plays by Eastern date range, sport, capper and grade. Browse ten per page. Current OPERATOR authors only; original-post links appear when accessible.</td></tr>
-        <tr><td><code>/mystats</code></td><td>Privately shows official-play, Tail and Vault records. Use its share button to publish to the eligible Free or VIP Chat destination. Tail stats use the capper''s risk units, not your personal stake.</td></tr>
-        <tr><td><code>/vault_leaderboard</code></td><td>Shows this month''s member Vault records. Vault results are separate from the official capper ledger.</td></tr>
+        <tr><td><code>/mystats</code></td><td>Privately shows official-play, Tail and Vault records. Use its share button to publish to the eligible Free or VIP Chat destination. Tail stats use the capper's risk units, not your personal stake.</td></tr>
+        <tr><td><code>/vault_leaderboard</code></td><td>Shows this month's member Vault records. Vault results are separate from the official capper ledger.</td></tr>
         <tr><td><code>/tracker_start date_value:show</code></td><td>Shows the date the tracker is currently counting from.</td></tr>
       </tbody>
     </table>
@@ -66,7 +66,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>/settle</code></td><td>Opens a paginated list of open official plays. Select a play, then choose its result. Use this for partials or when the tracked message cannot be reacted to. The card''s Play # identifies the record.</td></tr>
+        <tr><td><code>/settle</code></td><td>Opens a paginated list of open official plays. Select a play, then choose its result. Use this for partials or when the tracked message cannot be reacted to. The card's Play # identifies the record.</td></tr>
         <tr><td><code>/regrade</code></td><td>Select a play from the last two days, then enter remaining legs, new American odds and an optional note. Regraded plays count as zero units.</td></tr>
         <tr><td><code>/unsettle</code></td><td>Select a play settled in the last seven days to reopen an accidental or incorrect settlement. Confirm before applying it.</td></tr>
         <tr><td><code>/edit_play</code></td><td>Select an open official play and edit units, team, selections and leg odds in a modal. Ownership and role checks still apply.</td></tr>
@@ -102,8 +102,8 @@ insert into public.operator_user_guide_content (id, html) values (true, '
   </section>
 
   <section><h2><span>📈</span>Website Data Models: six competitions</h2>
-    <p>Open <code>/models</code> with verified OPERATOR/Owner access. Choose NFL, NBA, MLB, NHL, NCAA Football or NCAA Men''s Basketball, then choose an upcoming matchup. The NFL Lab link appears only under the NFL tab.</p>
-    <p>Projected scores blend each team''s recent scoring with the opponent''s points allowed, using up to ten prior scored games per team. Estimated win probability uses up to 1,000 prior league score margins. At least three games per team, 30 league games and nonzero margin variation are required. Games at or after the selected start, unfinished games and missing scores are excluded. Otherwise the page explains that no projection is available.</p>
+    <p>Open <code>/models</code> with verified OPERATOR/Owner access. Choose NFL, NBA, MLB, NHL, NCAA Football or NCAA Men's Basketball, then choose an upcoming matchup. The NFL Lab link appears only under the NFL tab.</p>
+    <p>Projected scores blend each team's recent scoring with the opponent's points allowed, using up to ten prior scored games per team. Estimated win probability uses up to 1,000 prior league score margins. At least three games per team, 30 league games and nonzero margin variation are required. Games at or after the selected start, unfinished games and missing scores are excluded. Otherwise the page explains that no projection is available.</p>
     <p>Unresolved provider teams are excluded with a count. Duplicate fixtures are merged across provider IDs/seasons by teams and exact start time so selections and history count the matchup once. Scored finals take precedence over duplicate schedule rows; fresher data is preferred.</p>
     <div class="callout">These are experimental score-only baselines. They do not adjust for injuries, lineups, home advantage, weather, prices or EPA. They are not calibrated betting recommendations or point-in-time historical backtests. Read sample sizes and source update times.</div>
   </section>
@@ -113,7 +113,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
     <ol>
       <li>Choose one of the six model leagues from the dropdown.</li>
       <li>In the modal, enter a game date as YYYY-MM-DD in Eastern time and an optional team filter.</li>
-      <li>The bot refreshes the selected league''s current and prior seasons from API-Sports, follows all reported pages and saves the refreshed games. This spends shared API allowance.</li>
+      <li>The bot refreshes the selected league's current and prior seasons from API-Sports, follows all reported pages and saves the refreshed games. This spends shared API allowance.</li>
       <li>Choose a game from the paginated dropdown; use Previous/Next for more than 25 choices.</li>
       <li>Type POST in the confirmation modal. The finished model is posted publicly in Laboratory; the picker remains private.</li>
     </ol>
@@ -130,31 +130,31 @@ insert into public.operator_user_guide_content (id, html) values (true, '
       <tr><td>/playerstats sport: league: player:</td><td>Current/previous season player or driver reports; choose the league and name suggestions.</td></tr>
     </tbody></table>
     <p>These commands reply privately and require verified paid/trial access or allowed staff access. Available sports, players and endpoints vary. Without refresh:true they use cached data only and show update times. With refresh:true, live calls require enabled refresh/budget settings and consume your member allowance; player/season lookups may need multiple calls. Previous-season player data can be reused from cache.</p>
-    <p>For /schedule, /results, /teamstats and /matchup, refresh:true updates today''s UTC-date feed only; other dates stay cached. For /gamestats it refreshes the selected game''s player snapshot; /playerstats uses current/previous-season scope. Neither refresh mode expands provider subscription coverage.</p>
+    <p>For /schedule, /results, /teamstats and /matchup, refresh:true updates today's UTC-date feed only; other dates stay cached. For /gamestats it refreshes the selected game's player snapshot; /playerstats uses current/previous-season scope. Neither refresh mode expands provider subscription coverage.</p>
   </section>
 
   <section><h2><span>🔌</span>API reference for website and bot integrations</h2>
-    <p>Website requests go to the configured Supabase project at <code>/rest/v1/rpc/FUNCTION_NAME</code>. Use the public publishable/anon key for the project and the signed-in user''s access token for protected RPCs, never a service-role key. Functions with “public” in their names can still require team authorization.</p>
+    <p>Website requests go to the configured Supabase project at <code>/rest/v1/rpc/FUNCTION_NAME</code>. Use the public publishable/anon key for the project and the signed-in user's access token for protected RPCs, never a service-role key. Functions with “public” in their names can still require team authorization.</p>
     <table><thead><tr><th>Supabase RPC</th><th>Access and request body</th></tr></thead><tbody>
       <tr><td>public_settled_results</td><td>Public settled official ledger. No arguments: {}.</td></tr>
       <tr><td>public_nfl_games / public_nfl_standings / public_nfl_data_status</td><td>Public NFL schedule, standings and freshness. No arguments: {}.</td></tr>
-      <tr><td>website_member_access</td><td>Signed-in account''s verified membership/team access. No arguments: {}. This is an access check, not a role-grant endpoint.</td></tr>
+      <tr><td>website_member_access</td><td>Signed-in account's verified membership/team access. No arguments: {}. This is an access check, not a role-grant endpoint.</td></tr>
       <tr><td>member_current_picks</td><td>Verified member/team access; published open picks only. No arguments: {}.</td></tr>
       <tr><td>public_nfl_model_games / public_nfl_team_efficiency</td><td>Verified OPERATOR/Owner research. No arguments: {}.</td></tr>
       <tr><td>public_sport_model_events</td><td>Verified OPERATOR/Owner research. Example NBA body: {"p_sport_slug":"basketball","p_league_id":"12"}.</td></tr>
       <tr><td>operator_user_guide</td><td>Verified OPERATOR/Owner guide content. No arguments: {}. Returns HTML text; the underlying content table is not accessible to browser accounts.</td></tr>
     </tbody></table>
     <p>With the existing authenticated Supabase JavaScript client, an NBA model-history page is requested as:</p>
-    <p><code>supabase.rpc(''public_sport_model_events'', { p_sport_slug: ''basketball'', p_league_id: ''12'' }).order(''start_at'').order(''event_id'').range(0, 999)</code></p>
+    <p><code>supabase.rpc('public_sport_model_events', { p_sport_slug: 'basketball', p_league_id: '12' }).order('start_at').order('event_id').range(0, 999)</code></p>
     <p>Check the returned error before using data. Fetch successive 1,000-row ranges until a raw page contains fewer than 1,000 rows; filtering unresolved teams must not determine whether another provider-history page exists.</p>
     <table><thead><tr><th>Model competition</th><th>Server-side API-Sports GET request</th></tr></thead><tbody>
       <tr><td>NFL / NCAA Football</td><td>https://v1.american-football.api-sports.io/games · league=1 for NFL, league=2 for NCAA · season=YYYY.</td></tr>
-      <tr><td>NBA / NCAA Men''s Basketball</td><td>https://v1.basketball.api-sports.io/games · league=12 for NBA, league=8 for NCAA · season=YYYY-YYYY.</td></tr>
+      <tr><td>NBA / NCAA Men's Basketball</td><td>https://v1.basketball.api-sports.io/games · league=12 for NBA, league=8 for NCAA · season=YYYY-YYYY.</td></tr>
       <tr><td>MLB</td><td>https://v1.baseball.api-sports.io/games · league=1 · season=YYYY.</td></tr>
       <tr><td>NHL</td><td>https://v1.hockey.api-sports.io/games · league=57 · season=starting year.</td></tr>
     </tbody></table>
     <p>Bot requests authenticate with the server-only x-apisports-key header. Initial season calls omit page; subsequent calls add page only when paging is reported. Owner /api also uses leagues and teams directory endpoints, teams/statistics where supported, and per-game statistics endpoints. NFL/NCAA/basketball team detail uses games/statistics/teams?id=GAME_ID; NFL/NCAA player detail uses games/statistics/players?id=GAME_ID. Soccer uses fixtures and fixture-scoped statistics instead of games.</p>
-    <div class="callout">Use /model, /api or the enabled member refresh commands for normal operations. Ad-hoc direct provider calls bypass this application''s reservation accounting and still consume provider quota. Do not expose the provider key in browser code. Confirm provider licensing for public display and downloads before rollout.</div>
+    <div class="callout">Use /model, /api or the enabled member refresh commands for normal operations. Ad-hoc direct provider calls bypass this application's reservation accounting and still consume provider quota. Do not expose the provider key in browser code. Confirm provider licensing for public display and downloads before rollout.</div>
   </section>
 
   <section><h2><span>🔑</span>Owner /api: refresh a team season cache</h2>
@@ -172,7 +172,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
       <tr><td>Shared provider ceiling</td><td>7,500 reserved API-Sports requests per UTC day across all products and system/member usage. Existing usage counts. Bot restart does not reset it. Other apps using the same provider key are not counted by this bot.</td></tr>
       <tr><td>nflverse NFL efficiency</td><td>Separate free nflreadpy/nflverse feed, not API-Sports quota. Bot synchronization updates the stored efficiency panels; feed availability still matters.</td></tr>
     </tbody></table>
-    <p>API-Sports calls reserve allowance before network access, so failed calls can still consume a reservation. The provider''s own quota and subscription rules also apply. Daily budget resets at midnight UTC (8 PM Eastern during daylight time; 7 PM during standard time). Manual refresh does not guarantee that the source has newer data.</p>
+    <p>API-Sports calls reserve allowance before network access, so failed calls can still consume a reservation. The provider's own quota and subscription rules also apply. Daily budget resets at midnight UTC (8 PM Eastern during daylight time; 7 PM during standard time). Manual refresh does not guarantee that the source has newer data.</p>
     <p>Automated history backfill resumes saved cursors; routine NFL and multi-sport syncs maintain caches. NFL score checks occur every 15 minutes only during cached game windows. Do not interpret every page load or command as a live provider poll.</p>
   </section>
 
@@ -180,7 +180,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
     <p>Keep API keys and the Supabase service-role key on the bot server only, never in website VITE variables. Configure GUILD_ID, the required role/channel settings, API_SPORTS_KEY and API_SPORTS_BUDGET_ENABLED=true. MEMBER_STATS_REFRESH_ENABLED controls member on-demand refresh, not /model.</p>
     <p>On the Linux bot host:</p>
     <p><code>cd /opt/discord-bot</code><br><code>git pull</code><br><code>./.venv/bin/python3 -m pip install -r requirements.txt</code><br><code>systemctl restart discord-bot.service</code><br><code>journalctl -u discord-bot.service --since "2 minutes ago" --no-pager</code></p>
-    <p>Install dependencies only when requirements change or packages are missing, and always into the service''s virtual environment. Use -r for requirements.txt; python3 is the server executable. nflreadpy&gt;=0.1.5 is the supported minimum in the requirements.</p>
+    <p>Install dependencies only when requirements change or packages are missing, and always into the service's virtual environment. Use -r for requirements.txt; python3 is the server executable. nflreadpy&gt;=0.1.5 is the supported minimum in the requirements.</p>
     <p>In Supabase SQL Editor, apply the relevant migrations in order after their prerequisites: 20261011170000_sports_model_history.sql, 20261011180000_nflverse_team_efficiency.sql, 20261011193500_shared_api_daily_budget.sql and 20261011214000_operator_research_access.sql. Pulling Git does not execute SQL. Deploy the website separately; a bot restart does not publish frontend fixes.</p>
     <p>For the protected website guide, apply 20261011230000_operator_user_guide.sql after the research-access migration. Its table stores this guide privately and its RPC checks current OPERATOR/Owner access. Deploy the frontend to expose /guide; no bot restart is needed for this page.</p>
     <p>After restart, check the command-sync log for /model. Verify a live refresh in Laboratory and the website with a real eligible account. Automated tests do not prove production provider coverage, purchases or Discord role mappings.</p>
@@ -209,7 +209,7 @@ insert into public.operator_user_guide_content (id, html) values (true, '
   </section>
 
   <footer>Key settings: GUILD_ID · OFFICIAL_CHANNEL_ID · IMAGE_INPUT_CHANNEL_ID · CONFIRMATION_CHANNEL_ID · MEMBER_BET_CHANNEL_ID · API_SPORTS_KEY · API_SPORTS_BUDGET_ENABLED · MEMBER_STATS_REFRESH_ENABLED · TRACKER_START_DATE<br>nflverse data attribution: <a href="https://nflverse.nflverse.com/">nflverse</a> / <a href="https://nflreadpy.nflverse.com/">nflreadpy</a>, CC-BY 4.0.</footer>
-')
+$playmaker_guide$)
 on conflict (id) do update set html = excluded.html;
 
 create or replace function public.operator_user_guide()

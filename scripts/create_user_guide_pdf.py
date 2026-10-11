@@ -216,7 +216,10 @@ def build_pdf() -> None:
     doc.build(story, onFirstPage=page_number, onLaterPages=page_number)
     copyfile(OUTPUT, DOCS_OUTPUT)
     guide_html = SOURCE.read_text(encoding="utf-8").split("<main>", 1)[1].split("</main>", 1)[0]
-    sql_literal = "'" + guide_html.replace("'", "''") + "'"
+    delimiter = "$playmaker_guide$"
+    if delimiter in guide_html:
+        raise ValueError("Guide HTML contains its SQL dollar-quote delimiter.")
+    sql_literal = delimiter + guide_html + delimiter
     GUIDE_MIGRATION.write_text(
         "-- Generated from Playmaker_Picks_User_Guide.html by scripts/create_user_guide_pdf.py.\n"
         "begin;\n\n"
