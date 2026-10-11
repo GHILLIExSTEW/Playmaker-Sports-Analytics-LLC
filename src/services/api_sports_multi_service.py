@@ -44,6 +44,8 @@ def model_history_seasons(sport_slug: str, today: date) -> tuple[str, str]:
     if sport_slug in {"baseball", "ncaa"}:
         return str(today.year - 1), str(today.year)
     season_start = today.year if today.month >= 10 else today.year - 1
+    if sport_slug == "hockey":
+        return str(season_start - 1), str(season_start)
     return f"{season_start - 1}-{season_start}", f"{season_start}-{season_start + 1}"
 
 

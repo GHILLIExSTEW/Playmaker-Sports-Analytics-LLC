@@ -2,6 +2,16 @@
 
 ## NFL Matchup Lab
 
+NFL Matchup Lab (`/nfl/lab`) and Data Models (`/models`) require verified
+OPERATOR or Owner access. Paid/trial membership alone is insufficient.
+Apply `supabase/migrations/20261011214000_operator_research_access.sql`
+after the model-history and nflverse migrations, and deploy the frontend.
+Research RPCs enforce the same role check server-side, using the existing
+fresh bot-verified Discord roster and account verification checks. Scores
+and schedules remain public.
+Research navigation links are labeled team-only; they lead to the role check
+rather than granting access. Signing in alone does not grant research access.
+
 Visit `/nfl/lab` from the Sports dropdown or NFL scores page. The lab reuses
 the existing public API-Sports NFL cache for schedules and scores, and adds
 nflverse play-by-play team efficiency data. All RPC pages are fetched before
@@ -40,7 +50,9 @@ each competition, follows provider pagination, and persists its cursor so
 interrupted history syncs resume on the next daily run. API request reservations
 continue through the shared API-Sports budget when it is enabled.
 Initial season requests omit `page` for endpoints that do not accept it;
-additional pages are requested only when the provider reports them. The default
+additional pages are requested only when the provider reports them. NHL history
+uses the integer starting year (e.g. `2025` for 2025–26), while basketball uses
+split-year seasons. The default
 database budget originally allowed 80 automated calls per product per UTC day.
 Apply `supabase/migrations/20261011193500_shared_api_daily_budget.sql` to replace
 that automated cap with a shared 7,500-call ceiling across all API-Sports

@@ -12,7 +12,7 @@ const features = [
   { name: 'Personalized sports & capper follows', values: ['Included', 'Included'] },
   { name: 'Weekly recap', values: ['Included', 'Included'] },
   { name: 'Member analysis & Discord community', values: ['7 days of HIGHROLLER access', '30 days of HIGHROLLER access'] },
-  { name: 'Interactive cached stats tools', values: ['Matchups, recent form, schedules, results; pending live validation', 'Matchups, recent form, schedules, results; pending live validation'] },
+  { name: 'Interactive cached stats tools', values: ['Schedules and results; pending live validation. NFL Matchup Lab and Data Models are team-only and not included.', 'Schedules and results; pending live validation. NFL Matchup Lab and Data Models are team-only and not included.'] },
   { name: 'Player & driver stats', values: ['Cached current/previous season reports and optional game detail where supported; pending deployment', 'Cached current/previous season reports and optional game detail where supported; pending deployment'] },
   { name: 'On-demand refresh', values: ['When activated: same 5 API requests per person/day and shared quota/cooldown as paid members; currently disabled', 'When activated: 5 API requests per person/day; season lookups may use multiple requests. Shared quota and cooldown; currently disabled'] },
   { name: 'Member Bet Vault submissions', values: ['Verified eligible trial access required; pending launch validation', 'Verified paid access required; pending launch validation'] },

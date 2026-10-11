@@ -43,7 +43,7 @@ async function mockSupabase(page: Page, games: ModelEvent[]) {
       modelRequests.push({ sport: body.p_sport_slug, league: body.p_league_id })
       await route.fulfill({ json: [] })
     } else if (rpc === 'website_member_access') {
-      await route.fulfill({ json: { state: 'signed-out' } })
+      await route.fulfill({ json: { state: 'active', kind: 'operator', expires_at: null } })
     } else {
       await route.fulfill({ json: [] })
     }

@@ -7,7 +7,7 @@ import { BrowserRouter, Link, useLocation } from 'react-router-dom'
 import { getCapperAvatarUrl } from './capperAvatars'
 import { capperSlug } from './capperIdentity'
 import { headingFonts, type CapperTheme, type CapperSection } from './capperAppearance'
-import { MemberAccessProvider } from './MemberAccess'
+import { MemberAccessProvider, OperatorResearchAccess } from './MemberAccess'
 import { supabase } from './supabaseClient'
 import { sportsCatalog } from './sportsCatalog'
 import SportsDropdown from './SportsDropdown'
@@ -377,9 +377,9 @@ function Website() {
             <CurrentPicksFeed />
           </Suspense>
         ) : routePath === '/nfl/lab' ? (
-          <Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense>
+          <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense></OperatorResearchAccess>
         ) : routePath === '/models' ? (
-          <Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense>
+          <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense></OperatorResearchAccess>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
             <SportPage slug={sportRouteSlug} results={results} loadState={loadState} />

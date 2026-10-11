@@ -80,3 +80,16 @@ export function MemberAccessNotice() {
     case 'active': return <p className="account-state">{access.kind === 'operator' ? 'HIGHROLLER team access — complimentary, with no scheduled expiry while you hold the OPERATOR role' : `HIGHROLLER ${access.kind === 'owner' ? 'owner access' : access.kind === 'trial' ? 'trial access' : 'paid access'}`}{access.expires_at ? ` through ${new Date(access.expires_at).toLocaleString()}` : ''}. <Link to="/picks">Browse current picks</Link>.</p>
   }
 }
+
+export function OperatorResearchAccess({ children }: { children: ReactNode }) {
+  const { access, error, refresh } = useMemberAccess()
+  if (error) return <main className="account-state"><p role="alert">{error}</p><button className="account-secondary-button" onClick={refresh}>Retry access check</button></main>
+  if (!access) return <main className="account-state"><p role="status">Checking research access...</p></main>
+  if (access.state === 'active' && (access.kind === 'operator' || access.kind === 'owner')) return children
+  return <main className="account-state">
+    <h1>Team research access required.</h1>
+    <p>Sports insights and Data Models are restricted to verified Discord OPERATOR or Owner roles. Paid and trial membership do not include these tools.</p>
+    <Link to="/account">Sign in with Discord or verify your account</Link>
+    <button className="account-secondary-button" onClick={refresh}>Retry access check</button>
+  </main>
+}

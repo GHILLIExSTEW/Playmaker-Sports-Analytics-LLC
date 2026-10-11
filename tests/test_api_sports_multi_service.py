@@ -196,7 +196,30 @@ def test_model_competitions_and_season_boundaries():
     assert model_history_seasons("baseball", date(2026, 10, 1)) == ("2025", "2026")
     assert model_history_seasons("ncaa", date(2026, 10, 1)) == ("2025", "2026")
     assert model_history_seasons("basketball", date(2026, 10, 1)) == ("2025-2026", "2026-2027")
-    assert model_history_seasons("hockey", date(2026, 3, 1)) == ("2024-2025", "2025-2026")
+    assert model_history_seasons("hockey", date(2026, 3, 1)) == ("2024", "2025")
+    assert model_history_seasons("hockey", date(2026, 10, 1)) == ("2025", "2026")
+
+
+def test_hockey_history_requests_integer_seasons_and_ignores_old_split_year_cursor(monkeypatch, synced_at):
+    calls = []
+    saved = []
+    service = ApiSportsMultiService(
+        api_key="test-key", client=FakeSupabase(), clock=lambda: synced_at,
+        get=lambda url, params, **_kwargs: calls.append((url, params.copy())) or FakeApiResponse(),
+    )
+    monkeypatch.setattr("src.services.api_sports_multi_service.MODEL_COMPETITIONS", (("hockey", 57, "NHL"),))
+    monkeypatch.setattr(service, "_model_backfill_state", lambda sport, league, season:
+                        {"next_page": 2, "total_pages": 2, "complete": True} if season == "2025-2026" else None)
+    monkeypatch.setattr(service, "_save_model_backfill_state", lambda *args: saved.append(args))
+
+    result = service.sync_model_history()
+
+    assert calls == [
+        ("https://v1.hockey.api-sports.io/games", {"league": 57, "season": "2025"}),
+        ("https://v1.hockey.api-sports.io/games", {"league": 57, "season": "2026"}),
+    ]
+    assert [args[2] for args in saved] == ["2025", "2026"]
+    assert result["total_requests"] == 2
 
 
 def test_model_history_backfill_paginates_and_persists_completion(monkeypatch, synced_at):

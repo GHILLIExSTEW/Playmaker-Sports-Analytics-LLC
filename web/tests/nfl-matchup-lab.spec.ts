@@ -45,7 +45,7 @@ async function mock(page: Page, fail = false) {
       status: fail ? 503 : 200, json: fail ? { message: 'Cache unavailable' } : dataset,
     })
     else if (rpc === 'public_nfl_team_efficiency') await route.fulfill({ json: efficiencyRows })
-    else if (rpc === 'website_member_access') await route.fulfill({ json: { state: 'signed-out' } })
+    else if (rpc === 'website_member_access') await route.fulfill({ json: { state: 'active', kind: 'operator', expires_at: null } })
     else await route.fulfill({ json: [] })
   })
 }
