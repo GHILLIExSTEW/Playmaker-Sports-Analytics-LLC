@@ -210,7 +210,9 @@ def test_job_failures_log_and_alert_without_success(caplog, job, service, method
     assert cog.staff_alert.call_args.args[0] == key
     assert f"{key}_failed" in caplog.text
     assert "provider unavailable" in caplog.text
-    assert "_complete" not in caplog.text
+    assert f"{key}_complete" not in caplog.text
+    if service == "nfl" and job in {"daily_nfl_data_sync", "initial_nfl_data_sync"}:
+        cog.nflverse.sync_team_game_efficiency.assert_called_once_with()
 
 
 @pytest.mark.parametrize("job", ["daily_nfl_data_sync", "initial_nfl_data_sync"])
@@ -224,6 +226,7 @@ def test_nflverse_sync_failure_is_logged_and_alerted(caplog, job):
 
     cog.nflverse.sync_team_game_efficiency.assert_called_once_with()
     cog.staff_alert.assert_awaited_once()
+    assert cog.staff_alert.call_args.args[0] == "nflverse_team_game_efficiency_sync"
     assert "nflverse unavailable" in caplog.text
     assert "_failed" in caplog.text
 

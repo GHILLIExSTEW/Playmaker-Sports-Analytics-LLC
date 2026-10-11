@@ -75,10 +75,16 @@ class DataSync(commands.Cog):
             logger.info("api_sports_daily_sync_complete result=%s", result)
             history = await asyncio.to_thread(self.nfl.sync_model_history)
             logger.info("api_sports_nfl_model_history_sync_complete result=%s", history)
+        except Exception:
+            await self.report_failure("api_sports_daily_sync")
+        await self.sync_nflverse_efficiency()
+
+    async def sync_nflverse_efficiency(self) -> None:
+        try:
             efficiency = await asyncio.to_thread(self.nflverse.sync_team_game_efficiency)
             logger.info("nflverse_team_game_efficiency_sync_complete result=%s", efficiency)
         except Exception:
-            await self.report_failure("api_sports_daily_sync")
+            await self.report_failure("nflverse_team_game_efficiency_sync")
 
     @tasks.loop(minutes=15)
     async def live_nfl_score_sync(self) -> None:
@@ -124,10 +130,9 @@ class DataSync(commands.Cog):
             logger.info("api_sports_initial_sync_complete result=%s", result)
             history = await asyncio.to_thread(self.nfl.sync_model_history)
             logger.info("api_sports_nfl_model_history_sync_complete result=%s", history)
-            efficiency = await asyncio.to_thread(self.nflverse.sync_team_game_efficiency)
-            logger.info("nflverse_team_game_efficiency_sync_complete result=%s", efficiency)
         except Exception:
             await self.report_failure("api_sports_initial_sync")
+        await self.sync_nflverse_efficiency()
 
     async def initial_multi_sport_api_sync(self) -> None:
         try:

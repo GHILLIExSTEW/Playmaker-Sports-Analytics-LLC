@@ -17,7 +17,8 @@ and failures are displayed. Historical views are not point-in-time backtests.
 Apply `supabase/migrations/20261011180000_nflverse_team_efficiency.sql` before
 deploying the efficiency panel. Install `nflreadpy` from `requirements.txt` and
 restart the bot; its regular NFL sync loads the current and prior seasons and
-upserts team-game metrics. The nflverse data is licensed CC-BY 4.0; the page
+upserts team-game metrics independently of API-Sports sync success or quota.
+The nflverse data is licensed CC-BY 4.0; the page
 links to nflreadpy/nflverse attribution.
 
 The calculator accepts manually entered American odds/stake and an optional
@@ -38,6 +39,10 @@ the page. The bot backfills the most recent completed and current season for
 each competition, follows provider pagination, and persists its cursor so
 interrupted history syncs resume on the next daily run. API request reservations
 continue through the shared API-Sports budget when it is enabled.
+Initial season requests omit `page` for endpoints that do not accept it;
+additional pages are requested only when the provider reports them. The default
+database budget allows 80 automated calls per product per UTC day, independently
+of the provider plan's quota. Restarting the bot does not reset that budget.
 
 The page derives projected scores from each team's 10 most recent completed
 scores and estimates win probability from the competition's historical

@@ -72,6 +72,7 @@ def test_nfl_model_history_backfills_prior_and_current_season(monkeypatch):
     stored = []
 
     def fake_get(_url, params, **_kwargs):
+        assert "page" not in params, "The NFL games endpoint rejects the page parameter."
         calls.append(params.copy())
         season = params["season"]
 
@@ -91,7 +92,6 @@ def test_nfl_model_history_backfills_prior_and_current_season(monkeypatch):
                         "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Away"}},
                         "scores": {"home": {"total": 20}, "away": {"total": 10}},
                     }],
-                    "paging": {"current": 1, "total": 1},
                 }
 
         return Response()

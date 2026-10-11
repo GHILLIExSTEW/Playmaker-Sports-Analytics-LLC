@@ -287,8 +287,11 @@ class ApiSportsMultiService:
                 first_page = page
                 event_count = 0
                 while page <= total_pages:
+                    params = {"league": league_id, "season": season}
+                    if page > 1:
+                        params["page"] = page
                     rows, total_pages = self._request_page(
-                        base_url, endpoint, {"league": league_id, "season": season, "page": page},
+                        base_url, endpoint, params,
                     )
                     synced_at = self.clock()
                     normalized = [normalize_event(sport_slug, row, synced_at) for row in rows]

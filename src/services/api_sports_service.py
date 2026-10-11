@@ -207,8 +207,11 @@ class ApiSportsService:
             event_count = 0
             first_page = page
             while page <= total_pages:
+                params = {"league": NFL_LEAGUE_ID, "season": season}
+                if page > 1:
+                    params["page"] = page
                 rows, total_pages = self._request_page(
-                    "games", {"league": NFL_LEAGUE_ID, "season": season, "page": page},
+                    "games", params,
                 )
                 synced_at = self.clock()
                 self._upsert("api_sports_nfl_games", [normalize_game(row, synced_at) for row in rows], "game_id")

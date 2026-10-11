@@ -206,7 +206,7 @@ def test_model_history_backfill_paginates_and_persists_completion(monkeypatch, s
 
     def fake_get(_url, params, **_kwargs):
         calls.append(params.copy())
-        page = params["page"]
+        page = params.get("page", 1)
         event = {
             "id": 100 + page, "date": f"2026-10-0{page}T12:00:00+00:00",
             "league": {"id": 12, "name": "NBA", "season": "2026-2027"},
@@ -239,7 +239,8 @@ def test_model_history_backfill_paginates_and_persists_completion(monkeypatch, s
     first = service.sync_model_history()
     second = service.sync_model_history()
 
-    assert [call["page"] for call in calls] == [1, 2]
+    assert [call.get("page", 1) for call in calls] == [1, 2]
+    assert "page" not in calls[0]
     assert all(call["league"] == 12 and call["season"] == "2026-2027" for call in calls)
     assert first["total_requests"] == 2
     assert first["competitions"]["NBA:2026-2027"] == {"pages": 2, "events": 2}
