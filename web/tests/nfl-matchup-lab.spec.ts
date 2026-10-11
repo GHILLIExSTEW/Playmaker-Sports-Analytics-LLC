@@ -125,6 +125,17 @@ test('matchup lab displays samples and downloads game and matchup data', async (
   await expect(home).toBeInViewport()
 })
 
+test('calculator inputs survive the periodic research access check', async ({ page }) => {
+  await mock(page)
+  await page.goto('/nfl/lab')
+  await page.getByLabel('American odds').fill('+150')
+  await page.getByLabel('Your estimated win probability (%) — optional').fill('61')
+  await page.clock.fastForward(30_000)
+  await expect(page.getByLabel('Choose matchup')).toHaveValue('4')
+  await expect(page.getByLabel('American odds')).toHaveValue('+150')
+  await expect(page.getByLabel('Your estimated win probability (%) — optional')).toHaveValue('61')
+})
+
 test('empty and malformed research caches never manufacture matchup stats', async ({ page }) => {
   await mock(page)
   await page.route('**/rest/v1/rpc/public_nfl_games*', (route) => route.fulfill({ json: [] }))

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { completedModelGameCount, projectMatchup, type ModelEvent } from '../src/modelMath'
+import { completedModelGameCount, projectMatchup, uniqueModelEvents, type ModelEvent } from '../src/modelMath'
 
 function modelEvent(id: number, start: string, homeId: string, awayId: string, homeScore: number, awayScore: number): ModelEvent {
   return {
@@ -128,4 +128,30 @@ test('malformed model history remains an explicit error', async ({ page }) => {
   await page.goto('/models')
   await page.getByRole('button', { name: 'NCAA Football', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('Model history response was invalid')
+})
+
+test('provider replacement IDs and seasons do not duplicate games or inflate history', () => {
+  const games = history()
+  const replacements = games.map((event) => ({ ...event, event_id: `replacement-${event.event_id}`, season: '2025' }))
+  expect(completedModelGameCount([...games, ...replacements], '2026-11-01')).toBe(30)
+  const matchup = { ...modelEvent(99, '2026-11-01', '0', '1', 0, 0), status_code: 'NS' }
+  expect(projectMatchup([...games, ...replacements], matchup)).toEqual(projectMatchup(games, matchup))
+  const final = games[0]
+  const staleSchedule = { ...final, event_id: 'updated-schedule', status_code: 'NS', synced_at: '2026-10-11T12:00:00Z' }
+  expect(uniqueModelEvents([final, staleSchedule])).toEqual([final])
+  expect(uniqueModelEvents([staleSchedule, final])).toEqual([final])
+  expect(uniqueModelEvents([final, { ...final, event_id: 'later', start_at: '2026-11-01T20:00:00Z' }])).toHaveLength(2)
+})
+
+test('NCAA duplicated matchup labels show once and prefer current provider record', async ({ page }) => {
+  await mockSupabase(page, [])
+  await page.route('**/rest/v1/rpc/public_sport_model_events**', (route) => route.fulfill({ json: [
+    { ...modelEvent(23662, '2026-10-13', '170', '146', 0, 0), home_name: 'Middle Tennessee', away_name: 'Delaware', season: '2025', status_code: 'NS' },
+    { ...modelEvent(24671, '2026-10-13', '170', '146', 0, 0), home_name: 'Middle Tennessee', away_name: 'Delaware', season: '2026', status_code: 'NS', synced_at: '2026-10-11T21:44:09Z' },
+  ] }))
+  await page.goto('/models')
+  await page.getByRole('button', { name: 'NCAA Football', exact: true }).click()
+  await expect(page.getByText('1 duplicate provider records merged. Each matchup counts once in selections and history samples.')).toBeVisible()
+  await expect(page.getByRole('option', { name: /Delaware at Middle Tennessee/ })).toHaveCount(1)
+  await expect(page.getByRole('combobox')).toHaveValue('24671')
 })

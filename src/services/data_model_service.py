@@ -61,9 +61,24 @@ def team_key(team_id: str | None, name: str) -> str:
     return f"id:{team_id}" if team_id else f"name:{name.strip().lower()}"
 
 
+def unique_model_games(games: list[ModelGame]) -> list[ModelGame]:
+    unique: dict[tuple[datetime, str, str], ModelGame] = {}
+
+    def rank(game: ModelGame) -> tuple[bool, datetime, str]:
+        return (game.status.upper() in FINAL and game.home_score is not None and game.away_score is not None,
+                game.synced, game.id)
+
+    for game in games:
+        key = (game.start, team_key(game.home_id, game.home), team_key(game.away_id, game.away))
+        existing = unique.get(key)
+        if existing is None or rank(game) > rank(existing):
+            unique[key] = game
+    return list(unique.values())
+
+
 def project_matchup(games: list[ModelGame], matchup: ModelGame) -> Projection | None:
     previous = sorted(
-        (game for game in games if game.start < matchup.start and game.status.upper() in FINAL
+        (game for game in unique_model_games(games) if game.start < matchup.start and game.status.upper() in FINAL
          and game.home_score is not None and game.away_score is not None),
         key=lambda game: game.start, reverse=True,
     )
@@ -172,7 +187,7 @@ class DataModelService:
                 else:
                     self.multi._store_events(normalized)
                 page += 1
-        return sorted(games.values(), key=lambda game: (game.start, game.id)), requests_used, self.clock()
+        return sorted(unique_model_games(list(games.values())), key=lambda game: (game.start, game.id)), requests_used, self.clock()
 
     @staticmethod
     def choices(games: list[ModelGame], day: date, team: str) -> list[ModelGame]:

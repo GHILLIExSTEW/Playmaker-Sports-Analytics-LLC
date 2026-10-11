@@ -18,6 +18,7 @@ export default function DataModelsPage() {
   const [selectedCompetition, setSelectedCompetition] = useState(modelCompetitions[0].key)
   const [events, setEvents] = useState<ModelEvent[]>([])
   const [unresolved, setUnresolved] = useState(0)
+  const [duplicates, setDuplicates] = useState(0)
   const [selectedEvent, setSelectedEvent] = useState('')
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
@@ -31,7 +32,8 @@ export default function DataModelsPage() {
       if (cancelled) return
       setEvents(data.events)
       setUnresolved(data.unresolved)
-      setSelectedEvent('')
+      setDuplicates(data.duplicates)
+      setSelectedEvent((selected) => data.events.some((event) => event.event_id === selected) ? selected : '')
       setError('')
       setState('ready')
     }).catch((failure: unknown) => {
@@ -72,6 +74,7 @@ export default function DataModelsPage() {
         onClick={() => {
           if (item.key !== selectedCompetition) {
             setState('loading')
+            setSelectedEvent('')
             setSelectedCompetition(item.key)
           }
         }}
@@ -93,6 +96,7 @@ export default function DataModelsPage() {
       {state === 'loading' && <p role="status">Loading {competition.name} model data…</p>}
       {state === 'error' && <p role="alert">Model data could not be loaded. {error} <button type="button" onClick={() => { setState('loading'); setRetry((value) => value + 1) }}>Retry</button></p>}
       {state === 'ready' && unresolved > 0 && <p role="status">{unresolved} provider games excluded because their teams are unresolved. They are not used in projections or history samples.</p>}
+      {state === 'ready' && duplicates > 0 && <p role="status">{duplicates} duplicate provider records merged. Each matchup counts once in selections and history samples.</p>}
       {state === 'ready' && !matchup && <p>No upcoming {competition.name} games are available in the cache.</p>}
       {state === 'ready' && matchup && !projection && <div className="model-empty-state">
         <h3>Not enough history for a projection yet.</h3>

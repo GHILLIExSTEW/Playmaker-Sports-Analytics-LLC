@@ -48,6 +48,30 @@ function completedScore(event: ModelEvent): { home: number; away: number } | nul
   return home === null || away === null ? null : { home, away }
 }
 
+export function uniqueModelEvents(events: ModelEvent[]): ModelEvent[] {
+  const unique = new Map<string, ModelEvent>()
+  const rank = (event: ModelEvent): number[] => [
+    completedScore(event) ? 1 : 0,
+    Date.parse(event.synced_at),
+    Number.parseInt(event.season ?? '0', 10) || 0,
+  ]
+  for (const event of events) {
+    // Provider replacements may assign a new ID and season to the same fixture.
+    const key = JSON.stringify([Date.parse(event.start_at), teamKey(event.home_id, event.home_name), teamKey(event.away_id, event.away_name)])
+    const existing = unique.get(key)
+    if (!existing) {
+      unique.set(key, event)
+      continue
+    }
+    const currentRank = rank(event)
+    const existingRank = rank(existing)
+    const differing = currentRank.findIndex((value, index) => value !== existingRank[index])
+    if ((differing >= 0 && currentRank[differing] > existingRank[differing])
+      || (differing < 0 && event.event_id > existing.event_id)) unique.set(key, event)
+  }
+  return [...unique.values()]
+}
+
 function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length
 }
@@ -63,7 +87,7 @@ export function projectMatchup(events: ModelEvent[], matchup: ModelEvent): Match
   const cutoff = Date.parse(matchup.start_at)
   const homeKey = teamKey(matchup.home_id, matchup.home_name)
   const awayKey = teamKey(matchup.away_id, matchup.away_name)
-  const previous = events
+  const previous = uniqueModelEvents(events)
     .filter((event) => Date.parse(event.start_at) < cutoff)
     .map((event) => ({ event, score: completedScore(event) }))
     .filter((item): item is { event: ModelEvent; score: { home: number; away: number } } => item.score !== null)
@@ -107,5 +131,5 @@ export function projectMatchup(events: ModelEvent[], matchup: ModelEvent): Match
 
 export function completedModelGameCount(events: ModelEvent[], before: string): number {
   const cutoff = Date.parse(before)
-  return events.filter((event) => Date.parse(event.start_at) < cutoff && completedScore(event) !== null).length
+  return uniqueModelEvents(events).filter((event) => Date.parse(event.start_at) < cutoff && completedScore(event) !== null).length
 }

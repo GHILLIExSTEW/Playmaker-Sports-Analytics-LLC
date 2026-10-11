@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient'
 import { fetchNflGames, type NflGame } from './nflData'
 import type { ModelEvent } from './modelMath'
+import { uniqueModelEvents } from './modelMath'
 export type { MatchupProjection, ModelEvent } from './modelMath'
 
 export type ModelCompetition = {
@@ -56,11 +57,13 @@ function fromNflGame(game: NflGame): ModelEvent {
   }
 }
 
-export async function fetchModelEvents(competition: ModelCompetition): Promise<{ events: ModelEvent[]; unresolved: number }> {
+export async function fetchModelEvents(competition: ModelCompetition): Promise<{ events: ModelEvent[]; unresolved: number; duplicates: number }> {
   if (!supabase) throw new Error('Public Supabase configuration is missing.')
   if (competition.source === 'nfl') {
     const games = await fetchNflGames('public_nfl_model_games')
-    return { events: games.map(fromNflGame), unresolved: 0 }
+    const rows = games.map(fromNflGame)
+    const events = uniqueModelEvents(rows)
+    return { events, unresolved: 0, duplicates: rows.length - events.length }
   }
 
   const events: ModelEvent[] = []
@@ -75,6 +78,9 @@ export async function fetchModelEvents(competition: ModelCompetition): Promise<{
     const resolved = data.filter(resolvedEvent)
     events.push(...resolved)
     unresolved += data.length - resolved.length
-    if (data.length < 1000) return { events, unresolved }
+    if (data.length < 1000) {
+      const unique = uniqueModelEvents(events)
+      return { events: unique, unresolved, duplicates: events.length - unique.length }
+    }
   }
 }

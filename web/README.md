@@ -11,6 +11,9 @@ fresh bot-verified Discord roster and account verification checks. Scores
 and schedules remain public.
 Research navigation links are labeled team-only; they lead to the role check
 rather than granting access. Signing in alone does not grant research access.
+Periodic/focus access checks hide research content without resetting selected
+leagues, matchups, or calculator inputs. Verification errors and revoked roles
+still remove the research page; database authorization remains enforced.
 
 Visit `/nfl/lab` from the Sports dropdown or NFL scores page. The lab reuses
 the existing public API-Sports NFL cache for schedules and scores, and adds
@@ -90,6 +93,11 @@ projection when those requirements are unmet.
 Non-NFL provider placeholder games with missing team names or zero team IDs are
 excluded from selections and history, with the excluded count displayed.
 Malformed IDs, timestamps, and other response fields still produce an error.
+Duplicate provider fixtures with identical start times and home/away teams are
+merged across IDs and seasons before selections or history calculations.
+Scored finals take precedence, then the newest sync; website ties prefer the
+newer season, then deterministic event ID. The website displays the merged count.
+The Discord model command also counts each fixture once.
 This baseline has no injury,
 lineup, home-advantage, weather, or sportsbook inputs and is not calibrated or
 validated as a betting model.

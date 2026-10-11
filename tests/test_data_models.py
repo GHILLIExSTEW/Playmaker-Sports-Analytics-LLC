@@ -52,6 +52,18 @@ def test_projection_matches_website_numeric_baseline_and_excludes_future():
     assert models.project_matchup(games, replace(game, home_id="unknown", home="Unknown")) is None
 
 
+def test_duplicate_provider_ids_count_once_and_preserve_scored_final():
+    games = history()
+    duplicates = [replace(game, id=f"replacement-{game.id}") for game in games]
+    assert models.project_matchup(games + duplicates, matchup()) == models.project_matchup(games, matchup())
+    game = games[0]
+    schedule = replace(game, id="new", status="NS", synced=NOW)
+    assert models.unique_model_games([game, schedule]) == [game]
+    assert models.unique_model_games([schedule, game]) == [game]
+    later = replace(game, id="later", start=game.start + timedelta(days=1))
+    assert len(models.unique_model_games([game, later])) == 2
+
+
 @pytest.mark.parametrize("value", [True, None, -1, float("nan"), float("inf"), "", "bad", {}, "-3"])
 def test_model_score_rejects_invalid(value):
     assert models.model_score(value) is None
@@ -75,7 +87,7 @@ def test_refresh_all_six_leagues_uses_complete_budgeted_provider_history(monkeyp
         calls.append((url, params.copy()))
         page = params.get("page", 1)
         game = {
-            "id": 100 + len(calls), "date": "2026-10-11T20:00:00Z",
+            "id": 100 + len(calls), "date": f"2026-10-{10 + len(calls)}T20:00:00Z",
             "status": {"short": "NS", "long": "Not Started"},
         }
         row = {
@@ -85,7 +97,7 @@ def test_refresh_all_six_leagues_uses_complete_budgeted_provider_history(monkeyp
                        "away": {"total": 3} if sport == "basketball" or nfl else 3},
         }
         if nfl or sport == "ncaa":
-            row["game"] = {**game, "date": {"timestamp": 1791748800}}
+            row["game"] = {**game, "date": {"timestamp": 1791748800 + len(calls) * 86400}}
         else:
             row.update(game)
         return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
