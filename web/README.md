@@ -11,9 +11,13 @@ fresh bot-verified Discord roster and account verification checks. Scores
 and schedules remain public.
 Research navigation links are labeled team-only; they lead to the role check
 rather than granting access. Signing in alone does not grant research access.
-Periodic/focus access checks hide research content without resetting selected
-leagues, matchups, or calculator inputs. Verification errors and revoked roles
-still remove the research page; database authorization remains enforced.
+Active access is checked once and cached in sessionStorage for the current tab,
+including reloads. Closing the tab ends this cache. Sign-out, account changes,
+profile updates, and membership expiry invalidate it; manual Retry checks again.
+There are no periodic or focus role checks. Role removal still denies new
+protected database requests, but already displayed data may remain until the
+tab closes. The cache is only a UI convenience, not server authorization.
+Checks time out after ten seconds.
 
 Visit `/nfl/lab` from the Sports dropdown or NFL scores page. The lab reuses
 the existing public API-Sports NFL cache for schedules and scores, and adds

@@ -125,7 +125,7 @@ test('matchup lab displays samples and downloads game and matchup data', async (
   await expect(home).toBeInViewport()
 })
 
-test('calculator inputs survive the periodic research access check', async ({ page }) => {
+test('calculator inputs remain unchanged after thirty seconds', async ({ page }) => {
   await mock(page)
   await page.goto('/nfl/lab')
   await page.getByLabel('American odds').fill('+150')

@@ -510,7 +510,6 @@ test('historical non-operators cannot become capper pages from settled records',
 
 for (const [name, expiresAt, elapsed] of [
   ['pass expiry', '2026-10-08T01:00:05Z', 5000],
-  ['scheduled access recheck', '2099-01-01T00:00:00Z', 30_000],
 ] as const) {
   test(`${name} automatically hides previously loaded picks`, async ({ page }) => {
     await page.clock.install({ time: new Date('2026-10-08T01:00:00Z') })
