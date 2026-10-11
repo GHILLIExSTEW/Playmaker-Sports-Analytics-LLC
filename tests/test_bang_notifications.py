@@ -27,7 +27,6 @@ def setup(monkeypatch):
     channels = {101: SimpleNamespace(id=101, send=AsyncMock(return_value=SimpleNamespace(id=900))),
                 202: SimpleNamespace(id=202, send=AsyncMock(return_value=SimpleNamespace(id=901)))}
     monkeypatch.setattr(presentation_module, "VIP_CHAT_CHANNEL_ID", 101)
-    monkeypatch.setattr(presentation_module, "FREE_CHAT_CHANNEL_ID", 202)
     monkeypatch.setattr(bot_module, "resolve_channel", AsyncMock(side_effect=lambda channel_id, *args, **kwargs: channels[channel_id]))
     claims = set()
 
@@ -46,25 +45,26 @@ def setup(monkeypatch):
     return channels, complete, alert
 
 
-def test_bang_uploads_slip_to_both_channels_with_only_correct_role_mentions(monkeypatch, load_presentation):
+def test_bang_uploads_slip_to_vip_only_with_highroller_mention(monkeypatch, load_presentation):
     channels, complete, _ = setup(monkeypatch)
     message = source()
     load_presentation()
     asyncio.run(bot_module.send_bang_notifications(message, 7))
-    for channel_id, role_id in [(101, bot_module.HIGHROLLER_ROLE_ID), (202, bot_module.ROOKIE_ROLE_ID)]:
-        kwargs = channels[channel_id].send.call_args.kwargs
-        assert kwargs["content"] == f"## 💰 BANG! 💸 🤑\n<@&{role_id}>"
-        assert "💰 BANG!" in kwargs["embed"].title
-        assert "Official play WIN" in kwargs["embed"].footer.text
-        assert kwargs["embed"].image.url == "attachment://slip.png"
-        assert kwargs["file"].filename == "slip.png"
-        assert [role.id for role in kwargs["allowed_mentions"].roles] == [role_id]
-        assert not kwargs["allowed_mentions"].users and not kwargs["allowed_mentions"].everyone
-        assert message.jump_url in kwargs["embed"].description
-    assert message.attachments[0].to_file.await_count == 2
-    assert complete.call_count == 2
+    kwargs = channels[101].send.call_args.kwargs
+    assert kwargs["content"] == f"## 💰 BANG! 💸 🤑\n<@&{bot_module.HIGHROLLER_ROLE_ID}>"
+    assert "💰 BANG!" in kwargs["embed"].title
+    assert "Official play WIN" in kwargs["embed"].footer.text
+    assert kwargs["embed"].image.url == "attachment://slip.png"
+    assert kwargs["file"].filename == "slip.png"
+    assert [role.id for role in kwargs["allowed_mentions"].roles] == [bot_module.HIGHROLLER_ROLE_ID]
+    assert not kwargs["allowed_mentions"].users and not kwargs["allowed_mentions"].everyone
+    assert kwargs["embed"].description == f"[📕│𝑽𝑰𝑷-𝑷𝑰𝑪𝑲𝑺]({message.jump_url})"
+    channels[202].send.assert_not_awaited()
+    message.attachments[0].to_file.assert_awaited_once()
+    complete.assert_called_once_with(7, 101, 900)
     asyncio.run(bot_module.send_bang_notifications(message, 7))
-    assert all(channel.send.await_count == 1 for channel in channels.values())
+    channels[101].send.assert_awaited_once()
+    channels[202].send.assert_not_awaited()
 
 
 def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(monkeypatch, load_presentation):
@@ -80,13 +80,13 @@ def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(mo
     alert.assert_awaited_once()
 
 
-def test_one_destination_failure_still_delivers_to_other(monkeypatch, load_presentation):
+def test_vip_destination_failure_does_not_fall_back_to_free_chat(monkeypatch, load_presentation):
     channels, complete, alert = setup(monkeypatch)
     channels[101].send.side_effect = RuntimeError("Unavailable")
     load_presentation()
     asyncio.run(bot_module.send_bang_notifications(source(), 7))
-    channels[202].send.assert_awaited_once()
-    complete.assert_called_once_with(7, 202, 901)
+    channels[202].send.assert_not_awaited()
+    complete.assert_not_called()
     alert.assert_awaited_once()
 
 

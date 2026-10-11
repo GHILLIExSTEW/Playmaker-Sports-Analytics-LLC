@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from src.config import FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID, TEST_CHANNEL_ID, VIP_CHAT_CHANNEL_ID
+from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, TEST_CHANNEL_ID, VIP_CHAT_CHANNEL_ID
 from src.play_settlement import SETTLEABLE_STATUSES
 from src.services import bang_service
 from src.services.official_play_service import OfficialPlayService
@@ -224,7 +224,6 @@ class PlayPresentation(commands.Cog):
             [("TEST_CHANNEL_ID", TEST_CHANNEL_ID, None)]
             if self.get_testing() else [
                 ("VIP_CHAT_CHANNEL_ID", VIP_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID),
-                ("FREE_CHAT_CHANNEL_ID", FREE_CHAT_CHANNEL_ID, ROOKIE_ROLE_ID),
             ]
         )
         image = next((attachment for attachment in source.attachments if (attachment.content_type or "").startswith("image/")), None)
@@ -240,7 +239,7 @@ class PlayPresentation(commands.Cog):
                     raise RuntimeError(f"{name} is unavailable.")
                 embed = discord.Embed(title=f"💰 BANG! 💸 Play #{play_id} won 🤑", color=discord.Color.green())
                 embed.set_footer(text="💵 Playmaker Picks • Official play WIN ✅")
-                embed.description = f"[Original play]({source.jump_url})"
+                embed.description = f"[📕│𝑽𝑰𝑷-𝑷𝑰𝑪𝑲𝑺]({source.jump_url})"
                 if source.embeds and source.embeds[0].author.name:
                     embed.set_author(name=source.embeds[0].author.name, icon_url=source.embeds[0].author.icon_url)
                 files = {}
