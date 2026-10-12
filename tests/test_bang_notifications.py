@@ -26,7 +26,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(bot_module, "testing_enabled", False)
     channels = {101: SimpleNamespace(id=101, send=AsyncMock(return_value=SimpleNamespace(id=900))),
                 202: SimpleNamespace(id=202, send=AsyncMock(return_value=SimpleNamespace(id=901)))}
-    monkeypatch.setattr(presentation_module, "VIP_CHAT_CHANNEL_ID", 101)
+    monkeypatch.setattr(presentation_module, "WINNING_SLIPS_CHANNEL_ID", 101)
     monkeypatch.setattr(bot_module, "resolve_channel", AsyncMock(side_effect=lambda channel_id, *args, **kwargs: channels[channel_id]))
     claims = set()
 
@@ -45,7 +45,7 @@ def setup(monkeypatch):
     return channels, complete, alert
 
 
-def test_bang_uploads_slip_to_vip_only_with_highroller_mention(monkeypatch, load_presentation):
+def test_bang_uploads_slip_to_winning_slips_only_with_highroller_mention(monkeypatch, load_presentation):
     channels, complete, _ = setup(monkeypatch)
     message = source()
     load_presentation()
@@ -60,6 +60,7 @@ def test_bang_uploads_slip_to_vip_only_with_highroller_mention(monkeypatch, load
     assert not kwargs["allowed_mentions"].users and not kwargs["allowed_mentions"].everyone
     assert kwargs["embed"].description == f"[📕│𝑽𝑰𝑷-𝑷𝑰𝑪𝑲𝑺]({message.jump_url})"
     channels[202].send.assert_not_awaited()
+    bot_module.resolve_channel.assert_awaited_once_with(101, "WINNING_SLIPS_CHANNEL_ID", required=True)
     message.attachments[0].to_file.assert_awaited_once()
     complete.assert_called_once_with(7, 101, 900)
     asyncio.run(bot_module.send_bang_notifications(message, 7))

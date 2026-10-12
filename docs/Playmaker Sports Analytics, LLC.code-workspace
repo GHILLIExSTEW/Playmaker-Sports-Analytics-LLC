@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "C:/Users/SelectronicsLLC/Desktop/Playmaker Whop Submission/API-Endpoints"
+		}
+	],
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"/^python -m pytest -q tests\\\\test_member_bet_vault\\.py tests\\\\test_confirmation_routing\\.py$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
+		}
+	}
+}

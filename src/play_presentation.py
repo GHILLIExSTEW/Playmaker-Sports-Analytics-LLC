@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, TEST_CHANNEL_ID, VIP_CHAT_CHANNEL_ID
+from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, TEST_CHANNEL_ID, WINNING_SLIPS_CHANNEL_ID
 from src.play_settlement import SETTLEABLE_STATUSES
 from src.services import bang_service
 from src.services.official_play_service import OfficialPlayService
@@ -223,7 +223,7 @@ class PlayPresentation(commands.Cog):
         targets = (
             [("TEST_CHANNEL_ID", TEST_CHANNEL_ID, None)]
             if self.get_testing() else [
-                ("VIP_CHAT_CHANNEL_ID", VIP_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID),
+                ("WINNING_SLIPS_CHANNEL_ID", WINNING_SLIPS_CHANNEL_ID, HIGHROLLER_ROLE_ID),
             ]
         )
         image = next((attachment for attachment in source.attachments if (attachment.content_type or "").startswith("image/")), None)
