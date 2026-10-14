@@ -29,7 +29,7 @@ def parse_results_dates(start: str | None, end: str | None) -> tuple[date | None
 
 def filter_results(
     plays: list[dict], users: list[dict], sports: dict, *,
-    operator_ids: set[int], start: date | None = None, end: date | None = None,
+    operator_ids: set[int] | None, start: date | None = None, end: date | None = None,
     sport: str | None = None, capper_id: int | None = None, result: str | None = None,
     now: datetime | None = None,
 ) -> list[dict]:
@@ -38,7 +38,7 @@ def filter_results(
     rows = []
     for play in unique_published(plays):
         author = authors.get(str(play["user_id"]), "")
-        if not author.isdecimal() or int(author) not in operator_ids:
+        if operator_ids is not None and (not author.isdecimal() or int(author) not in operator_ids):
             continue
         if capper_id is not None and author != str(capper_id):
             continue
@@ -58,7 +58,7 @@ def build_results_embed(rows: list[dict], users: list[dict], sports: dict, label
     summary = record_summary(rows)
     embed = discord.Embed(title="Official Play Results", color=discord.Color.green())
     embed.description = (
-        f"{label}\nCurrent OPERATOR authors · published official plays only\n**{len(rows)} settled plays** · "
+        f"{label}\nPublished official team plays only\n**{len(rows)} settled plays** · "
         f"W{summary['wins']} L{summary['losses']} V{summary['voids']} P{summary['partials']}"
         f" · **{summary['net']:+.2f}u net**"
     )

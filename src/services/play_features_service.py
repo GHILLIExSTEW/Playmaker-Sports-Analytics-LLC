@@ -280,8 +280,8 @@ class PlayFeaturesService:
     # ---- History --------------------------------------------------------
     def history(self) -> tuple[list[dict], list[dict], dict]:
         client = self._client()
-        plays = self._all(lambda: client.table("plays").select(
-            "id,user_id,sport_id,units,odds,status,message_id,created_at,settled_at"
+        plays = self._all(lambda: client.table("display_plays").select(
+            "id,user_id,sport_id,units,odds,status,message_id,created_at,settled_at,tracking_scope"
         ).order("id"))
         users = self._all(lambda: client.table("users").select("id,discord_user_id,display_name,username").order("id"))
         return plays, users, self.sport_slugs()
@@ -311,7 +311,7 @@ class PlayFeaturesService:
 
         capper = None
         user_id = next((str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(discord_user_id)), None)
-        mine = [play for play in published if str(play["user_id"]) == user_id] if user_id else []
+        mine = [play for play in published if str(play["user_id"]) == user_id and play.get("tracking_scope") == "capper"] if user_id else []
         if mine:
             by_sport = {}
             for play in mine:

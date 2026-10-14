@@ -124,7 +124,9 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
         : !ready ? <p className="account-state">Loading current picks...</p>
         : filtered.length === 0 ? <p className="account-state">No published open picks{sport !== 'All' || author !== 'All' ? ' match these filters' : capper ? ` from ${capper}` : ''}. <Link to="/results">Browse settled results</Link>.</p>
         : <div className="current-picks-grid">{filtered.slice(0, visibleCount).map((pick) => <article className="current-pick-card" key={pick.id}>
-          <header><Link to={`/cappers/${capperSlug(pick.capper)}`}>{pick.capper}</Link><span>{pick.sport} · Open</span></header>
+          <header>{pick.capper === 'Official Playmaker Picks'
+            ? <span>{pick.capper}</span>
+            : <Link to={`/cappers/${capperSlug(pick.capper)}`}>{pick.capper}</Link>}<span>{pick.sport} · Open</span></header>
           <h3>{pick.selection}</h3>
           <p className="current-pick-line">{pick.odds > 0 ? '+' : ''}{pick.odds} <span>Risk: {pick.units}u</span></p>
           <p className="current-pick-time">Published <time dateTime={pick.created_at}>{new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(new Date(pick.created_at))}</time> ET</p>
@@ -138,7 +140,9 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
               ? { ...current, picks: current.picks.map((item) => item.id === pick.id ? { ...item, analysis: value } : item) }
               : current)}
           />}
-          <Link to={`/cappers/${capperSlug(pick.capper)}`}>Capper page & settled record</Link>
+          {pick.capper === 'Official Playmaker Picks'
+            ? <Link to="/results">Official team settled record</Link>
+            : <Link to={`/cappers/${capperSlug(pick.capper)}`}>Capper page & settled record</Link>}
         </article>)}</div>}
       {ready && !error && filtered.length > visibleCount && <button className="account-secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Show more picks</button>}
     </>}

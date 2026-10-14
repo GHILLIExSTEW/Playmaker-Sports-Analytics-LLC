@@ -26,6 +26,7 @@ type Result = {
   status: ResultStatus
   net_units: number
   avatar_url?: string | null
+  tracking_scope: 'official' | 'capper'
 }
 type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
 type CapperSummary = { name: string; slug: string; avatar_url?: string | null; plays: number; wins: number; losses: number; net_units: number }
@@ -89,6 +90,7 @@ function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]):
       avatar_url: entry.avatar_url ?? getCapperAvatarUrl(entry.name), plays: 0, wins: 0, losses: 0, net_units: 0 })
   }
   for (const result of results) {
+    if (result.tracking_scope !== 'capper') continue
     const summary = summaries.get(result.capper)
     if (!summary) continue
     summary.plays += 1
@@ -288,7 +290,8 @@ function Website() {
   }, [location.hash, location.pathname])
 
   const sports: string[] = ['All', ...Array.from(new Set(results.map((result) => result.sport)))]
-  const visibleResults = sport === 'All' ? results : results.filter((result) => result.sport === sport)
+  const officialResults = results.filter((result) => result.tracking_scope === 'official')
+  const visibleResults = officialResults.filter((result) => sport === 'All' || result.sport === sport)
   const cappers = summarizeCappers(results, directoryState === 'ready' ? directory : [])
   const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
   const memberHandle = routePath.startsWith('/members/') ? decodeURIComponent(routePath.slice('/members/'.length)) : null
@@ -317,13 +320,13 @@ function Website() {
     document.querySelector('meta[name="description"]')?.setAttribute(
       'content',
       selectedCapperName
-        ? `${selectedCapperName}'s official settled-play record, performance graphs, and results.`
+        ? `${selectedCapperName}'s individual settled-play record, performance graphs, and results.`
         : routePath === '/cappers'
           ? 'Meet the Playmaker Picks cappers, browse their public settled records, and visit their individual homepages.'
         : 'Verified sports analysis, transparent play tracking, and the Playmaker Picks community.',
     )
   }, [routePath, selectedCapperName, sportRouteSlug, policyKind])
-  const capperResults = selectedCapper ? results.filter((result) => result.capper === selectedCapper.name) : []
+  const capperResults = selectedCapper ? results.filter((result) => result.tracking_scope === 'capper' && result.capper === selectedCapper.name) : []
   const capperAnalytics = buildCapperAnalytics(capperResults)
   const capperWins = capperResults.filter((result) => result.status === 'win').length
   const capperLosses = capperResults.filter((result) => result.status === 'loss').length
@@ -338,9 +341,9 @@ function Website() {
   }
   const capperDirectory = <CapperDirectory cappers={cappers} directoryState={directoryState} loadState={loadState} onRetry={retryCapperDirectory} standalone={routePath === '/cappers'} />
   const sectionHref = (section: string) => routePath === '/' ? `#${section}` : `/#${section}`
-  const homepagePageCount = Math.max(1, Math.ceil(results.length / 10))
+  const homepagePageCount = Math.max(1, Math.ceil(officialResults.length / 10))
   const homepagePage = Math.min(resultsPage, homepagePageCount - 1)
-  const homepageResults = results.slice(homepagePage * 10, (homepagePage + 1) * 10)
+  const homepageResults = officialResults.slice(homepagePage * 10, (homepagePage + 1) * 10)
 
   return (
     <div className="site-shell">
@@ -391,7 +394,7 @@ function Website() {
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading user guide...</p>}><UserGuidePage /></Suspense></OperatorResearchAccess>
         ) : sportRouteSlug ? (
           <Suspense fallback={<section className="sport-page"><p className="account-state">Loading sport page…</p></section>}>
-            <SportPage slug={sportRouteSlug} results={results} loadState={loadState} />
+            <SportPage slug={sportRouteSlug} results={officialResults} loadState={loadState} />
           </Suspense>
         ) : routePath === '/nfl' ? (
           <Suspense fallback={<section className="nfl-page"><p className="nfl-state">Loading NFL data…</p></section>}>
@@ -401,7 +404,7 @@ function Website() {
           <Suspense fallback={<section className="results-page results-section"><p className="results-empty">Loading the full results ledger…</p></section>}>
             <AllResultsPage
               results={visibleResults}
-              totalResults={results.length}
+              totalResults={officialResults.length}
               sports={sports}
               sport={sport}
               loadState={loadState}
@@ -497,7 +500,7 @@ function Website() {
             <p>Official plays appear here after they settle, with the original published line, risk, capper, and final grade. Open plays and private account details are never returned by the public data endpoint.</p>
           </div>
           <div className="results-toolbar">
-            <span aria-live="polite">{loadState === 'ready' ? results.length > 0 ? `Showing ${homepagePage * 10 + 1}-${homepagePage * 10 + homepageResults.length} of ${results.length} settled plays` : '0 settled plays' : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>
+            <span aria-live="polite">{loadState === 'ready' ? officialResults.length > 0 ? `Showing ${homepagePage * 10 + 1}-${homepagePage * 10 + homepageResults.length} of ${officialResults.length} settled plays` : '0 settled plays' : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>
             {loadState === 'error' && <button className="results-retry" type="button" onClick={() => { setLoadState('loading'); setRetryCount((count) => count + 1) }}>Retry</button>}
           </div>
           {loadState === 'configuration' && <p className="data-notice">Add the public Supabase URL and anon key to <code>web/.env.local</code>, then apply the public-results SQL migration.</p>}
@@ -513,10 +516,10 @@ function Website() {
                 <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(result.net_units)}</span>
               </div>
             ))}
-            {loadState === 'ready' && results.length === 0 && <div className="results-empty">No settled results yet.</div>}
+            {loadState === 'ready' && officialResults.length === 0 && <div className="results-empty">No settled results yet.</div>}
             {loadState === 'loading' && <div className="results-empty">Loading the official record…</div>}
           </div>
-          {loadState === 'ready' && results.length > 0 && <nav className="results-pagination" aria-label="Settled results pages">
+          {loadState === 'ready' && officialResults.length > 0 && <nav className="results-pagination" aria-label="Settled results pages">
             <button className="account-secondary-button" type="button" disabled={homepagePage === 0} onClick={() => setResultsPage(homepagePage - 1)}>Previous</button>
             <span aria-live="polite">Page {homepagePage + 1} of {homepagePageCount}</span>
             <button className="account-secondary-button" type="button" disabled={homepagePage + 1 === homepagePageCount} onClick={() => setResultsPage(homepagePage + 1)}>Next</button>

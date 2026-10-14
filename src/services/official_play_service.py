@@ -73,7 +73,14 @@ class OfficialPlayService:
         play_text: str = "",
         team_name: str | None = None,
         leg_records: list[dict] | None = None,
+        tracking_scope: str = "official",
+        stars: int | None = None,
+        ballot_message_id: str | None = None,
     ) -> dict:
+        if tracking_scope not in {"official", "capper", "test"}:
+            raise ValueError("Unsupported play tracking scope.")
+        if stars is not None and (tracking_scope != "official" or stars not in {3, 4, 5}):
+            raise ValueError("Only official plays can have 3, 4, or 5 stars.")
         validation_error = self.play_service.validate_play(units, legs, odds)
         if validation_error:
             return {"error": validation_error["message"]}
@@ -108,12 +115,28 @@ class OfficialPlayService:
             "status": "open",
             "play_text": play_text or "",
             "message_id": None,
+            "tracking_scope": tracking_scope,
+            "stars": stars,
+            "ballot_message_id": ballot_message_id,
         }
 
-        inserted = supabase_service.insert("plays", payload)
-        play_id = int(inserted.data[0]["id"])
+        existing = (
+            supabase_service.select("plays", "*", {"ballot_message_id": ballot_message_id}).data
+            if ballot_message_id else []
+        )
+        if existing:
+            saved = existing[0]
+            if saved.get("message_id") or saved["status"] != "open":
+                raise ValueError("This ballot already has a published or settled play. Reconcile it before retrying.")
+            for field in ("user_id", "sport_id", "team_name", "units", "legs", "odds", "play_text", "tracking_scope", "stars"):
+                if saved[field] != payload[field]:
+                    raise ValueError(f"The ballot's saved {field} differs from its current bet. Staff reconciliation is required.")
+            play_id = int(saved["id"])
+        else:
+            inserted = supabase_service.insert("plays", payload)
+            play_id = int(inserted.data[0]["id"])
         if leg_rows:
-            supabase_service.insert("play_legs", [
+            records = [
                 {
                     "play_id": play_id,
                     "leg_number": index,
@@ -122,10 +145,16 @@ class OfficialPlayService:
                     "details": leg["details"],
                 }
                 for index, leg in enumerate(leg_rows, start=1)
-            ])
+            ]
+            if ballot_message_id:
+                supabase_service.upsert("play_legs", records, ["play_id", "leg_number"])
+            else:
+                supabase_service.insert("play_legs", records)
 
         return {
             "play_id": play_id,
+            "tracking_scope": tracking_scope,
+            "stars": stars,
             "user_id": user_id,
             "units": float(units),
             "legs": int(legs),

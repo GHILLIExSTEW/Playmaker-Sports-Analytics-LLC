@@ -22,6 +22,8 @@ def build_play_embed(payload: dict) -> discord.Embed:
     embed.add_field(name="Units", value=f"{float(payload['units']):g}u", inline=True)
     embed.add_field(name="Odds", value=f"{int(payload['odds']):+d}", inline=True)
     embed.add_field(name="To win", value=f"{float(payload['to_win']):g}u", inline=True)
+    if payload.get("stars"):
+        embed.add_field(name="Team rating", value="⭐" * int(payload["stars"]), inline=False)
     if payload.get("play_text"):
         embed.add_field(name="Selections", value=payload["play_text"][:1024], inline=False)
     return embed
@@ -86,7 +88,13 @@ class PlayPresentation(commands.Cog):
         if channel is None:
             raise RuntimeError(f"{setting_name} is unavailable.")
         embed = build_play_embed(payload)
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        author = self.bot.user if payload.get("tracking_scope") == "official" else interaction.user
+        if author is None:
+            raise RuntimeError("Bot identity is unavailable.")
+        embed.set_author(
+            name=author.display_name,
+            icon_url=author.display_avatar.url,
+        )
         if payload.get("image_url"):
             embed.set_image(url=payload["image_url"])
         return await channel.send(embed=embed)
@@ -131,7 +139,13 @@ class PlayPresentation(commands.Cog):
             embed = build_play_embed(payload)
             if source.content.strip():
                 embed.description = source.content.strip()[:4000]
-            embed.set_author(name=operator.display_name, icon_url=operator.display_avatar.url)
+            author = self.bot.user if payload.get("tracking_scope") == "official" else operator
+            if author is None:
+                raise RuntimeError("Bot identity is unavailable.")
+            embed.set_author(
+                name=author.display_name,
+                icon_url=author.display_avatar.url,
+            )
             kwargs = {}
             if image is not None:
                 # Re-upload before deleting the source attachment.

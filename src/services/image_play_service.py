@@ -28,7 +28,7 @@ class ImagePlayService:
         "Use null for any of these you cannot read; never guess them."
     )
 
-    def extract_play(self, image_url: str, message_text: str = "") -> dict[str, Any]:
+    def extract_play(self, image_url: str, message_text: str = "", *, require_readable: bool = False) -> dict[str, Any]:
         errors = []
         providers = []
         if OPENAI_API_KEY:
@@ -42,7 +42,9 @@ class ImagePlayService:
         for name, url, api_key, model in providers:
             for attempt in range(2):
                 try:
-                    parsed = self._extract_with_provider(image_url, message_text, name, url, api_key, model)
+                    parsed = self._extract_with_provider(
+                        image_url, message_text, name, url, api_key, model, require_readable=require_readable,
+                    )
                     text_units = self.extract_units_from_text(message_text)
                     if text_units is not None:
                         parsed["units"] = text_units
@@ -54,6 +56,11 @@ class ImagePlayService:
 
         raise RuntimeError("All vision providers failed or blocked the image. " + " | ".join(errors))
 
+    def extract_text_play(self, message_text: str) -> dict[str, Any]:
+        if not message_text.strip():
+            raise ValueError("The ballot has no readable bet text.")
+        return self.extract_play("", message_text, require_readable=True)
+
     @staticmethod
     def extract_units_from_text(message_text: str) -> float | None:
         text = message_text or ""
@@ -62,7 +69,18 @@ class ImagePlayService:
             match = re.search(r"(?<![\w$])(\d+(?:\.\d+)?)\s*u(?:nits?)?\b", text, re.IGNORECASE)
         return float(match.group(1)) if match else None
 
-    def _extract_with_provider(self, image_url: str, message_text: str, name: str, url: str, api_key: str, model: str) -> dict[str, Any]:
+    def _extract_with_provider(
+        self, image_url: str, message_text: str, name: str, url: str, api_key: str, model: str,
+        *, require_readable: bool = False,
+    ) -> dict[str, Any]:
+        prompt = self.PROMPT
+        if not image_url:
+            prompt = prompt.replace("Read this betting slip.", "Read the bet from the supplied Discord text.")
+        if require_readable:
+            prompt += (
+                " Also return readable (boolean): true only when every selection and its odds are fully readable "
+                "and unambiguous. Otherwise return readable:false; do not guess or substitute uncertainty text."
+            )
         response = requests.post(
             url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -70,9 +88,8 @@ class ImagePlayService:
                 "model": model,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": f"{self.PROMPT}\nDiscord message text, which may contain units: {message_text or '<none>'}"},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ]}],
+                    {"type": "text", "text": f"{prompt}\nDiscord message text, which may contain units: {message_text or '<none>'}"},
+                ] + ([{"type": "image_url", "image_url": {"url": image_url}}] if image_url else [])}],
             },
             timeout=60,
         )
@@ -94,6 +111,8 @@ class ImagePlayService:
         if content.startswith("```"):
             content = content.removeprefix("```").removeprefix("json").removesuffix("```").strip()
         parsed = json.loads(content)
+        if require_readable and parsed.get("readable") is not True:
+            raise ValueError("The ballot bet image could not be read unambiguously.")
         self._validate(parsed)
         return parsed
 

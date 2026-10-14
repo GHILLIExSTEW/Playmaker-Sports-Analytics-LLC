@@ -33,7 +33,7 @@ def play(play_id=7, **overrides):
 
 def test_tracker_fetch_paginates_both_tables_without_truncation(monkeypatch):
     client = Mock()
-    queries = {"plays": Mock(), "users": Mock()}
+    queries = {"display_plays": Mock(), "users": Mock()}
     for name, query in queries.items():
         query.select.return_value = query
         query.range.return_value = query
@@ -83,14 +83,14 @@ def test_partial_void_odds_and_future_results_keep_existing_tally_rules():
 
 
 @pytest.mark.parametrize("reconciled", [0, 2])
-def test_refresh_reloads_after_reconciliation_filters_operators_and_posts_both(monkeypatch, reconciled):
+def test_refresh_reconciles_all_scopes_but_posts_only_official_summary(monkeypatch, reconciled):
     monkeypatch.setattr(module, "RESULT_CHANNEL_ID", 303)
     monkeypatch.setattr(module, "TEAM_STATS_CHANNEL_ID", 404)
     reporting = cog()
-    rows, users = [play(), play(8, user_id=2)], [
+    rows, users = [play(tracking_scope="official"), play(8, user_id=2, tracking_scope="capper")], [
         {"id": 1, "discord_user_id": "42"}, {"id": 2, "discord_user_id": "43"},
     ]
-    refreshed = [play(status="loss"), rows[1]]
+    refreshed = [play(status="loss", tracking_scope="official"), rows[1]]
     reporting.tracker_rows = Mock(side_effect=[(rows, users), (refreshed, users)])
     reporting.reconcile_reactions.return_value = reconciled
     reporting.settlement_channels.return_value = [
@@ -107,10 +107,11 @@ def test_refresh_reloads_after_reconciliation_filters_operators_and_posts_both(m
     reporting.reconcile_reactions.assert_awaited_once_with(rows, users, [channels[101]])
     assert reporting.tracker_rows.call_count == (2 if reconciled else 1)
     reporting.tracker_embed.assert_called_once_with([refreshed[0] if reconciled else rows[0]], users)
-    assert render.call_args.args[1][-1] == ("🏆 Monthly Playmaker Breakdown", "Ace 1-0")
+    assert render.call_args.args[1] == []
     sends = reporting.update_or_post_tracker_embed.await_args_list
     assert sends[0].args[0] is channels[303] and sends[0].args[2] is image
-    assert sends[1].args[0] is channels[404] and sends[1].args[1].description == "Ace +3u"
+    assert len(sends) == 1
+    reporting.tracked_operators.assert_not_awaited()
 
 
 def test_refresh_without_results_channel_stops_before_fetch(monkeypatch):

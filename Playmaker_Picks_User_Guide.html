@@ -44,17 +44,25 @@
   </section>
 
   <section><h2><span>📷</span>Recording a play from an image</h2>
-    <p>OPERATOR/tracker authors post a betting-slip image in the configured image-input channel (IMAGE_INPUT_CHANNEL_ID). No command is needed. Open the bot's review controls, check selections, odds and units, and use <b>Edit bet</b> or <b>Enter units</b> if needed. Press <b>Confirm and record</b> only after checking the extracted data.</p>
-    <div class="callout">The normal confirmed flow replaces the upload with a tracked play message containing your slip and Tail controls; react on that message, not a deleted upload or review prompt. A play copy goes to the confirmation channel. If reposting fails, the original upload may remain the tracked message; verify the bot's confirmation.</div>
+    <p>Cappers post personal betting-slip images in Capper_plays (1513186440278704178). Open the bot's review controls, check selections, odds and units, and use <b>Edit bet</b> or <b>Enter units</b> if needed. Press <b>Confirm and record</b> only after checking the extracted data. These plays credit the individual capper and feed that capper's website homepage, never the official team tracker.</p>
+    <div class="callout">Confirmation creates one tracked card in Capper_plays, normally replacing the upload. React on that card, not the deleted upload or review prompt. If reposting fails, a new card is published without deleting the upload; the new card is tracked. There is no extra official or confirmation-channel copy.</div>
   </section>
 
   <section><h2><span>✍️</span>Recording a play manually</h2>
-    <p>Use <code>/play</code> when you have no image. You need the configured official role and must use the official plays channel. Follow the input form for units, selections and American odds; multi-leg plays collect the remaining legs and calculate combined odds. Check every input before submitting the final leg, which records the play.</p>
-    <p>The bot posts a bet embed to the official plays channel, and that embed is what you react to.</p>
+    <p>Use <code>/play</code> in Capper_plays when you have no image. You need the capper role and any configured official-role permissions. Follow the input form for units, selections and American odds; multi-leg plays collect the remaining legs and calculate combined odds. The resulting personal card stays in Capper_plays. Official plays cannot bypass ballot approval through this command.</p>
+  </section>
+
+  <section><h2><span>⭐</span>Team ballots and official picks</h2>
+    <p>Post a native single-choice Discord poll in Cappers_Ballet (1559647368650166322), with three choices beginning with <b>Yes</b>, <b>No</b>, and <b>Pass</b>. Attach the bet image or post it immediately afterward from the same account. Without an image, include the complete selection and American odds in the poll text or your immediately following message. Missing or ambiguous selections/odds require staff review; the bot never invents them.</p>
+    <p>Only finalized polls are evaluated, once per minute. Approval requires at least three Yes votes and strictly more Yes than No. Pass is ignored for approval: <b>3 Yes = 3 stars / 1u; 4 Yes = 4 stars / 2u; 5 Yes = 5 stars / 3u</b>. Two or fewer Yes votes, ties and No-majorities are not posted. More than five Yes votes or malformed polls require staff review.</p>
+    <p>Approved picks are posted in Official_Playmaker_Plays (1560077460488458392) using only the bot's own name and avatar, never a capper's identity, and mention the HIGHROLLER role. The bet is written out even without an image. Official plays count toward the automatic team unit summary, not individual capper records.</p>
+    <p>Deployment requires the separate capper/ballot database migration and a bot restart. The first scan includes existing channel ballots; later scans resume a saved cursor. Durable claims prevent duplicate publication. Failed or interrupted publications alert staff and are not automatically retried: reconcile the saved play and any Discord post before changing the ballot state. Existing records remain classified as official; do not infer historical personal credit without reviewing original sources. Old automatic Top Playmakers messages are not updated or deleted; staff may remove them manually.</p>
+    <p>For a late image or correction, trusted staff can set <code>capper_ballots.source_message_id</code> to its message ID in the same ballot channel. This explicit association avoids guessing which older poll a later upload belongs to. Only reset a failed ballot to pending after reconciling any existing saved play/post.</p>
+    <p>The displayed tracking era starts October 14, 2026, at midnight Eastern. Team and capper stats, settled website ledgers, and current-pick displays exclude plays created before that time, even if they settle later. Historical records and Discord posts are retained. The persistent <code>tracking_display_settings.starts_at</code> setting controls this boundary; <code>/tracker_start</code> can further narrow Discord totals by settlement date but does not erase the retained archive.</p>
   </section>
 
   <section><h2><span>✅</span>Settling a play with reactions</h2>
-    <p>React directly on the tracked play message in a configured settlement channel (official or confirmation). The play owner or Discord Owner can settle by reaction; an OPERATOR role alone does not authorize settling another author's play. Officials can use the /settle picker. Reactions on unrelated messages/channels are ignored.</p>
+    <p>React directly on the tracked play card in Official_Playmaker_Plays or Capper_plays. A personal play's author or Discord Owner can settle by reaction; team plays are bot-owned, so a Discord Owner grades them by reaction. An OPERATOR role alone does not authorize settling another author's play. Officials can use the /settle picker. Reactions on unrelated messages/channels are ignored.</p>
     <table>
       <thead><tr><th>Icon</th><th>Result</th><th>What happens</th></tr></thead>
       <tbody>
@@ -72,9 +80,10 @@
       <tbody>
         <tr><td><code>/update_tracker</code></td><td>Officials/moderators refresh the Unit Summary and reconcile missed reactions. The tracker also refreshes automatically every hour, Eastern Time.</td></tr>
         <tr><td><code>/rankings</code></td><td>Posts the current team ranking summary.</td></tr>
-        <tr><td><code>/summary</code></td><td>Posts the current team summary and Top Playmakers. Use the configured team-stats channel, as with /rankings.</td></tr>
-        <tr><td><code>/play_results</code></td><td>Search published settled official plays by Eastern date range, sport, capper and grade. Browse ten per page. Current OPERATOR authors only; original-post links appear when accessible.</td></tr>
-        <tr><td><code>/mystats</code></td><td>Privately shows official-play, Tail and Vault records. Use its share button to publish to the eligible Free or VIP Chat destination. Tail stats use the capper's risk units, not your personal stake.</td></tr>
+        <tr><td><code>/summary</code></td><td>Posts the official team unit summary only, without individual capper rankings. Use the configured team-stats channel.</td></tr>
+        <tr><td><code>/capper_tracker [capper:]</code></td><td>Privately requests individual capper totals and monthly breakdown, optionally for one capper. This tracker is never automatically displayed.</td></tr>
+        <tr><td><code>/play_results</code></td><td>Search published settled official team plays by Eastern date range, sport and grade. Browse ten per page; original-post links appear when accessible.</td></tr>
+        <tr><td><code>/mystats</code></td><td>Privately shows individual capper-play, Tail and Vault records. Use its share button to publish to the eligible Free or VIP Chat destination. Tail stats use the play's risk units, not your personal stake.</td></tr>
         <tr><td><code>/vault_leaderboard</code></td><td>Shows this month's member Vault records. Vault results are separate from the official capper ledger.</td></tr>
         <tr><td><code>/tracker_start date_value:show</code></td><td>Shows the date the tracker is currently counting from.</td></tr>
       </tbody>
@@ -106,7 +115,7 @@
   </section>
 
   <section><h2><span>🌐</span>Website: results, picks and profiles</h2>
-    <p>Visit <a href="https://playmakersportsanalytics.com">playmakersportsanalytics.com</a>. The homepage settled ledger shows all sports and grades, ten results per page with Previous/Next controls. The dedicated <code>/results</code> page retains sport filters. Open plays and private account data are excluded from the public ledger.</p>
+    <p>Visit <a href="https://playmakersportsanalytics.com">playmakersportsanalytics.com</a>. The homepage and <code>/results</code> ledger show official team picks only, ten results per page with sport filters on the dedicated page. Individual capper homepage metrics and results use Capper_plays only. Published current picks include both team and personal plays with separate attribution. Test plays, open selections and private account data are excluded from the public settled ledger.</p>
     <p>This guide is available on the website at <code>/guide</code>, through the <b>Guide (team only)</b> navigation link. Only verified OPERATOR/Owner accounts can open it; paid/trial access alone is insufficient. The page uses the same tab-session access checks as the research tools, and its content RPC checks current access on every fetch.</p>
     <p><code>/cappers</code> lists current verified OPERATOR cappers, with public profiles and settled performance. <code>/picks</code> contains published open picks for verified member/team access. Filter by sport or capper, and open the insight control where available.</p>
     <p>On <code>/account</code>, sign in with Discord, complete age verification, check membership, edit your profile, choose sports/capper follows, and manage alert preferences. The personalized homepage uses those follows. A preference does not guarantee delivery of every alert.</p>

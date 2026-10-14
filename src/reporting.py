@@ -23,7 +23,6 @@ from src.services.play_features_service import (
     format_record,
     previous_month,
     previous_week,
-    vault_leaderboard,
     SPORT_NAMES,
 )
 from src.services.team_ranking_service import TeamRankingService
@@ -49,7 +48,7 @@ def fetch_official_tracker_rows() -> tuple[list[dict], list[dict]]:
             offset += 1000
 
     return (
-        fetch("plays", "id,user_id,units,odds,status,message_id,created_at,settled_at"),
+        fetch("display_plays", "id,user_id,units,odds,status,message_id,created_at,settled_at,tracking_scope"),
         fetch("users", "id,discord_user_id,display_name,username"),
     )
 
@@ -146,6 +145,10 @@ def operator_plays(plays: list[dict], users: list[dict], operator_ids: set[int] 
     return [play for play in plays if str(play.get("user_id")) in allowed]
 
 
+def scoped_plays(plays: list[dict], scope: str) -> list[dict]:
+    return [play for play in plays if play.get("tracking_scope", "official") == scope]
+
+
 def record_line(summary: dict) -> str:
     return f"{format_record(summary)} · **{summary['net']:+.2f}u** · {summary['roi']:+.1f}% ROI"
 
@@ -169,7 +172,7 @@ def build_recap_embed(
     now = now or datetime.now(TRACKER_TIMEZONE)
     start, end = previous_week(now) if period == "weekly" else previous_month(now)
     plays, users, sports = service.history()
-    recap = build_recap(operator_plays(plays, users, operator_ids), users, sports, start, end)
+    recap = build_recap(scoped_plays(plays, "official"), users, sports, start, end)
     last_day = end - timedelta(days=1)
     label = (
         f"{start.strftime('%b')} {start.day} – {last_day.strftime('%b')} {last_day.day}, {last_day.year}"
@@ -180,10 +183,6 @@ def build_recap_embed(
         embed.description = f"**{label}**\nNo settled plays this period."
     else:
         embed.description = f"**{label}**\n{recap['count']} settled plays · {record_line(recap['total'])}"
-        embed.add_field(name="🏆 Cappers", value=clip_lines([
-            f"{MEDALS[index] if index < 3 else f'{index + 1}.'} **{row['name']}** — {record_line(row)} · Streak {row['streak']}"
-            for index, row in enumerate(recap["cappers"])
-        ]), inline=False)
         embed.add_field(name="🏟️ By Sport", value=clip_lines([
             f"**{row['sport']}** — {record_line(row)}" for row in recap["sports"]
         ]), inline=False)
@@ -191,16 +190,9 @@ def build_recap_embed(
         if best:
             embed.add_field(
                 name="⭐ Best Play",
-                value=f"Play #{best['id']} by **{best['name']}** — {best['units']:+.2f}u at {int(best['odds']):+d}",
+                value=f"Team Play #{best['id']} — {best['units']:+.2f}u at {int(best['odds']):+d}",
                 inline=False,
             )
-    if period == "monthly":
-        board = vault_leaderboard(service.vault_bets(), start, end, limit=5)
-        if board:
-            embed.add_field(name="🏦 Vault Leaders", value=clip_lines([
-                f"{MEDALS[index] if index < 3 else f'{index + 1}.'} **{row['name']}** — {record_line(row)}"
-                for index, row in enumerate(board)
-            ]), inline=False)
     embed.set_footer(text="Eastern Time • Official plays count once per tracked post")
     return embed
 
@@ -277,21 +269,15 @@ class Reporting(commands.Cog):
         if reconciled:
             plays, users = await asyncio.to_thread(self.tracker_rows)
         tracker_embed, top_lines, breakdown = self.tracker_embed(
-            operator_plays(plays, users, await self.tracked_operators()), users,
+            scoped_plays(plays, "official"), users,
         )
         tracker_channel = await self.resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
         tracker_image = await asyncio.to_thread(
             render_tracker_image, tracker_embed.description or "",
-            [(field.name, field.value) for field in tracker_embed.fields]
-            + [("🏆 Monthly Playmaker Breakdown", breakdown or "No settled plays yet.")],
+            [(field.name, field.value) for field in tracker_embed.fields],
             tracker_embed.footer.text or "",
         )
         await self.update_or_post_tracker_embed(tracker_channel, tracker_embed, tracker_image)
-        team_channel = await self.resolve_channel(TEAM_STATS_CHANNEL_ID, "TEAM_STATS_CHANNEL_ID")
-        if team_channel is not None:
-            top_embed = discord.Embed(title="Top Playmakers", color=discord.Color.gold())
-            top_embed.description = "\n\n".join(top_lines) or "No settled results yet."
-            await self.update_or_post_tracker_embed(team_channel, top_embed)
         return reconciled
 
     async def cog_load(self) -> None:
@@ -327,7 +313,7 @@ class Reporting(commands.Cog):
     async def post_recap(self, period: str) -> None:
         channel = await self.resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
         embed = await asyncio.to_thread(
-            build_recap_embed, self.features, period, None, await self.tracked_operators(),
+            build_recap_embed, self.features, period,
         )
         await channel.send(embed=embed)
         logger.info("recap_posted period=%s", period)
@@ -367,7 +353,7 @@ class Reporting(commands.Cog):
                 await interaction.followup.send(f"{period.value.title()} recap posted in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
             else:
                 embed = await asyncio.to_thread(
-                    build_recap_embed, self.features, period.value, None, await self.tracked_operators(),
+                    build_recap_embed, self.features, period.value,
                 )
                 await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as exc:
@@ -408,18 +394,11 @@ class Reporting(commands.Cog):
         await interaction.response.defer()
         try:
             plays, users = await asyncio.to_thread(self.tracker_rows)
-            operators = await self.tracked_operators()
             embed, top_lines, breakdown = await asyncio.to_thread(
-                self.tracker_embed, operator_plays(plays, users, operators), users,
+                self.tracker_embed, scoped_plays(plays, "official"), users,
             )
             embed.set_footer(text="Updated on request • Eastern Time")
-            embed.add_field(
-                name="Playmaker Breakdown", value=breakdown[:1024] or "No settled plays yet.", inline=False,
-            )
             await interaction.followup.send(embed=embed, ephemeral=False)
-            top_embed = discord.Embed(title="Top Playmakers", color=discord.Color.gold())
-            top_embed.description = "\n\n".join(top_lines) or "No settled plays yet."
-            await interaction.followup.send(embed=top_embed, ephemeral=False)
         except Exception as exc:
             logger.exception("summary_failed")
             await interaction.followup.send(f"Could not build the summary: {exc}", ephemeral=True)
@@ -452,12 +431,9 @@ class Reporting(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         try:
-            operators = await self.tracked_operators()
-            if operators is None:
-                raise RuntimeError("The official operator roster is unavailable. Please retry.")
             plays, users, sports = await asyncio.to_thread(self.features.history)
             rows = await asyncio.to_thread(
-                filter_results, plays, users, sports, operator_ids=operators, start=first, end=last,
+                filter_results, scoped_plays(plays, "official"), users, sports, operator_ids=None, start=first, end=last,
                 sport=sport.value if sport else None, capper_id=capper.id if capper else None,
                 result=result.value if result else None,
             )
@@ -479,7 +455,32 @@ class Reporting(commands.Cog):
             logger.exception("results_failed user=%s", interaction.user.id)
             await interaction.followup.send("Could not load official results. Check bot logs or retry shortly.", ephemeral=True)
 
-    @app_commands.command(name="update_tracker", description="Refresh the Unit Summary and Top Playmakers embeds")
+    @app_commands.command(name="capper_tracker", description="Request individual capper stats; never posted automatically")
+    @app_commands.guild_only()
+    async def capper_tracker_command(self, interaction: discord.Interaction, capper: discord.Member | None = None) -> None:
+        if not interaction.guild or interaction.guild.id != GUILD_ID:
+            await interaction.response.send_message("Use this command in the Playmaker server.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            operators = await self.tracked_operators()
+            if operators is None:
+                raise RuntimeError("The capper roster is unavailable. Please retry.")
+            plays, users = await asyncio.to_thread(self.tracker_rows)
+            plays = operator_plays(scoped_plays(plays, "capper"), users, operators)
+            if capper:
+                author_ids = {str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(capper.id)}
+                plays = [play for play in plays if str(play["user_id"]) in author_ids]
+            embed, _, breakdown = self.tracker_embed(plays, users)
+            embed.title = "Individual Capper | Unit Summary"
+            embed.add_field(name="Monthly Capper Breakdown", value=breakdown[:1024] or "No settled capper plays yet.", inline=False)
+            embed.set_footer(text="Requested only • Capper plays only • Eastern Time")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.exception("capper_tracker_failed")
+            await interaction.followup.send(f"Could not load capper stats: {exc}", ephemeral=True)
+
+    @app_commands.command(name="update_tracker", description="Refresh the official team Unit Summary")
     async def update_tracker_command(self, interaction: discord.Interaction) -> None:
         if not self.can_manage_plays(interaction.user, interaction.guild):
             await interaction.response.send_message("Only officials or moderators can refresh the tracker.", ephemeral=True)

@@ -19,6 +19,8 @@ from src.data_sync import DataSync
 from src.model_projections import ModelProjections
 from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
+from src.capper_ballots import CapperBallots
+from src.config import CAPPER_CHANNEL_ID
 from src.play_settlement import PlaySettlement, build_suggestion_view as build_suggestion_view
 from src.play_presentation import (
     PlayPresentation,
@@ -123,6 +125,11 @@ class OfficialBot(commands.Bot):
             repost_play=repost_official_play,
             announce_play=announce_new_play,
             staff_alert=send_staff_alert,
+        ))
+        await self.add_cog(CapperBallots(
+            self, official=official_play_service, resolve_channel=resolve_channel,
+            is_tracked_operator=is_tracked_operator, staff_alert=send_staff_alert,
+            get_testing=get_testing_enabled,
         ))
         await self.add_cog(Reporting(
             self,
@@ -276,7 +283,7 @@ async def tracked_operator_ids() -> set[int] | None:
 
 def settlement_channel_settings() -> list[tuple[str, int | None]]:
     # Reactions only count where play cards are posted, plus the official channel for cards published there.
-    settings = [play_post_target(), ("OFFICIAL_CHANNEL_ID", OFFICIAL_CHANNEL_ID)]
+    settings = [play_post_target(), ("OFFICIAL_CHANNEL_ID", OFFICIAL_CHANNEL_ID), ("CAPPER_CHANNEL_ID", CAPPER_CHANNEL_ID)]
     return [(name, channel_id) for name, channel_id in dict.fromkeys(settings) if channel_id]
 
 

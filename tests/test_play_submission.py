@@ -25,7 +25,7 @@ def submission():
 
 def request(user_id=42, roles=()):
     return SimpleNamespace(
-        id=999, channel_id=777, guild=SimpleNamespace(id=123),
+        id=999, channel_id=module.CAPPER_CHANNEL_ID, guild=SimpleNamespace(id=123),
         user=SimpleNamespace(
             id=user_id, display_name="Ace", roles=[SimpleNamespace(id=role) for role in roles],
         ),
@@ -41,10 +41,10 @@ def parsed():
     return {"units": 2, "team_name": "Home", "legs": [{"selection": "Home ML", "odds": 150}], "image_url": "https://cdn/slip"}
 
 
-def message(channel_id=777):
+def message(channel_id=None):
     return SimpleNamespace(
         id=8, author=SimpleNamespace(id=42, bot=False, mention="<@42>"), guild=object(),
-        channel=SimpleNamespace(id=channel_id, send=AsyncMock()), content="2u",
+        channel=SimpleNamespace(id=channel_id or module.CAPPER_CHANNEL_ID, send=AsyncMock()), content="2u",
         attachments=[SimpleNamespace(content_type="image/png", url="https://cdn/slip")],
     )
 
@@ -72,7 +72,8 @@ def test_manual_record_preserves_create_publish_link_confirm_order():
     asyncio.run(cog.record_modal_play(interaction, 2, 1, [150], "Home", "Home ML", parsed()["legs"]))
     assert events == ["create", "publish", "link", "confirm", "announce"]
     assert cog.official.create_play_record.call_args.kwargs["discord_user_id"] == "42"
-    cog.publish_play.assert_awaited_once_with(interaction, {"play_id": 7}, ("OFFICIAL_CHANNEL_ID", 777))
+    assert cog.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
+    cog.publish_play.assert_awaited_once_with(interaction, {"play_id": 7}, ("CAPPER_CHANNEL_ID", module.CAPPER_CHANNEL_ID))
     cog.official.attach_message_id.assert_called_once_with(7, 101)
 
 
@@ -96,7 +97,7 @@ def test_manual_record_failure_does_not_claim_success(failure):
 @pytest.mark.parametrize("deny", ["guild", "role", "channel"])
 def test_play_command_preserves_permissions_and_channel(monkeypatch, deny):
     monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {88})
-    monkeypatch.setattr(module, "OFFICIAL_CHANNEL_ID", 777)
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
     cog = submission()
     interaction = request(roles=[88])
     if deny == "guild":
@@ -112,7 +113,7 @@ def test_play_command_preserves_permissions_and_channel(monkeypatch, deny):
 
 def test_play_command_opens_cog_owned_modal(monkeypatch):
     monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {88})
-    monkeypatch.setattr(module, "OFFICIAL_CHANNEL_ID", 777)
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
     cog = submission()
     interaction = request(roles=[88])
     asyncio.run(cog.play_command.callback(cog, interaction))
@@ -167,7 +168,7 @@ def test_final_leg_records_from_database_draft_and_clears():
 
 
 def test_image_intake_opens_review_without_recording(monkeypatch):
-    monkeypatch.setattr(module, "IMAGE_INPUT_CHANNEL_ID", 777)
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
     cog = submission()
     cog.images.extract_play.return_value = parsed()
     source = message()
@@ -188,7 +189,7 @@ def test_test_channel_consumes_message_without_recording(monkeypatch):
     cog = submission()
     cog.get_testing.return_value = True
     cog.images.extract_play.return_value = parsed()
-    source = message()
+    source = message(777)
     assert asyncio.run(cog.handle_message(source))
     assert "Nothing will be recorded" in source.channel.send.call_args.args[0]
     cog.official.create_play_record.assert_not_called()
@@ -198,21 +199,21 @@ def test_test_channel_without_image_still_consumes_routing(monkeypatch):
     monkeypatch.setattr(module, "TEST_CHANNEL_ID", 777)
     cog = submission()
     cog.get_testing.return_value = True
-    source = message()
+    source = message(777)
     source.attachments = []
     assert asyncio.run(cog.handle_message(source))
     cog.images.extract_play.assert_not_called()
 
 
 def test_other_channel_does_not_parse(monkeypatch):
-    monkeypatch.setattr(module, "IMAGE_INPUT_CHANNEL_ID", 888)
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 888)
     cog = submission()
-    assert not asyncio.run(cog.handle_message(message()))
+    assert not asyncio.run(cog.handle_message(message(777)))
     cog.images.extract_play.assert_not_called()
 
 
 @pytest.mark.parametrize("reposted", [True, False])
-def test_image_confirmation_keeps_repost_or_source_tracking(reposted):
+def test_image_confirmation_tracks_exactly_one_published_card(reposted):
     cog = submission()
     cog.official.get_play_for_message.return_value = None
     repost = SimpleNamespace(id=202) if reposted else None
@@ -229,13 +230,14 @@ def test_image_confirmation_keeps_repost_or_source_tracking(reposted):
         cog.official.create_play_record.assert_called_once()
 
     asyncio.run(check())
-    cog.official.attach_message_id.assert_called_once_with(7, 202 if reposted else 8)
+    cog.official.attach_message_id.assert_called_once_with(7, 202 if reposted else 101)
     cog.confirm_recorded.assert_awaited_once()
     interaction.message.delete.assert_awaited_once()
     if reposted:
         cog.announce_play.assert_not_awaited()
+        cog.publish_play.assert_not_awaited()
     else:
-        assert cog.announce_play.call_args.args[-1].id == 8
+        assert cog.announce_play.call_args.args[-1].id == 101
 
 
 def test_concurrent_image_confirmation_only_creates_once():
@@ -350,7 +352,7 @@ def test_bot_routes_submission_once_then_prefix_commands(monkeypatch):
 
 
 def test_image_extraction_failure_notifies_and_alerts(monkeypatch):
-    monkeypatch.setattr(module, "IMAGE_INPUT_CHANNEL_ID", 777)
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
     cog = submission()
     cog.images.extract_play.side_effect = RuntimeError("unreadable")
     source = message()

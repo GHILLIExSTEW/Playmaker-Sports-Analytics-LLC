@@ -202,10 +202,10 @@ def test_team_reports_preserve_channel_restrictions(monkeypatch, command):
     cog.rankings.fetch_rankings_from_supabase.assert_not_called()
 
 
-def test_summary_uses_operator_filtered_tracker_rows(monkeypatch):
+def test_summary_uses_only_official_scope_and_does_not_post_capper_rankings(monkeypatch):
     monkeypatch.setattr(reporting_module, "TEAM_STATS_CHANNEL_ID", 777)
     cog = make_reporting()
-    plays = [{"id": 1, "user_id": 1}, {"id": 2, "user_id": 2}]
+    plays = [{"id": 1, "user_id": 1, "tracking_scope": "official"}, {"id": 2, "user_id": 2, "tracking_scope": "capper"}]
     users = [{"id": 1, "discord_user_id": "42"}, {"id": 2, "discord_user_id": "43"}]
     cog.tracker_rows.return_value = (plays, users)
     cog.tracker_embed.return_value = (
@@ -214,11 +214,10 @@ def test_summary_uses_operator_filtered_tracker_rows(monkeypatch):
     request = interaction()
     asyncio.run(cog.summary_command.callback(cog, request))
     cog.tracker_embed.assert_called_once_with([plays[0]], users)
-    assert request.followup.send.await_count == 2
+    assert request.followup.send.await_count == 1
     summary = request.followup.send.await_args_list[0].kwargs["embed"]
-    assert summary.fields[0].value == "**Ace** · 1-0"
+    assert not summary.fields
     assert summary.footer.text == "Updated on request • Eastern Time"
-    assert request.followup.send.await_args_list[1].kwargs["embed"].description == "Ace +2u"
 
 
 def test_summary_database_failure_is_explicit(monkeypatch):
@@ -230,6 +229,25 @@ def test_summary_database_failure_is_explicit(monkeypatch):
     assert "Could not build the summary" in request.followup.send.call_args.args[0]
     assert request.followup.send.call_args.kwargs["ephemeral"] is True
     cog.tracker_embed.assert_not_called()
+
+
+def test_capper_tracker_is_requested_only_and_excludes_official_and_test_plays(monkeypatch):
+    monkeypatch.setattr(reporting_module, "GUILD_ID", 123)
+    cog = make_reporting()
+    plays = [
+        {"id": 1, "user_id": 1, "tracking_scope": "capper"},
+        {"id": 2, "user_id": 1, "tracking_scope": "official"},
+        {"id": 3, "user_id": 1, "tracking_scope": "test"},
+    ]
+    users = [{"id": 1, "discord_user_id": "42"}]
+    cog.tracker_rows.return_value = (plays, users)
+    request = interaction()
+    request.guild = SimpleNamespace(id=123)
+    asyncio.run(cog.capper_tracker_command.callback(cog, request))
+    cog.tracker_embed.assert_called_once_with([plays[0]], users)
+    assert request.followup.send.call_args.kwargs["ephemeral"] is True
+    assert request.followup.send.call_args.kwargs["embed"].title == "Individual Capper | Unit Summary"
+    cog.resolve_channel.assert_not_awaited()
 
 
 def test_rankings_distinguishes_database_failure_from_empty_data(monkeypatch):
@@ -270,9 +288,9 @@ def test_update_tracker_preserves_permission_and_reconciliation_count(monkeypatc
     assert request.followup.send.call_args.kwargs["ephemeral"] is True
 
 
-def test_recap_builder_keeps_empty_month_and_vault_lookup():
+def test_recap_builder_keeps_empty_month_without_mixing_member_vault_stats():
     service = Mock(history=Mock(return_value=([], [], {})), vault_bets=Mock(return_value=[]))
     embed = build_recap_embed(service, "monthly", datetime(2026, 6, 1, tzinfo=TRACKER_TIMEZONE))
     assert embed.title == "📊 Monthly Recap"
     assert embed.description == "**May 2026**\nNo settled plays this period."
-    service.vault_bets.assert_called_once()
+    service.vault_bets.assert_not_called()

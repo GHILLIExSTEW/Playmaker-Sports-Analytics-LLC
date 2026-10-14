@@ -145,7 +145,7 @@ def test_command_bad_dates_do_not_query(monkeypatch):
     assert "YYYY-MM-DD" in request.response.send_message.call_args.args[0]
 
 
-@pytest.mark.parametrize("failure", ["roster", "database"])
+@pytest.mark.parametrize("failure", ["database"])
 def test_command_unavailable_data_is_error_not_empty_success(monkeypatch, failure):
     monkeypatch.setattr(reporting_module, "GUILD_ID", 123)
     cog = reporting()

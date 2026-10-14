@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.administration import TestFlowView, build_image_test_embed
-from src.config import IMAGE_INPUT_CHANNEL_ID, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, TEST_CHANNEL_ID
+from src.config import CAPPER_CHANNEL_ID, OFFICIAL_ROLE_IDS, TEST_CHANNEL_ID
 from src.services.image_play_service import ImagePlayService, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
@@ -59,6 +59,23 @@ class PlaySubmission(commands.Cog):
         self.staff_alert = staff_alert
         self.images = images if images is not None else image_play_service
 
+    def submission_target(self, interaction: discord.Interaction) -> tuple[str, int | None]:
+        if self.get_testing():
+            return "TEST_CHANNEL_ID", TEST_CHANNEL_ID
+        if interaction.channel_id == CAPPER_CHANNEL_ID:
+            return "CAPPER_CHANNEL_ID", CAPPER_CHANNEL_ID
+        raise ValueError(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays are generated from closed ballots.")
+
+    def record_identity(self, interaction: discord.Interaction) -> dict:
+        scope = "test" if self.get_testing() else "capper"
+        self.submission_target(interaction)
+        user = interaction.user
+        return {
+            "discord_user_id": str(user.id),
+            "username": user.display_name,
+            "tracking_scope": scope,
+        }
+
     async def handle_message(self, message: discord.Message) -> bool:
         """Return whether this message consumes routing; prefix commands stay in the bot."""
         if message.author.bot or not message.guild:
@@ -77,7 +94,7 @@ class PlaySubmission(commands.Cog):
                 logger.exception("testing_image_extract_failed message=%s", message.id)
                 await message.channel.send(f"{message.author.mention}, test image failed: {exc}", delete_after=30)
             return True
-        if IMAGE_INPUT_CHANNEL_ID and message.channel.id != IMAGE_INPUT_CHANNEL_ID:
+        if message.channel.id != CAPPER_CHANNEL_ID:
             return False
         image = next((item for item in message.attachments if (item.content_type or "").startswith("image/")), None)
         if image is None or not self.is_tracked_operator(message.author):
@@ -107,7 +124,7 @@ class PlaySubmission(commands.Cog):
             logger.info("play_db_start interaction=%s", interaction.id)
             payload = await asyncio.to_thread(
                 self.official.create_play_record,
-                discord_user_id=str(interaction.user.id), username=interaction.user.display_name,
+                **self.record_identity(interaction),
                 units=units, legs=legs, odds=PlayService.combine_american_odds(odds_values),
                 team_name=team_name, play_text=play_text, leg_records=leg_records,
             )
@@ -121,7 +138,7 @@ class PlaySubmission(commands.Cog):
             await interaction.followup.send(payload["error"], ephemeral=True)
             return
         try:
-            message = await self.publish_play(interaction, payload, self.official_post_target())
+            message = await self.publish_play(interaction, payload, self.submission_target(interaction))
         except Exception as exc:
             logger.exception("play_publish_failed interaction=%s", interaction.id)
             await interaction.followup.send(f"Could not publish the play: {exc}", ephemeral=True)
@@ -135,11 +152,14 @@ class PlaySubmission(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used in a guild.", ephemeral=True)
             return
+        if not self.is_tracked_operator(interaction.user):
+            await interaction.response.send_message("Only cappers can import personal plays.", ephemeral=True)
+            return
         if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("You do not have permission to import plays.", ephemeral=True)
             return
-        if OFFICIAL_CHANNEL_ID and interaction.channel_id != OFFICIAL_CHANNEL_ID:
-            await interaction.response.send_message(f"Use this command in the official channel: <#{OFFICIAL_CHANNEL_ID}>", ephemeral=True)
+        if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
+            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from closed ballots.", ephemeral=True)
             return
         if not image.content_type or not image.content_type.startswith("image/"):
             await interaction.response.send_message("Attach an image file.", ephemeral=True)
@@ -163,11 +183,14 @@ class PlaySubmission(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used in a guild.", ephemeral=True)
             return
+        if not self.is_tracked_operator(interaction.user):
+            await interaction.response.send_message("Only cappers can record personal plays.", ephemeral=True)
+            return
         if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("You do not have permission to log official plays.", ephemeral=True)
             return
-        if OFFICIAL_CHANNEL_ID and interaction.channel_id != OFFICIAL_CHANNEL_ID:
-            await interaction.response.send_message(f"Use this command in the official channel: <#{OFFICIAL_CHANNEL_ID}>", ephemeral=True)
+        if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
+            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from closed ballots.", ephemeral=True)
             return
         await interaction.response.send_modal(PlayModal(self))
 
@@ -243,7 +266,7 @@ class LegEntryView(discord.ui.View):
         ))
 
 
-class PlayModal(discord.ui.Modal, title="Record Official Play"):
+class PlayModal(discord.ui.Modal, title="Record Capper Play"):
     units = discord.ui.TextInput(label="Units risked", placeholder="Example: 2", required=True, max_length=20)
     legs = discord.ui.TextInput(label="Number of legs", placeholder="Example: 3", required=True, max_length=10)
     leg_one = discord.ui.TextInput(label="Leg 1 selection", placeholder="Enter the first pick or selection", required=True, max_length=1000)
@@ -322,7 +345,7 @@ class ConfirmImageView(discord.ui.View):
             legs = self.parsed["legs"]
             payload = await asyncio.to_thread(
                 official.create_play_record,
-                discord_user_id=str(interaction.user.id), username=interaction.user.display_name,
+                **self.submission.record_identity(interaction),
                 units=float(self.parsed["units"]), legs=len(legs),
                 odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
                 team_name=self.parsed.get("team_name") or "",
@@ -333,11 +356,11 @@ class ConfirmImageView(discord.ui.View):
                 await interaction.followup.send(payload["error"], ephemeral=True)
                 return
             payload["image_url"] = self.parsed.get("image_url")
-            message = await self.submission.publish_play(interaction, payload)
             repost = None
             if self.source_message_id and interaction.channel is not None:
                 repost = await self.submission.repost_play(interaction.channel, self.source_message_id, payload, interaction.user)
-            tracked_message_id = repost.id if repost else (self.source_message_id or message.id)
+            message = repost or await self.submission.publish_play(interaction, payload, self.submission.submission_target(interaction))
+            tracked_message_id = message.id
             await asyncio.to_thread(official.attach_message_id, payload["play_id"], tracked_message_id)
             await self.submission.confirm_recorded(interaction, payload)
             if interaction.message is not None:
@@ -345,11 +368,6 @@ class ConfirmImageView(discord.ui.View):
             self.stop()
             if repost is None:
                 tracked = message
-                if self.source_message_id and interaction.channel is not None:
-                    try:
-                        tracked = await interaction.channel.fetch_message(self.source_message_id)
-                    except discord.HTTPException:
-                        tracked = message
                 await self.submission.announce_play(payload, interaction.user.display_name, message, tracked)
         except Exception as exc:
             logger.exception("image_play_confirm_failed interaction=%s", interaction.id)
