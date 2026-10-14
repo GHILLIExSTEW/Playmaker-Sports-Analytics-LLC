@@ -83,10 +83,25 @@ test('Data Models shows an experimental NFL projection and a transparent insuffi
   await expect(page.getByText('Team 1 estimated win')).toBeVisible()
   await expect(page.getByText('Source data last synced:')).toBeVisible()
   await page.getByRole('button', { name: 'NBA', exact: true }).click()
-  await expect(page.getByText('No upcoming NBA games are available in the cache.')).toBeVisible()
+  await expect(page.getByText('No NBA games are available in the cache.')).toBeVisible()
   expect(modelRequests).toContainEqual({ sport: 'basketball', league: '12' })
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('Data Models keeps a game available until one hour after its scheduled start', async ({ page }) => {
+  const startedGame = {
+    ...modelEvent(98, '2026-10-10', 'past-home', 'past-away', 70, 65),
+    start_at: '2026-10-10T14:30:00Z',
+    status_code: 'FT',
+  }
+  await mockSupabase(page, [...history(), startedGame])
+  await page.goto('/models')
+  const matchup = page.getByRole('option', { name: /Team past-away at Team past-home/ })
+  await expect(matchup).toHaveCount(1)
+
+  await page.clock.runFor(30 * 60 * 1000)
+  await expect(matchup).toHaveCount(0)
 })
 
 test('Data Models reports missing history rather than manufacturing a probability', async ({ page }) => {

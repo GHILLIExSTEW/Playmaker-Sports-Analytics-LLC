@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { completedModelGameCount, projectMatchup, type ModelEvent } from './modelMath'
 import { fetchModelEvents, modelCompetitions } from './sportModels'
-import { finalEventStatuses } from './sportEvents'
 
 function easternTime(value: string): string {
   return new Intl.DateTimeFormat('en-US', {
@@ -49,11 +48,11 @@ export default function DataModelsPage() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const upcoming = events
-    .filter((event) => !finalEventStatuses.has(event.status_code.toUpperCase())
-      && Date.parse(event.start_at) > now && event.home_name && event.away_name)
+  const availableEvents = events
+    .filter((event) => Date.parse(event.start_at) + 60 * 60 * 1000 > now
+      && event.home_name && event.away_name)
     .sort((first, second) => Date.parse(first.start_at) - Date.parse(second.start_at))
-  const matchup = upcoming.find((event) => event.event_id === selectedEvent) ?? upcoming[0]
+  const matchup = availableEvents.find((event) => event.event_id === selectedEvent) ?? availableEvents[0]
   const projection = matchup ? projectMatchup(events, matchup) : null
   const historicalGames = matchup ? completedModelGameCount(events, matchup.start_at) : 0
 
@@ -84,10 +83,10 @@ export default function DataModelsPage() {
     <section className="model-matchup" aria-label={`${competition.name} model`}>
       <div className="model-matchup-toolbar">
         <div><p className="eyebrow">Score-only baseline</p><h2>{competition.name} projections</h2></div>
-        {state === 'ready' && upcoming.length > 0 && <label className="model-matchup-select">
+        {state === 'ready' && availableEvents.length > 0 && <label className="model-matchup-select">
           Matchup
           <select value={matchup?.event_id ?? ''} onChange={(event) => setSelectedEvent(event.target.value)}>
-            {upcoming.map((event) => <option key={event.event_id} value={event.event_id}>
+            {availableEvents.map((event) => <option key={event.event_id} value={event.event_id}>
               {event.away_name} at {event.home_name} · {easternTime(event.start_at)} ET
             </option>)}
           </select>
@@ -97,7 +96,7 @@ export default function DataModelsPage() {
       {state === 'error' && <p role="alert">Model data could not be loaded. {error} <button type="button" onClick={() => { setState('loading'); setRetry((value) => value + 1) }}>Retry</button></p>}
       {state === 'ready' && unresolved > 0 && <p role="status">{unresolved} provider games excluded because their teams are unresolved. They are not used in projections or history samples.</p>}
       {state === 'ready' && duplicates > 0 && <p role="status">{duplicates} duplicate provider records merged. Each matchup counts once in selections and history samples.</p>}
-      {state === 'ready' && !matchup && <p>No upcoming {competition.name} games are available in the cache.</p>}
+      {state === 'ready' && !matchup && <p>No {competition.name} games are available in the cache.</p>}
       {state === 'ready' && matchup && !projection && <div className="model-empty-state">
         <h3>Not enough history for a projection yet.</h3>
         <p>{historicalGames} completed games are available before this matchup. The baseline requires at least 3 scored games for each team and 30 scored games in the competition.</p>
