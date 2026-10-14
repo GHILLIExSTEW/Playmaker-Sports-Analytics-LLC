@@ -85,3 +85,59 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
     }
   } finally { await db.close() }
 })
+
+test('model projection RPCs are operator-only and keep games until one hour after start', async () => {
+  const db = new PGlite()
+  try {
+    const load = async (filename) => db.exec(await readFile(new URL(`../../supabase/migrations/${filename}`, import.meta.url), 'utf8'))
+    await db.exec(`
+      create role anon; create role authenticated; create role service_role bypassrls;
+      create schema auth;
+      create function auth.uid() returns uuid language sql as $$ select nullif(current_setting('test.uid', true), '')::uuid $$;
+      create function public.website_member_access() returns jsonb language sql as $$ select current_setting('test.access')::jsonb $$;
+      select set_config('test.uid', '00000000-0000-0000-0000-000000000001', false);
+      alter default privileges grant execute on functions to anon, authenticated;
+    `)
+    for (const file of ['20260930260000_api_sports_nfl.sql', '20260930300000_api_sports_multi_event_cache.sql',
+      '20261011170000_sports_model_history.sql', '20261011180000_nflverse_team_efficiency.sql',
+      '20261011214000_operator_research_access.sql', '20261014120000_sport_model_projections.sql']) await load(file)
+    const row = (id, offset) => `('nfl','${id}',now() + interval '${offset}','NS','1','Home','2','Away',24.4,20.1,0.64,'normal',13.5,10,8,8,200,
+      null,null,null,null,null,null,null,null,'{}'::jsonb,'ratings-v2',now(),now())`
+    await db.exec(`
+      insert into public.sport_model_projections values ${row('past', '-2 hours')}, ${row('live', '-30 minutes')},
+        ${row('soon', '3 hours')}, ${row('far', '20 days')};
+      insert into public.sport_model_backtests values ('nfl','ratings-v2','{}','{"status":"ok","games":158}',now());
+      insert into public.api_sports_events (sport_slug,event_id,league_id,season,event_name,start_at)
+        values ('basketball','1','116','2026','NCAA game',now()), ('basketball','2','8','2026','Pro B game',now());
+    `)
+    const call = async (rpc, role = 'authenticated') => {
+      await db.exec(`set role ${role}`)
+      try { return (await db.query(`select * from public.${rpc}`)).rows }
+      finally { await db.exec('reset role') }
+    }
+    for (const kind of ['paid', 'trial', 'operator', 'owner']) {
+      await db.query("select set_config('test.access', $1, false)", [JSON.stringify({ state: 'active', kind })])
+      if (kind === 'operator' || kind === 'owner') {
+        assert.deepEqual((await call("operator_sport_model_projections('nfl')")).map((item) => item.game_id), ['live', 'soon'])
+        assert.equal((await call("operator_sport_model_backtest('nfl')"))[0].report.games, 158)
+        assert.deepEqual(await call("operator_sport_model_projections('hockey:57')"), [])
+        assert.equal((await call("public_sport_model_events('basketball','116')")).length, 1)
+        assert.equal((await call("public_sport_model_events('basketball','8')")).length, 0)
+      } else {
+        await assert.rejects(call("operator_sport_model_projections('nfl')"), /OPERATOR or Owner/)
+        await assert.rejects(call("operator_sport_model_backtest('nfl')"), /OPERATOR or Owner/)
+      }
+    }
+    for (const rpc of ["operator_sport_model_projections('nfl')", "operator_sport_model_backtest('nfl')"]) {
+      await assert.rejects(call(rpc, 'anon'), /permission denied/)
+    }
+    for (const table of ['sport_model_odds', 'sport_model_players', 'sport_model_injuries', 'sport_model_weather',
+      'sport_model_projections', 'sport_model_backtests']) {
+      for (const role of ['anon', 'authenticated']) {
+        await db.exec(`set role ${role}`)
+        try { await assert.rejects(db.query(`select * from public.${table}`), /permission denied/) }
+        finally { await db.exec('reset role') }
+      }
+    }
+  } finally { await db.close() }
+})

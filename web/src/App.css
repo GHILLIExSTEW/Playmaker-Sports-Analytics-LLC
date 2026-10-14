@@ -35,6 +35,18 @@
 .model-scoreline strong { color: var(--green); font: 700 36px/1 var(--display); }
 .model-win-probabilities { margin-top: 12px; }
 .model-win-probabilities strong { font-size: 22px; }
+.model-summary { margin: 16px 0 0; font-weight: 700; }
+.model-market, .model-inputs { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.model-market h3, .model-inputs h3 { margin: 0 0 10px; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; }
+.model-market dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0; }
+.model-market dl > div { padding: 12px; border: 1px solid var(--line); }
+.model-market dt { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.model-market dd { margin: 4px 0 0; font-weight: 700; overflow-wrap: anywhere; }
+.model-inputs ul { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.65; overflow-wrap: anywhere; }
+.model-track-record { overflow-x: auto; }
+.model-track-record table { width: 100%; max-width: 720px; margin-top: 14px; border-collapse: collapse; }
+.model-track-record th, .model-track-record td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.model-track-record thead th { color: var(--muted); font-size: 13px; }
 .model-methodology { max-width: 880px; margin-top: 52px; padding-top: 30px; border-top: 1px solid var(--line); }
 .model-methodology p:not(.eyebrow) { color: var(--muted); line-height: 1.7; }
 .model-methodology a, .model-return-link { color: var(--green); }

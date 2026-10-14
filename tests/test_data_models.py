@@ -6,12 +6,15 @@ from unittest.mock import AsyncMock, Mock
 
 import discord
 import pytest
+from discord import app_commands
 
 from src import data_models as ui
 from src.services import data_model_service as models
 from src.services.api_budget_service import ApiBudgetDenied
 from src.services.api_sports_multi_service import ApiSportsMultiService
 from src.services.api_sports_service import ApiSportsService
+from src.services.model_engine import Context, Market, ModelProjection
+from src.services.model_projection_service import ModelProjectionService, ModelRun
 
 NOW = datetime.now(timezone.utc)
 
@@ -30,6 +33,20 @@ def history():
 def matchup():
     return replace(history()[0], id="99", start=datetime(2026, 11, 1, 20, tzinfo=timezone.utc),
                    home_score=None, away_score=None, status="NS", synced=NOW)
+
+
+def engine(service, backtest=None):
+    def table(name):
+        if backtest is None:
+            raise RuntimeError("no backtests table")
+        return FakeQuery({0: [backtest]}, [])
+    inputs = Mock()
+    inputs.context.side_effect = lambda competition, now: Context(now=now)
+    return ModelProjectionService(data=service, inputs=inputs, client=SimpleNamespace(table=table), clock=lambda: NOW)
+
+
+def picker_run(games):
+    return ModelRun("nfl", games, {}, None, None, NOW)
 
 
 def test_projection_matches_website_numeric_baseline_and_excludes_future():
@@ -207,7 +224,7 @@ def test_complete_modal_dropdown_flow_posts_only_in_laboratory(configured):
         game = matchup()
         service.refresh.return_value = (history() + [game], 2, NOW)
         service.choices.return_value = [game]
-        cog = ui.DataModels(service)
+        cog = ui.DataModels(service, engine(service))
         request = interaction()
         await ui.DataModels.model.callback(cog, request)
         league_view = request.response.send_message.call_args.kwargs["view"]
@@ -228,8 +245,11 @@ def test_complete_modal_dropdown_flow_posts_only_in_laboratory(configured):
         await publish.on_submit(request)
         request.channel.send.assert_awaited_once()
         embed = request.channel.send.call_args.kwargs["embed"]
-        assert "72.9" in embed.fields[0].value
-        assert "57.3%" in embed.fields[1].value
+        projection = picker.run.projections[game.id]
+        assert f"{projection.home_score:.1f}"[:3] in embed.fields[0].value
+        assert [field.name for field in embed.fields][:3] == ["Projected score", "Estimated win probability", "Market comparison"]
+        assert "no sportsbook consensus" in embed.fields[2].value
+        assert "walk-forward backtest not available" in embed.fields[-2].value
         assert request.channel.send.call_args.kwargs["allowed_mentions"].everyone is False
         await publish.on_submit(request)
         request.channel.send.assert_awaited_once()
@@ -241,7 +261,7 @@ def test_complete_modal_dropdown_flow_posts_only_in_laboratory(configured):
 def test_picker_pagination_ownership_and_role_rechecks(configured):
     async def run():
         games = [replace(matchup(), id=str(i)) for i in range(60)]
-        picker = ui.GameView(123, "nfl", games, games, 2, NOW)
+        picker = ui.GameView(123, "nfl", picker_run(games), games, 2, NOW)
         assert len(next(c for c in picker.children if isinstance(c, ui.GameSelect)).options) == 25
         request = interaction()
         await picker.next_page.callback(request)
@@ -264,7 +284,7 @@ def test_filter_failures_explicit_no_public_post(configured, failure):
         service = Mock()
         service.refresh.return_value = ([], 2, NOW)
         service.choices.return_value = []
-        cog = ui.DataModels(service)
+        cog = ui.DataModels(service, engine(service))
         request = interaction(role=999 if failure == "role" else 30)
         modal = ui.GameFilterModal(cog, 123, "nfl")
         modal.day._value = "bad" if failure == "date" else "2026-11-01"
@@ -290,7 +310,7 @@ def test_filter_failures_explicit_no_public_post(configured, failure):
 def test_publish_failures_no_unauthorized_or_stale_post(configured, failure):
     async def run():
         game = matchup()
-        picker = ui.GameView(123, "nfl", history(), [game], 2,
+        picker = ui.GameView(123, "nfl", picker_run(history()), [game], 2,
                              NOW - timedelta(minutes=4) if failure == "expired" else NOW)
         modal = ui.PublishModelModal(picker, game)
         modal.confirm._value = "NO" if failure == "confirmation" else "POST"
@@ -309,7 +329,142 @@ def test_publish_failures_no_unauthorized_or_stale_post(configured, failure):
 
 
 def test_insufficient_history_embed_is_honest():
-    embed = ui.model_embed("nfl", matchup(), [], 2, NOW)
+    embed = ui.model_embed("nfl", matchup(), None, None, 2, NOW)
     assert embed.fields[0].name == "No projection available"
-    assert "probability" not in [field.name for field in embed.fields]
-    assert "No injury" in embed.fields[-1].value
+    assert "Estimated win probability" not in [field.name for field in embed.fields]
+    assert "not available yet" in embed.fields[-2].value
+
+
+def sample_projection(**changes):
+    values = dict(home_score=24.4, away_score=20.1, home_probability=0.64, home_sample=10, away_sample=9,
+                  league_sample=300, updated=NOW, margin_sd=13.0, total_sd=13.5)
+    return ModelProjection(**{**values, **changes})
+
+
+def test_embed_shows_market_edge_inputs_and_track_record():
+    from src.services.model_engine import Injury, Weather
+    market = Market(home_probability=0.6, home_spread=-3.5, total=44.5, books=7, fetched_at=NOW)
+    injury = Injury("1", "Q. Back", "QB", "Out", "Knee")
+    projection = sample_projection(
+        market=market, market_edge=0.04, cover_probability=0.53, over_probability=0.41,
+        rest_days=(7, 6), travel_km=(0.0, 1500.0), margin_adjustments=(("rest", 0.4),),
+        weather=Weather(31.0, 18.0, 2.5, "forecast"), injuries=(injury,), injury_points=(injury.points, 0.0),
+    )
+    report = {"status": "ok", "games": 158, "model": {"brier": 0.2246, "log_loss": 0.6417, "accuracy": 0.586},
+              "baseline": {"brier": 0.2263, "log_loss": 0.6476}}
+    game = matchup()
+    embed = ui.model_embed("nfl", game, projection, report, 2, NOW)
+    fields = {field.name: field.value for field in embed.fields}
+    assert "Team 0 -3.5" in fields["Market comparison"] and "Total 44.5" in fields["Market comparison"]
+    assert "Model edge Team 0 +4.0 pts" in fields["Market comparison"]
+    assert "cover 53.0%" in fields["Market comparison"] and "Over 41.0%" in fields["Market comparison"]
+    assert "travel 1,500 km" in fields["Inputs"] and "31\u00b0F" in fields["Inputs"] and "Q. Back QB Out" in fields["Inputs"]
+    assert "158 holdout games" in fields["Track record"] and "0.225 vs old 0.226" in fields["Track record"]
+
+class FakeQuery:
+    def __init__(self, pages, calls):
+        self.pages, self.calls = pages, calls
+
+    def __getattr__(self, name):
+        def record(*args, **kwargs):
+            self.calls.append((name, *args))
+            return self
+        return record
+
+    def range(self, start, end):
+        self.calls.append(("range", start, end))
+        self.offset = start
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self.pages.get(self.offset, []))
+
+
+def event_row(event_id, home_id="1", home="Home", away_id="2", away="Away"):
+    return {"event_id": str(event_id), "start_at": "2026-10-13T23:00:00+00:00", "home_id": home_id,
+            "home_name": home, "home_score": None, "away_id": away_id, "away_name": away,
+            "away_score": None, "status_code": "NS", "synced_at": "2026-10-13T12:00:00+00:00"}
+
+
+def test_cached_reads_stored_history_pages_without_api_requests():
+    calls = []
+    full_page = [event_row(i, home_id=str(i + 1), away_id=str(i + 5000)) for i in range(1000)]
+    pages = {0: full_page, 1000: [event_row(2000), event_row(2001, home=None), event_row(2002, away_id="0")]}
+    client = SimpleNamespace(table=lambda name: (calls.append(("table", name)), FakeQuery(pages, calls))[1])
+    nfl, multi = Mock(), Mock()
+    service = models.DataModelService(nfl=nfl, multi=multi, clock=lambda: datetime(2026, 10, 13, 20, tzinfo=timezone.utc))
+    games = service.cached("hockey:57", client=client)
+    assert len(games) == 1001
+    assert ("table", "api_sports_events") in calls
+    assert ("in_", "season", ["2025", "2026"]) in calls
+    assert ("eq", "sport_slug", "hockey") in calls and ("eq", "league_id", "57") in calls
+    assert [call for call in calls if call[0] == "range"] == [("range", 0, 999), ("range", 1000, 1999)]
+    nfl.assert_not_called()
+    multi.assert_not_called()
+    assert not multi.method_calls and not nfl.method_calls
+
+
+def test_model_card_renders_projection_and_insufficient_history():
+    from PIL import Image
+    from src.services.model_card_image_service import render_model_card
+
+    market = Market(home_probability=0.6, home_spread=-1.5, total=6.5, books=5, fetched_at=NOW)
+    full = sample_projection(market=market, market_edge=-0.02, cover_probability=0.4, over_probability=0.55,
+                             rest_days=(1, 2), travel_km=(0.0, 3200.0))
+    for value in (sample_projection(), full, None):
+        image = Image.open(render_model_card("NHL", matchup(), value, {"status": "ok", "games": 9, "model": {}, "baseline": {}}))
+        assert image.format == "PNG" and image.size == (1200, 800)
+
+
+def test_league_model_posts_one_card_per_game_as_regular_messages(configured):
+    async def run():
+        games = [replace(matchup(), id=str(i), start=datetime(2026, 11, 1, 20, i, tzinfo=timezone.utc)) for i in range(12)]
+        service = Mock()
+        service.cached.return_value = history() + games
+        service.choices.return_value = games
+        request = interaction()
+        league = app_commands.Choice(name="NHL", value="hockey:57")
+        await ui.DataModels.league_model.callback(ui.DataModels(service, engine(service)), request, league, "2026-11-01")
+        service.cached.assert_called_once_with("hockey:57")
+        service.choices.assert_called_once_with(history() + games, date(2026, 11, 1), "")
+        service.refresh.assert_not_called()
+        sends = request.channel.send.call_args_list
+        assert [len(call.kwargs["files"]) for call in sends] == [10, 2]
+        assert "NHL ratings models \u00b7" in sends[0].kwargs["content"] and sends[1].kwargs["content"] is None
+        assert all(call.kwargs.get("ephemeral") is None for call in sends)
+        assert sends[0].kwargs["allowed_mentions"].everyone is False
+        assert "Posted 12 NHL model cards" in request.followup.send.call_args.args[0]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["role", "channel", "date", "empty", "storage"])
+def test_league_model_failures_post_nothing_publicly(configured, failure):
+    async def run():
+        service = Mock()
+        service.cached.return_value = history()
+        service.choices.return_value = []
+        if failure == "storage":
+            service.cached.side_effect = RuntimeError("offline")
+        request = interaction(role=999 if failure == "role" else 30, channel_id=99 if failure == "channel" else 20)
+        league = app_commands.Choice(name="NHL", value="hockey:57")
+        await ui.DataModels.league_model.callback(
+            ui.DataModels(service, engine(service)), request, league, "10/13/2026" if failure == "date" else "2026-11-01")
+        request.channel.send.assert_not_awaited()
+        if failure in {"role", "channel", "date"}:
+            service.cached.assert_not_called()
+            assert request.response.send_message.call_args.kwargs["ephemeral"] is True
+        else:
+            assert request.followup.send.call_args.kwargs["ephemeral"] is True
+    asyncio.run(run())
+
+
+def test_league_model_date_suggestions_cover_two_weeks_and_filter():
+    async def run():
+        cog = ui.DataModels(Mock())
+        options = await ui.DataModels.league_model_day(cog, interaction(), "")
+        assert len(options) == 15
+        assert options[1].name.startswith("Today \u00b7 ")
+        assert date.fromisoformat(options[1].value) == datetime.now(ui.TRACKER_TIMEZONE).date()
+        tomorrow = await ui.DataModels.league_model_day(cog, interaction(), "tomorrow")
+        assert len(tomorrow) == 1
+    asyncio.run(run())

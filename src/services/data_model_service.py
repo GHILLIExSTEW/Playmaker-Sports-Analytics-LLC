@@ -13,12 +13,14 @@ from src.services.api_sports_multi_service import (
     ApiSportsMultiService, DATE_PRODUCTS, MODEL_COMPETITIONS, TRACKER_TIMEZONE,
     model_history_seasons, normalize_event,
 )
+from src.services.supabase_service import supabase_service
 
 COMPETITIONS = {
     "nfl": ("NFL", "nfl", 1),
     **{f"{sport}:{league}": (name, sport, league) for sport, league, name in MODEL_COMPETITIONS},
 }
-FINAL = {"FT", "AOT", "COMPLETED", "FINISHED"}
+FINAL = {"FT", "AOT", "AP", "COMPLETED", "FINISHED"}
+PRESEASON = "Pre Season"
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,8 @@ class DataModelService:
                     actual_league = row.get("league_id")
                     if str(actual_league) != str(league) or str(row.get("season")) != season:
                         raise RuntimeError("Provider returned games outside the requested league or season.")
+                    if nfl and row.get("stage") == PRESEASON:
+                        continue
                     game = from_row(row, nfl)
                     games[game.id] = game
                 if nfl:
@@ -188,6 +192,49 @@ class DataModelService:
                     self.multi._store_events(normalized)
                 page += 1
         return sorted(unique_model_games(list(games.values())), key=lambda game: (game.start, game.id)), requests_used, self.clock()
+
+    def cached(self, competition: str, client=None) -> list[ModelGame]:
+        """Stored league history from Supabase; uses no API-Sports requests."""
+        if competition not in COMPETITIONS:
+            raise ValueError("Select a supported model league.")
+        _, sport, league = COMPETITIONS[competition]
+        today = self.clock().astimezone(TRACKER_TIMEZONE).date()
+        nfl = sport == "nfl"
+        if nfl:
+            seasons = [nfl_season_for_date(today) - 1, nfl_season_for_date(today)]
+            table, time_column, id_column = "api_sports_nfl_games", "kickoff_at", "game_id"
+            columns = ("game_id,kickoff_at,home_team_id,home_team_name,home_score,"
+                       "away_team_id,away_team_name,away_score,status_short,synced_at,stage")
+        else:
+            seasons = list(model_history_seasons(sport, today))
+            table, time_column, id_column = "api_sports_events", "start_at", "event_id"
+            columns = "event_id,start_at,home_id,home_name,home_score,away_id,away_name,away_score,status_code,synced_at"
+        database = client or supabase_service._ensure_client()
+        games: list[ModelGame] = []
+        offset = 0
+        while True:
+            def page(start=offset):
+                query = database.table(table).select(columns).in_("season", seasons)
+                if not nfl:
+                    query = query.eq("sport_slug", sport).eq("league_id", str(league))
+                return query.order(time_column).order(id_column).range(start, start + 999).execute()
+
+            rows = supabase_service._execute(page).data or []
+            for row in rows:
+                home, away = row.get("home_team_name" if nfl else "home_name"), row.get("away_team_name" if nfl else "away_name")
+                home_id, away_id = row.get("home_team_id" if nfl else "home_id"), row.get("away_team_id" if nfl else "away_id")
+                # Provider placeholders (TBD teams) cannot be modeled; the website excludes them the same way.
+                if not (isinstance(home, str) and home.strip() and isinstance(away, str) and away.strip()) \
+                        or str(home_id) == "0" or str(away_id) == "0":
+                    continue
+                # Starters rarely play in the NFL preseason, so those scores would distort team ratings.
+                if nfl and row.get("stage") == PRESEASON:
+                    continue
+                games.append(from_row(row, nfl))
+            if len(rows) < 1000:
+                break
+            offset += 1000
+        return sorted(unique_model_games(games), key=lambda game: (game.start, game.id))
 
     @staticmethod
     def choices(games: list[ModelGame], day: date, team: str) -> list[ModelGame]:

@@ -16,6 +16,8 @@ from src.member_onboarding import MemberOnboarding
 from src.member_activity import MemberActivity
 from src.administration import Administration
 from src.data_sync import DataSync
+from src.model_projections import ModelProjections
+from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
 from src.play_settlement import PlaySettlement, build_suggestion_view as build_suggestion_view
 from src.play_presentation import (
@@ -146,6 +148,9 @@ class OfficialBot(commands.Bot):
         await self.add_cog(DataSync(
             self, nfl=api_sports_service, multi=api_sports_multi_service,
             enabled=bool(API_SPORTS_KEY), staff_alert=send_staff_alert,
+        ))
+        await self.add_cog(ModelProjections(
+            self, service=model_projection_service, enabled=bool(API_SPORTS_KEY), staff_alert=send_staff_alert,
         ))
         if whop_membership_sync is not None:
             await asyncio.to_thread(whop_membership_sync.service.ready)

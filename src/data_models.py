@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -10,18 +10,23 @@ from discord.ext import commands
 
 from src.config import CONFIRMATION_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.services.api_budget_service import ApiBudgetDenied
-from src.services.data_model_service import COMPETITIONS, DataModelService, ModelGame, project_matchup
+from src.services.data_model_service import COMPETITIONS, DataModelService, ModelGame
 from src.services.api_sports_multi_service import TRACKER_TIMEZONE
+from src.services.model_card_image_service import render_model_card
+from src.services import model_presentation as text
+from src.services.model_engine import ModelProjection
+from src.services.model_projection_service import ModelProjectionService, ModelRun, model_projection_service
 from src.services.website_capper_service import WEBSITE_OWNER_ROLE_ID
 
 logger = logging.getLogger("official_play_bot")
+DISCORD_FILE_LIMIT = 10
 
 
 def access_error(interaction: discord.Interaction, user_id: int | None = None) -> str | None:
     if not GUILD_ID or interaction.guild_id != GUILD_ID:
         return "Models are only available in the configured server."
     if not CONFIRMATION_CHANNEL_ID or interaction.channel_id != CONFIRMATION_CHANNEL_ID:
-        return "Use /model in the Laboratory channel configured by CONFIRMATION_CHANNEL_ID."
+        return "Use model commands in the Laboratory channel configured by CONFIRMATION_CHANNEL_ID."
     if user_id is not None and interaction.user.id != user_id:
         return "This model picker belongs to another operator. Start your own /model."
     if not isinstance(interaction.user, discord.Member) or not any(
@@ -44,9 +49,9 @@ async def component_error(interaction: discord.Interaction, error: Exception) ->
         await interaction.response.send_message(message, ephemeral=True)
 
 
-def model_embed(competition: str, game: ModelGame, games: list[ModelGame], requests_used: int, refreshed: datetime) -> discord.Embed:
-    projection = project_matchup(games, game)
-    embed = discord.Embed(title=f"{COMPETITIONS[competition][0]} - score-history model", color=0x9146BF)
+def model_embed(competition: str, game: ModelGame, projection: ModelProjection | None, backtest: dict | None,
+                requests_used: int, refreshed: datetime) -> discord.Embed:
+    embed = discord.Embed(title=f"{COMPETITIONS[competition][0]} - Playmaker ratings model", color=0x9146BF)
     embed.description = (
         f"**{safe(game.away)} at {safe(game.home)}**\n"
         f"Game ID: `{game.id}` | Start: <t:{int(game.start.timestamp())}:F>\n"
@@ -59,15 +64,15 @@ def model_embed(competition: str, game: ModelGame, games: list[ModelGame], reque
             inline=False,
         )
     else:
-        embed.add_field(name="Projected score", value=f"{safe(game.away)}: {projection.away_score:.1f}\n{safe(game.home)}: {projection.home_score:.1f}", inline=False)
-        embed.add_field(name="Estimated win probability", value=f"{safe(game.home)}: {projection.home_probability:.1%}\n{safe(game.away)}: {1 - projection.home_probability:.1%}", inline=False)
-        embed.add_field(name="Prior-game samples", value=f"Home: {projection.home_sample} | Away: {projection.away_sample} | League: {projection.league_sample}", inline=False)
+        embed.add_field(name="Projected score", value=f"{safe(game.away)}: {text.one_decimal(projection.away_score)}\n{safe(game.home)}: {text.one_decimal(projection.home_score)}\n{safe(text.summary_line(game, projection))}", inline=False)
+        embed.add_field(name="Estimated win probability", value=f"{safe(game.home)}: {text.percent(projection.home_probability)}\n{safe(game.away)}: {text.percent(1 - projection.home_probability)}", inline=False)
+        embed.add_field(name="Market comparison", value=safe("\n".join(text.market_lines(game, projection)), 1024), inline=False)
+        details = [text.factor_line(game, projection), text.conditions_line(game, projection)]
+        embed.add_field(name="Inputs", value=safe("\n".join(value for value in details if value), 1024), inline=False)
+        embed.add_field(name="Prior-game samples", value=safe(text.samples_line(game, projection)), inline=False)
         embed.add_field(name="History updated", value=f"<t:{int(projection.updated.timestamp())}:F>", inline=False)
-    embed.add_field(
-        name="Experimental score-only baseline",
-        value="Up to 10 prior games/team; current and previous season history. Excludes games at/after the selected start. No injury, lineup, odds, weather or EPA adjustment. Not calibrated as a betting model; historical views are not point-in-time backtests.",
-        inline=False,
-    )
+    embed.add_field(name="Track record", value=safe(text.track_record_line(backtest), 1024), inline=False)
+    embed.add_field(name="Method", value=text.METHOD, inline=False)
     embed.set_footer(text="Live API-Sports snapshot, not a live score stream. No guaranteed outcome.")
     return embed
 
@@ -132,6 +137,7 @@ class GameFilterModal(ModelModal, title="Find a league game"):
         try:
             async with self.cog.refresh_lock:
                 games, used, refreshed = await asyncio.to_thread(self.cog.service.refresh, self.competition)
+                run = await asyncio.to_thread(self.cog.projections.project, self.competition, games)
             choices = self.cog.service.choices(games, day, str(self.team).strip())
             if not choices:
                 await interaction.followup.send(
@@ -139,7 +145,7 @@ class GameFilterModal(ModelModal, title="Find a league game"):
                     ephemeral=True,
                 )
                 return
-            view = GameView(self.user_id, self.competition, games, choices, used, refreshed)
+            view = GameView(self.user_id, self.competition, run, choices, used, refreshed)
             await interaction.followup.send(view.content(), view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except (ValueError, ApiBudgetDenied) as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -164,9 +170,9 @@ class GameSelect(discord.ui.Select):
 
 
 class GameView(ModelView):
-    def __init__(self, user_id: int, competition: str, games: list[ModelGame], choices: list[ModelGame], used: int, refreshed: datetime):
+    def __init__(self, user_id: int, competition: str, run: ModelRun, choices: list[ModelGame], used: int, refreshed: datetime):
         super().__init__(user_id)
-        self.competition, self.games, self.choices = competition, games, choices
+        self.competition, self.run, self.choices = competition, run, choices
         self.used, self.refreshed, self.page = used, refreshed, 0
         self.published = False
         self.update_select()
@@ -219,7 +225,8 @@ class PublishModelModal(ModelModal, title="Post model in Laboratory"):
             if interaction.channel is None:
                 raise RuntimeError("Laboratory channel is unavailable.")
             await interaction.channel.send(
-                embed=model_embed(self.picker.competition, self.game, self.picker.games, self.picker.used, self.picker.refreshed),
+                embed=model_embed(self.picker.competition, self.game, self.picker.run.projections.get(self.game.id),
+                                  self.picker.run.backtest, self.picker.used, self.picker.refreshed),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             self.picker.stop()
@@ -230,11 +237,12 @@ class PublishModelModal(ModelModal, title="Post model in Laboratory"):
 
 
 class DataModels(commands.Cog):
-    def __init__(self, service: DataModelService | None = None):
+    def __init__(self, service: DataModelService | None = None, projections: ModelProjectionService | None = None):
         self.service = service or DataModelService()
+        self.projections = projections or model_projection_service
         self.refresh_lock = asyncio.Lock()
 
-    @app_commands.command(name="model", description="Laboratory: live league/game score-history model for OPERATOR or Owner")
+    @app_commands.command(name="model", description="Laboratory: live league/game ratings model for OPERATOR or Owner")
     @app_commands.guild_only()
     async def model(self, interaction: discord.Interaction):
         error = access_error(interaction)
@@ -247,3 +255,66 @@ class DataModels(commands.Cog):
             "Choose a league, filter games by date/team, then select and confirm a model. Live refresh uses the shared API-Sports allowance.",
             view=view, ephemeral=True,
         )
+
+    @app_commands.command(name="league_model", description="Laboratory: post model cards for every game in a league on a date")
+    @app_commands.guild_only()
+    @app_commands.describe(league="League to model", day="Game date (Eastern). Pick a suggestion or type YYYY-MM-DD")
+    @app_commands.rename(day="date")
+    @app_commands.choices(league=[app_commands.Choice(name=name, value=key) for key, (name, _, _) in COMPETITIONS.items()])
+    async def league_model(self, interaction: discord.Interaction, league: app_commands.Choice[str], day: str):
+        error = access_error(interaction)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        try:
+            selected = date.fromisoformat(day.strip())
+            if selected.isoformat() != day.strip():
+                raise ValueError()
+        except ValueError:
+            await interaction.response.send_message("Choose a date from the list or enter it as YYYY-MM-DD.", ephemeral=True)
+            return
+        if league.value not in COMPETITIONS:
+            await interaction.response.send_message("Select a supported model league.", ephemeral=True)
+            return
+        name = COMPETITIONS[league.value][0]
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            run = await asyncio.to_thread(self.projections.project, league.value)
+            matchups = sorted(self.service.choices(run.games, selected, ""), key=lambda game: (game.start, game.away))
+            if not matchups:
+                await interaction.followup.send(
+                    f"No cached {name} games are scheduled on {selected:%a, %b} {selected.day}, {selected.year}. Nothing was posted.",
+                    ephemeral=True,
+                )
+                return
+            cards = await asyncio.to_thread(
+                lambda: [render_model_card(name, game, run.projections.get(game.id), run.backtest) for game in matchups]
+            )
+            if interaction.channel is None:
+                raise RuntimeError("Laboratory channel is unavailable.")
+            heading = f"**{safe(name)} ratings models · {selected:%a, %b} {selected.day}, {selected.year} (ET)** · {len(matchups)} games"
+            for offset in range(0, len(cards), DISCORD_FILE_LIMIT):
+                files = [
+                    discord.File(card, filename=f"{league.value.replace(':', '-')}-{selected}-{offset + index + 1:02d}.png")
+                    for index, card in enumerate(cards[offset:offset + DISCORD_FILE_LIMIT])
+                ]
+                await interaction.channel.send(
+                    content=heading if offset == 0 else None, files=files,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            await interaction.followup.send(f"Posted {len(cards)} {name} model cards.", ephemeral=True)
+        except Exception:
+            logger.exception("league_model_failed league=%s day=%s user=%s", league.value, selected, interaction.user.id)
+            await interaction.followup.send("League models could not be posted. Check Laboratory before retrying.", ephemeral=True)
+
+    @league_model.autocomplete("day")
+    async def league_model_day(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        today = datetime.now(TRACKER_TIMEZONE).date()
+        labels = {-1: "Yesterday", 0: "Today", 1: "Tomorrow"}
+        options = []
+        for offset in range(-1, 14):
+            value = today + timedelta(days=offset)
+            label = f"{labels[offset]} · " if offset in labels else ""
+            options.append(app_commands.Choice(name=f"{label}{value:%a, %b} {value.day}, {value.year}", value=value.isoformat()))
+        text = current.strip().casefold()
+        return [option for option in options if not text or text in option.name.casefold() or text in option.value][:25]

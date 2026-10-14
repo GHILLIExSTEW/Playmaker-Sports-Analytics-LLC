@@ -13,11 +13,11 @@ test('tab access persists across time, focus and reload without rechecking', asy
       checks += 1
       return route.fulfill({ json: { state: 'active', kind: 'operator', expires_at: null } })
     }
-    if (route.request().url().includes('public_sport_model_events')) {
+    if (route.request().url().includes('operator_sport_model_projections')) {
       modelRequests += 1
       return route.fulfill({ json: [
-      { event_id: '1', season: '2026', start_at: '2026-11-01T20:00:00Z', home_id: '1', home_name: 'Home', away_id: '2', away_name: 'Away', home_score: null, away_score: null, status_code: 'NS', synced_at: '2026-10-11T20:00:00Z' },
-      { event_id: '2', season: '2026', start_at: '2026-11-02T20:00:00Z', home_id: '3', home_name: 'Other Home', away_id: '4', away_name: 'Other Away', home_score: null, away_score: null, status_code: 'NS', synced_at: '2026-10-11T20:00:00Z' },
+      { game_id: '1', start_at: '2099-11-01T20:00:00Z', status_code: 'NS', home_id: '1', home_name: 'Home', away_id: '2', away_name: 'Away', home_score: 27, away_score: 21, home_probability: 0.65, home_sample: 5, away_sample: 5, league_sample: 120, market_home_probability: null, market_spread: null, market_total: null, market_books: null, market_fetched_at: null, market_edge: null, cover_probability: null, over_probability: null, details: {}, data_updated_at: '2026-10-11T20:00:00Z', generated_at: '2026-10-11T20:00:00Z' },
+      { game_id: '2', start_at: '2099-11-02T20:00:00Z', status_code: 'NS', home_id: '3', home_name: 'Other Home', away_id: '4', away_name: 'Other Away', home_score: 27, away_score: 21, home_probability: 0.65, home_sample: 5, away_sample: 5, league_sample: 120, market_home_probability: null, market_spread: null, market_total: null, market_books: null, market_fetched_at: null, market_edge: null, cover_probability: null, over_probability: null, details: {}, data_updated_at: '2026-10-11T20:00:00Z', generated_at: '2026-10-11T20:00:00Z' },
       ] })
     }
     return route.fulfill({ json: [] })
@@ -93,7 +93,7 @@ for (const path of ['/models', '/nfl/lab', '/guide']) {
         const rpc = new URL(route.request().url()).pathname.split('/').at(-1)
         if (rpc === 'website_member_access') await route.fulfill({ json: state })
         else {
-          if (rpc && ['public_nfl_games', 'public_nfl_model_games', 'public_sport_model_events', 'public_nfl_team_efficiency', 'operator_user_guide'].includes(rpc)) research.push(rpc)
+          if (rpc && ['public_nfl_games', 'public_nfl_model_games', 'public_sport_model_events', 'operator_sport_model_projections', 'operator_sport_model_backtest', 'public_nfl_team_efficiency', 'operator_user_guide'].includes(rpc)) research.push(rpc)
           await route.fulfill({ json: [] })
         }
       })

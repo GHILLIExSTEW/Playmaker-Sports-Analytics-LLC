@@ -86,15 +86,24 @@ games. `API_SPORTS_BUDGET_ENABLED=true` and `API_SPORTS_KEY` are required.
 These staff requests use the shared automated daily allowance, not member
 refresh quotas; only one command refresh runs at a time. Provider/quota failures
 are reported explicitly without a cached-success fallback. Only the six
-supported model competitions are offered. The score-only baseline matches the
-website; current provider data does not add injuries, lineups, prices, or EPA.
-Restart the bot to register `/model`; no extra SQL migration is required for
-the Discord command beyond the existing sports-cache migrations.
+supported model competitions are offered. The report uses the same ratings
+model as the website (see below), including market comparison, inputs and the
+league's backtest track record.
+Restart the bot to register `/model`.
 
-Visit `/models` for score-history baselines across NFL, NBA, MLB, NHL, NCAA
-football, and NCAA men's basketball. Apply
-`supabase/migrations/20261011170000_sports_model_history.sql` before deploying
-the page. The bot backfills the most recent completed and current season for
+Discord `/league_model league: date:` uses the same access rules. Choose a
+league from the dropdown and a date from the suggested list (yesterday through
+the next two weeks, Eastern time) or type `YYYY-MM-DD`; Discord has no native
+calendar picker for slash commands. The bot reads stored league history and
+model inputs from Supabase (no API-Sports requests), runs the ratings model, and
+posts one PNG model card per game as a regular Laboratory message (batches of
+10 images). Games without enough history show an explicit no-projection card.
+
+Visit `/models` for ratings-model projections across NFL, NBA, MLB, NHL, NCAA
+football, and NCAA men's basketball (API-Sports basketball league 116). Apply
+`supabase/migrations/20261011170000_sports_model_history.sql` and
+`supabase/migrations/20261014120000_sport_model_projections.sql` before
+deploying the page. The bot backfills the most recent completed and current season for
 each competition, follows provider pagination, and persists its cursor so
 interrupted history syncs resume on the next daily run. API request reservations
 continue through the shared API-Sports budget when it is enabled.
@@ -112,22 +121,45 @@ a five-minute per-product cooldown. Keep `API_SPORTS_BUDGET_ENABLED=true` to
 enforce these limits. This budget covers this bot's reserved requests, not
 provider usage from external applications using the same key.
 
-The page derives projected scores from each team's 10 most recent completed
-scores and estimates win probability from the competition's historical
-score-margin distribution. It requires three prior scored games per team and
-30 competition games, displays source freshness and sample sizes, and shows no
-projection when those requirements are unmet.
+### Ratings model (ratings-v2)
+
+`src/services/model_engine.py` is the single source of truth for the site and
+both Discord commands. Each team carries offensive and defensive ratings that
+update after every game, adjusted for opponent strength and a learned home
+advantage and partially regressed between seasons. Learned adjustments cover
+rest days/back-to-backs, travel distance between venues, and outdoor weather
+(Open-Meteo; NCAA has no venue data). NFL play-by-play EPA is used only when it
+improves the tuning-window log loss (currently it does not). NFL players listed
+Out or Doubtful lower their team's projection by fixed position weights, a
+heuristic rather than a depth-chart model. Hockey and baseball use a Poisson
+score model; football and basketball use a calibrated normal margin. At least
+three prior games per team and 30 league games are required, otherwise no
+projection is shown. NFL preseason games are excluded from history.
+
+Consensus sportsbook moneyline (no-vig), spread and total are shown for
+comparison with the model edge, cover and over probabilities; market prices are
+never projection inputs and cannot be backtested. A walk-forward backtest
+projects every past game using only earlier information, tunes on the earlier
+half and reports the later half against the old score-only baseline.
+
+The `ModelProjections` cog (`src/model_projections.py`) stores projections in
+`sport_model_projections` every 30 minutes for games from one hour before now
+through 14 days ahead. Odds refresh hourly for league-paged sports and every six
+hours per game for NFL/NCAA football; NFL injuries and rosters every six hours;
+weather every three hours (set `OPEN_METEO_API_KEY`; without it weather is
+skipped, and history only reaches back 92 days). Backtests rerun daily at
+6:45 AM Eastern into `sport_model_backtests`, retrying a missing report at most
+every 12 hours. Failing inputs are isolated and staff alerts are throttled to
+one per job every six hours. The site reads the operator-only
+`operator_sport_model_projections(p_competition)` and
+`operator_sport_model_backtest(p_competition)` RPCs.
+
 Non-NFL provider placeholder games with missing team names or zero team IDs are
-excluded from selections and history, with the excluded count displayed.
-Malformed IDs, timestamps, and other response fields still produce an error.
+excluded from selections and history.
 Duplicate provider fixtures with identical start times and home/away teams are
 merged across IDs and seasons before selections or history calculations.
-Scored finals take precedence, then the newest sync; website ties prefer the
-newer season, then deterministic event ID. The website displays the merged count.
-The Discord model command also counts each fixture once.
-This baseline has no injury,
-lineup, home-advantage, weather, or sportsbook inputs and is not calibrated or
-validated as a betting model.
+Scored finals take precedence, then the newest sync. The model is experimental
+and not a betting recommendation.
 
 ## Live Results Setup
 

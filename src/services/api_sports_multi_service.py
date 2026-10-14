@@ -33,7 +33,7 @@ SEASON_PRODUCTS = {
 }
 MODEL_COMPETITIONS = (
     ("basketball", 12, "NBA"),
-    ("basketball", 8, "NCAA Men's Basketball"),
+    ("basketball", 116, "NCAA Men's Basketball"),
     ("baseball", 1, "MLB"),
     ("hockey", 57, "NHL"),
     ("ncaa", 2, "NCAA Football"),
