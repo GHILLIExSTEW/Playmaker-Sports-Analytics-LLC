@@ -288,14 +288,15 @@ class Reporting(commands.Cog):
         try:
             if image is not None:
                 image_file = discord.File(image, filename="unit-summary.png")
-                image_embed = discord.Embed(title=embed.title, color=embed.color, description=embed.description)
-                for field in embed.fields:
-                    image_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-                if embed.footer.text:
-                    image_embed.set_footer(text=embed.footer.text)
+                image_embed = discord.Embed(color=embed.color)
                 image_embed.set_image(url="attachment://unit-summary.png")
             async for message in channel.history(limit=50):
-                if message.author == self.bot.user and message.embeds and message.embeds[0].title == embed.title:
+                has_tracker_image = any(
+                    attachment.filename == "unit-summary.png"
+                    for attachment in getattr(message, "attachments", ())
+                )
+                has_tracker_title = message.embeds and message.embeds[0].title == embed.title
+                if message.author == self.bot.user and (has_tracker_title or has_tracker_image):
                     if image_file:
                         await message.edit(embed=image_embed, attachments=[image_file])
                     else:
