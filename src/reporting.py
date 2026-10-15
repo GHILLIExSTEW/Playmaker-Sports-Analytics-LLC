@@ -48,7 +48,7 @@ def fetch_official_tracker_rows() -> tuple[list[dict], list[dict]]:
             offset += 1000
 
     return (
-        fetch("display_plays", "id,user_id,units,odds,status,message_id,created_at,settled_at,tracking_scope"),
+        fetch("display_plays", "id,user_id,units,odds,status,message_id,created_at,settled_at,tracking_scope,stars"),
         fetch("users", "id,discord_user_id,display_name,username"),
     )
 
@@ -131,6 +131,11 @@ def build_official_tracker_embed(
     embed.add_field(name="⏳ Pending Bets", value=f"{len(pending)} {'bet' if len(pending) == 1 else 'bets'}", inline=True)
     embed.add_field(name="📅 Monthly Units", value=f"{net([play for play in settled if in_period(play, month_start)]):+g}u", inline=True)
     embed.add_field(name="🗓️ Yearly Units", value=f"{net([play for play in settled if in_period(play, year_start)]):+g}u", inline=True)
+    embed.add_field(
+        name="📊 Record • ROI • Performance • Star Rating",
+        value=tracker_metric_lines([play for play in settled if settled_time(play) <= now]),
+        inline=False,
+    )
     embed.set_footer(text="Auto-updates hourly • Eastern Time")
     return embed, top_lines, "\n\n".join(breakdown)
 
@@ -151,6 +156,54 @@ def scoped_plays(plays: list[dict], scope: str) -> list[dict]:
 
 def record_line(summary: dict) -> str:
     return f"{format_record(summary)} · **{summary['net']:+.2f}u** · {summary['roi']:+.1f}% ROI"
+
+
+def tracker_metric_lines(plays: list[dict]) -> str:
+    settled = [play for play in plays if play.get("status") in {"win", "loss", "void", "partial"}]
+    wins = sum(play["status"] == "win" for play in settled)
+    losses = sum(play["status"] == "loss" for play in settled)
+    voids = sum(play["status"] == "void" for play in settled)
+    partials = sum(play["status"] == "partial" for play in settled)
+    net_units = sum(SettlementService.tally_for_result(play["status"], float(play["units"]), play.get("odds")) for play in settled)
+    units_risked = sum(float(play["units"]) for play in settled if play["status"] != "void")
+    decisions = wins + losses
+    win_rate = wins / decisions * 100 if decisions else 0.0
+    record = f"{wins}-{losses}-{voids}"
+    if partials:
+        record += f" · {partials} partial"
+    roi = f"{net_units / units_risked * 100:+.1f}%" if units_risked else "—"
+
+    lines = [
+        f"**Record** — {record}",
+        f"**ROI** — {roi} ({net_units:+.2f}u net / {units_risked:.2f}u risked)",
+        f"**Performance** — {net_units:+.2f}u net · {win_rate:.1f}% win rate · {len(settled)} settled",
+    ]
+    rated = [play for play in settled if play.get("stars") in {3, 4, 5}]
+    if rated:
+        star_lines = []
+        for stars in (3, 4, 5):
+            group = [play for play in rated if play["stars"] == stars]
+            if not group:
+                continue
+            group_wins = sum(play["status"] == "win" for play in group)
+            group_losses = sum(play["status"] == "loss" for play in group)
+            group_voids = sum(play["status"] == "void" for play in group)
+            group_partials = sum(play["status"] == "partial" for play in group)
+            group_net = sum(
+                SettlementService.tally_for_result(play["status"], float(play["units"]), play.get("odds"))
+                for play in group
+            )
+            group_record = f"{group_wins}-{group_losses}-{group_voids}"
+            if group_partials:
+                group_record += f" · {group_partials} partial"
+            star_lines.append(f"{stars}⭐ {group_record} · {group_net:+.2f}u")
+        star_rating = " | ".join(star_lines)
+    elif any(play.get("tracking_scope") == "capper" for play in plays):
+        star_rating = "Not rated for individual capper plays"
+    else:
+        star_rating = "No rated plays yet"
+    lines.append(f"**Star Rating** — {star_rating}")
+    return "\n".join(lines)
 
 
 def clip_lines(lines: list[str], limit: int = 1024) -> str:
@@ -471,9 +524,8 @@ class Reporting(commands.Cog):
             if capper:
                 author_ids = {str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(capper.id)}
                 plays = [play for play in plays if str(play["user_id"]) in author_ids]
-            embed, _, breakdown = self.tracker_embed(plays, users)
+            embed, _, _ = self.tracker_embed(plays, users)
             embed.title = "Individual Capper | Unit Summary"
-            embed.add_field(name="Monthly Capper Breakdown", value=breakdown[:1024] or "No settled capper plays yet.", inline=False)
             embed.set_footer(text="Requested only • Capper plays only • Eastern Time")
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as exc:

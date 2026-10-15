@@ -161,10 +161,13 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, 
 
 
 def render_tracker_image(description: str, fields: list[tuple[str, str]], footer: str) -> BytesIO:
-    breakdown_value = next((value for name, value in fields if "Playmaker Breakdown" in name), "")
+    breakdown_value = next(
+        (value for name, value in fields if "Record • ROI • Performance • Star Rating" in name),
+        "",
+    )
     breakdown_rows = [
         _plain_text(row)
-        for row in breakdown_value.split("\n\n")
+        for row in breakdown_value.splitlines()
         if row.strip() and "No settled plays yet" not in row
     ]
 
@@ -223,8 +226,7 @@ def render_tracker_image(description: str, fields: list[tuple[str, str]], footer
             value_font_size -= 2
         draw.text((x + 22, y + 69), value_text, font=_font(value_font_size, bold=True), fill=white)
 
-    breakdown_title = next((name for name, _ in fields if "Playmaker Breakdown" in name), "PLAYMAKER BREAKDOWN")
-    breakdown_title = breakdown_title.replace("🏆", "").strip().upper()
+    breakdown_title = "RECORD • ROI • PERFORMANCE • STAR RATING"
     draw.text((HORIZONTAL_PADDING, breakdown_top), breakdown_title, font=_font(27, bold=True), fill=accent)
 
     row_y = rows_top

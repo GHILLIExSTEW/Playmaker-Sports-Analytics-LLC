@@ -4,7 +4,8 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands, tasks
@@ -17,6 +18,7 @@ from src.services.play_service import PlayService
 from src.services.supabase_service import supabase_service
 
 logger = logging.getLogger("official_play_bot")
+BALLOT_CLEANUP_TIME = time(hour=3, tzinfo=ZoneInfo("America/New_York"))
 
 
 def ballot_rating(yes: int, no: int) -> tuple[int, int] | None:
@@ -93,6 +95,7 @@ class CapperBallots(commands.Cog):
         self.staff_alert, self.get_testing = staff_alert, get_testing
         self.images = images if images is not None else image_play_service
         self.store = store if store is not None else BallotStore()
+        self.ballot_lock = asyncio.Lock()
 
     async def cog_load(self) -> None:
         if self.bot.is_ready():
@@ -100,11 +103,14 @@ class CapperBallots(commands.Cog):
 
     def cog_unload(self) -> None:
         self.evaluate_ballots.cancel()
+        self.daily_ballot_cleanup.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         if not self.evaluate_ballots.is_running():
             self.evaluate_ballots.start()
+        if not self.daily_ballot_cleanup.is_running():
+            self.daily_ballot_cleanup.start()
 
     async def discover(self, channel: discord.TextChannel) -> None:
         state = await asyncio.to_thread(self.store.scan_state)
@@ -214,20 +220,56 @@ class CapperBallots(commands.Cog):
         if self.get_testing():
             return
         try:
-            channel = await self.resolve_channel(CAPPER_BALLOT_CHANNEL_ID, "CAPPER_BALLOT_CHANNEL_ID", required=True)
-            if channel.guild.id != GUILD_ID:
-                raise RuntimeError("The ballot channel must belong to the configured guild.")
-            await self.discover(channel)
-            for row in await asyncio.to_thread(self.store.pending):
-                try:
-                    message = await channel.fetch_message(int(row["message_id"]))
-                    await self.evaluate(message)
-                except discord.NotFound:
-                    await asyncio.to_thread(self.store.finish, int(row["message_id"]), "failed", error="Ballot was deleted.")
-                    await self.staff_alert(f"ballot:{row['message_id']}", f"Ballot {row['message_id']} was deleted before evaluation.")
+            async with self.ballot_lock:
+                channel = await self.resolve_channel(CAPPER_BALLOT_CHANNEL_ID, "CAPPER_BALLOT_CHANNEL_ID", required=True)
+                if channel.guild.id != GUILD_ID:
+                    raise RuntimeError("The ballot channel must belong to the configured guild.")
+                await self.discover(channel)
+                for row in await asyncio.to_thread(self.store.pending):
+                    try:
+                        message = await channel.fetch_message(int(row["message_id"]))
+                        await self.evaluate(message)
+                    except discord.NotFound:
+                        await asyncio.to_thread(self.store.finish, int(row["message_id"]), "failed", error="Ballot was deleted.")
+                        await self.staff_alert(f"ballot:{row['message_id']}", f"Ballot {row['message_id']} was deleted before evaluation.")
         except Exception as exc:
             logger.exception("capper_ballot_scan_failed")
             await self.staff_alert("ballot_scan", f"Ballot processing failed: `{str(exc)[:1500]}`")
+
+    @tasks.loop(time=BALLOT_CLEANUP_TIME)
+    async def daily_ballot_cleanup(self) -> None:
+        if self.get_testing():
+            return
+        try:
+            async with self.ballot_lock:
+                channel = await self.resolve_channel(CAPPER_BALLOT_CHANNEL_ID, "CAPPER_BALLOT_CHANNEL_ID", required=True)
+                if channel.guild.id != GUILD_ID:
+                    raise RuntimeError("The ballot channel must belong to the configured guild.")
+                await self.discover(channel)
+                active_ballots = await asyncio.to_thread(self.store.pending)
+                active_ballots.extend(await asyncio.to_thread(self.store.interrupted))
+                for row in active_ballots:
+                    await asyncio.to_thread(
+                        self.store.finish,
+                        int(row["message_id"]),
+                        "failed",
+                        error="Ballot post removed by the scheduled 3:00 AM Eastern channel cleanup.",
+                    )
+                deleted = await channel.purge(
+                    limit=None,
+                    reason="Scheduled daily capper ballot channel cleanup",
+                )
+                logger.info("capper_ballot_channel_cleanup_complete deleted=%s", len(deleted))
+        except Exception as exc:
+            logger.exception("capper_ballot_channel_cleanup_failed")
+            await self.staff_alert(
+                "ballot_channel_cleanup",
+                f"Daily capper ballot channel cleanup failed: `{str(exc)[:1500]}`.",
+            )
+
+    @daily_ballot_cleanup.before_loop
+    async def before_daily_ballot_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
 
     @evaluate_ballots.before_loop
     async def before_evaluate_ballots(self) -> None:

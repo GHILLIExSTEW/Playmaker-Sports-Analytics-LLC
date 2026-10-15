@@ -47,6 +47,7 @@ def test_tracker_fetch_paginates_both_tables_without_truncation(monkeypatch):
     assert len(plays) == len(users) == 1001
     for query in queries.values():
         assert [call.args for call in query.range.call_args_list] == [(0, 999), (1000, 1999)]
+    assert queries["display_plays"].select.call_args.args[0].endswith(",stars")
 
 
 def test_tracker_fetch_database_error_propagates(monkeypatch):
@@ -78,8 +79,48 @@ def test_partial_void_odds_and_future_results_keep_existing_tally_rules():
     assert embed.fields[0].value == "1 bet"
     assert embed.fields[1].value == "+3.5u"
     assert embed.fields[2].value == "+3.5u"
+    metrics = embed.fields[3].value
+    assert "**Record** — 1-1-1 · 1 partial" in metrics
+    assert "**ROI** — +70.0% (+3.50u net / 5.00u risked)" in metrics
+    assert "**Performance** — +3.50u net · 50.0% win rate · 4 settled" in metrics
+    assert "**Star Rating** — No rated plays yet" in metrics
     assert "1-1" in breakdown and "+2.00u" in breakdown
     assert "50% win rate" in top[0]
+
+
+def test_tracker_metrics_break_out_official_star_ratings():
+    rows = [
+        play(1, stars=3),
+        play(2, stars=3, status="loss", units=1),
+        play(3, stars=4, odds=-110),
+        play(4, stars=5, status="void"),
+        play(5, tracking_scope="capper", stars=None),
+    ]
+    embed, _, _ = build_official_tracker_embed(
+        rows, [{"id": 1, "display_name": "Ace"}], datetime(2026, 10, 9, 12, tzinfo=TRACKER_TIMEZONE),
+    )
+    metrics = embed.fields[3].value
+    assert "3⭐ 1-1-0 · +2.00u" in metrics
+    assert "4⭐ 1-0-0 · +1.82u" in metrics
+    assert "5⭐ 0-0-1 · +0.00u" in metrics
+
+
+def test_capper_tracker_reports_star_rating_as_not_applicable(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    reporting = cog()
+    reporting.tracker_rows = Mock(return_value=(
+        [play(tracking_scope="capper", stars=None)],
+        [{"id": 1, "discord_user_id": "42"}],
+    ))
+    request = SimpleNamespace(
+        guild=SimpleNamespace(id=123), user=SimpleNamespace(id=99),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    asyncio.run(reporting.capper_tracker_command.callback(reporting, request))
+    embed = request.followup.send.call_args.kwargs["embed"]
+    assert "**Star Rating** — Not rated for individual capper plays" in embed.fields[3].value
+    assert all("Monthly Capper Breakdown" not in field.name for field in embed.fields)
 
 
 @pytest.mark.parametrize("reconciled", [0, 2])

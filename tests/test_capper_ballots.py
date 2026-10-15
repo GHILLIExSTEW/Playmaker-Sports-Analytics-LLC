@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import discord
 import pytest
 
 import src.capper_ballots as module
@@ -162,6 +163,69 @@ def test_testing_disables_ballot_publication():
     cog.get_testing.return_value = True
     asyncio.run(cog.evaluate_ballots.coro(cog))
     cog.resolve_channel.assert_not_awaited()
+
+
+def test_daily_cleanup_deletes_every_channel_post_and_closes_active_ballots(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    assert module.BALLOT_CLEANUP_TIME.hour == 3 and module.BALLOT_CLEANUP_TIME.minute == 0
+    assert module.BALLOT_CLEANUP_TIME.tzinfo.key == "America/New_York"
+    cog = make_cog()
+    cog.store.scan_state.return_value = {"last_message_id": "50", "started_at": "2026-10-14T00:00:00+00:00"}
+    cog.store.pending.return_value = [{"message_id": "101"}]
+    cog.store.interrupted.return_value = [{"message_id": "102"}]
+    poll_message = SimpleNamespace(
+        id=100, poll=poll(), author=SimpleNamespace(bot=False),
+    )
+    channel = cog.resolve_channel.return_value
+    channel.guild.id = 123
+    channel.purge = AsyncMock(return_value=[poll_message, SimpleNamespace(id=90)])
+
+    async def history(**kwargs):
+        assert kwargs == {"limit": None, "after": discord.Object(id=50), "oldest_first": True}
+        yield poll_message
+
+    channel.history = history
+    asyncio.run(cog.daily_ballot_cleanup.coro(cog))
+
+    channel.purge.assert_awaited_once_with(
+        limit=None, reason="Scheduled daily capper ballot channel cleanup",
+    )
+    cog.store.finish.assert_any_call(
+        101, "failed", error="Ballot post removed by the scheduled 3:00 AM Eastern channel cleanup.",
+    )
+    cog.store.finish.assert_any_call(
+        102, "failed", error="Ballot post removed by the scheduled 3:00 AM Eastern channel cleanup.",
+    )
+    cog.staff_alert.assert_not_awaited()
+
+
+def test_daily_cleanup_is_disabled_in_testing():
+    cog = make_cog()
+    cog.get_testing.return_value = True
+    asyncio.run(cog.daily_ballot_cleanup.coro(cog))
+    cog.resolve_channel.assert_not_awaited()
+
+
+def test_daily_cleanup_reports_channel_deletion_failures(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.store.scan_state.return_value = {"last_message_id": "50", "started_at": "2026-10-14T00:00:00+00:00"}
+    cog.store.pending.return_value = []
+    cog.store.interrupted.return_value = []
+    channel = cog.resolve_channel.return_value
+    channel.guild.id = 123
+
+    async def history(**kwargs):
+        assert kwargs == {"limit": None, "after": discord.Object(id=50), "oldest_first": True}
+        if False:
+            yield None
+
+    channel.history = history
+    channel.purge = AsyncMock(side_effect=RuntimeError("Missing Manage Messages permission"))
+    asyncio.run(cog.daily_ballot_cleanup.coro(cog))
+    cog.staff_alert.assert_awaited_once()
+    assert cog.staff_alert.call_args.args[0] == "ballot_channel_cleanup"
+    assert "Missing Manage Messages permission" in cog.staff_alert.call_args.args[1]
 
 
 def test_current_discord_poll_labels_are_supported():
