@@ -51,7 +51,7 @@ export default function AllResultsPage({
     <section className="results-page results-section">
       <div className="section-heading">
         <div><Link to="/#results" className="capper-back-link"><ArrowRight size={16} /> Home</Link><p className="eyebrow">The complete public ledger</p><h1>Settled results.</h1></div>
-        <p>Browse every published play after it settles. Open plays and private account details are excluded from this record.</p>
+        <p>Review settled team and capper picks, including posted odds, units risked, results, and net units. Filter the ledger by sport.</p>
       </div>
       <div className="results-toolbar">
         <div className="filter-group" aria-label="Filter all settled results by sport">

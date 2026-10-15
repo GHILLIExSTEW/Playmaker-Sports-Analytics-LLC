@@ -114,7 +114,7 @@ function SportPageContent({ sport, results, loadState }: { sport: (typeof sports
     <Link to="/" className="capper-back-link"><ArrowRight size={16} /> Home</Link>
     <header className="sport-page-heading">
       <p className="eyebrow">Sports center</p><h1>{sport.name}.</h1>
-      <p>Schedules, scores, and the official settled-play record for {sport.name}.</p>
+      <p>Browse {sport.name} matchups and scores, then review official picks after they settle.</p>
     </header>
     {sport.slug === 'american-football' && <Link className="sport-feature-link" to="/nfl">Open NFL schedule, scores &amp; standings <ArrowRight size={16} /></Link>}
     {sport.feed === 'nfl' && <Link className="sport-feature-link" to="/nfl/lab">Open NFL matchup lab &amp; odds calculator (team only) <ArrowRight size={16} /></Link>}

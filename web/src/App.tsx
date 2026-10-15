@@ -148,7 +148,7 @@ function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalo
   return <section className={`cappers-section${standalone ? ' cappers-page' : ''}`} id="cappers">
     <div className="section-heading compact">
       <div><p className="eyebrow">The room</p>{standalone ? <h1>Our cappers.</h1> : <h2>Know who made the call.</h2>}</div>
-      <p>Meet our current Discord OPERATOR cappers. Performance summaries use settled plays only; open selections require verified member access.</p>
+      <p>Meet the cappers. Compare their settled records, then visit a profile for current picks, performance trends, and results.</p>
     </div>
     <div className="capper-grid">
       {cappers.map((capper, index) => (
@@ -320,9 +320,15 @@ function Website() {
     document.querySelector('meta[name="description"]')?.setAttribute(
       'content',
       selectedCapperName
-        ? `${selectedCapperName}'s individual settled-play record, performance graphs, and results.`
+        ? `${selectedCapperName}'s current picks, settled results, and performance trends.`
         : routePath === '/cappers'
-          ? 'Meet the Playmaker Picks cappers, browse their public settled records, and visit their individual homepages.'
+          ? 'Meet the Playmaker cappers, compare their settled records, and visit their profiles for picks and results.'
+        : routePath === '/picks'
+          ? 'See the latest team and capper picks, with odds, unit sizes, and insights when available.'
+        : routePath === '/results'
+          ? 'Review settled team and capper picks, including posted odds, units risked, results, and net units.'
+        : sportRouteSlug
+          ? `Browse ${sportsCatalog.find((item) => item.slug === sportRouteSlug)?.name || 'sport'} schedules, scores, and official settled picks.`
         : 'Verified sports analysis, transparent play tracking, and the Playmaker Picks community.',
     )
   }, [routePath, selectedCapperName, sportRouteSlug, policyKind])
@@ -421,7 +427,7 @@ function Website() {
               <Link to="/cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
               <div className="capper-identity">
                 <CapperAvatar key={selectedCapper.avatar_url} name={selectedCapper.name} avatarUrl={selectedCapper.avatar_url} large />
-                <div><p className="eyebrow">Public capper homepage</p><h1>{selectedCapper.name}</h1><p>Official results, performance trends, and sport-by-sport analysis.</p></div>
+                <div><p className="eyebrow">Capper profile</p><h1>{selectedCapper.name}</h1><p>See current picks, settled results, and performance trends over time.</p></div>
               </div>
             </div>
             <Suspense fallback={<p className="account-state">Loading capper profile...</p>}>
@@ -497,7 +503,7 @@ function Website() {
         <section className="results-section" id="results">
           <div className="section-heading">
             <div><p className="eyebrow">The settled ledger</p><h2>Built for receipts, not promises.</h2></div>
-            <p>Official plays appear here after they settle, with the original published line, risk, capper, and final grade. Open plays and private account details are never returned by the public data endpoint.</p>
+            <p>Review settled official team picks, with the posted odds, units risked, result, and net units. Open plays and private account details are not shown here.</p>
           </div>
           <div className="results-toolbar">
             <span aria-live="polite">{loadState === 'ready' ? officialResults.length > 0 ? `Showing ${homepagePage * 10 + 1}-${homepagePage * 10 + homepageResults.length} of ${officialResults.length} settled plays` : '0 settled plays' : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>

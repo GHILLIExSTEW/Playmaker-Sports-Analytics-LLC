@@ -105,7 +105,9 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
   return <section className={`current-picks${capper ? ' current-picks-embedded' : ''}`} aria-label={capper ? `${capper} current picks` : 'Current picks'}>
     <header className="section-heading">
       <div><p className="eyebrow">HIGHROLLER board</p>{capper ? <h2>Current picks.</h2> : <h1>Expert picks.</h1>}</div>
-      <p>Published, unsettled official plays. No result or daily pick count is guaranteed. Publication time is not an event start time.</p>
+      <p>{capper
+        ? `See ${capper}'s latest picks, including odds, units risked, and post times. Insights are shown when available.`
+        : 'Browse team and capper picks with odds, units risked, and post times. Insights are shown when available.'}</p>
     </header>
     <MemberAccessNotice />
     {access?.state === 'active' && <>
