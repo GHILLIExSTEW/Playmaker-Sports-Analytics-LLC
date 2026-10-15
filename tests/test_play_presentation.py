@@ -147,6 +147,32 @@ def test_publishing_preserves_author_image_and_explicit_target():
     assert embed.image.url == data["image_url"]
 
 
+def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch):
+    monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
+    presentation = cog()
+    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    data = {**payload(), "tracking_scope": "capper"}
+    asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
+    sent = presentation.resolve_channel.return_value.send.call_args.kwargs
+    assert sent["content"] == "<@&456>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
+    assert sent["allowed_mentions"].replied_user is False
+
+
+def test_publishing_official_play_does_not_add_rookie_mention(monkeypatch):
+    presentation = cog()
+    presentation.bot.user = SimpleNamespace(
+        display_name="Playmaker Picks Team",
+        display_avatar=SimpleNamespace(url="https://example.com/bot.png"),
+    )
+    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    data = {**payload(), "tracking_scope": "official"}
+    asyncio.run(presentation.publish_play_message(request, data, ("OFFICIAL_CHANNEL_ID", 303)))
+    sent = presentation.resolve_channel.return_value.send.call_args.kwargs
+    assert "content" not in sent and "allowed_mentions" not in sent
+    assert sent["embed"].author.name == presentation.bot.user.display_name
+
+
 def test_publish_missing_channel_raises_without_claiming_success():
     presentation = cog()
     presentation.resolve_channel.return_value = None

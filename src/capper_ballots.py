@@ -181,7 +181,6 @@ class CapperBallots(commands.Cog):
             await asyncio.to_thread(self.store.finish, message.id, "processing", play_id=payload["play_id"], votes=counts)
             embed = build_play_embed(payload)
             embed.set_author(name=self.bot.user.display_name, icon_url=self.bot.user.display_avatar.url)
-            embed.set_footer(text=f"Team ballot: {counts['yes']} Yes / {counts['no']} No / {counts['pass']} Pass")
             file = await image.to_file() if image is not None else None
             try:
                 kwargs = {}

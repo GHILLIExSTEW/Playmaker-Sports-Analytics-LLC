@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, TEST_CHANNEL_ID, WINNING_SLIPS_CHANNEL_ID
+from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID, TEST_CHANNEL_ID, WINNING_SLIPS_CHANNEL_ID
 from src.play_settlement import SETTLEABLE_STATUSES
 from src.services import bang_service
 from src.services.official_play_service import OfficialPlayService
@@ -97,6 +97,14 @@ class PlayPresentation(commands.Cog):
         )
         if payload.get("image_url"):
             embed.set_image(url=payload["image_url"])
+        if payload.get("tracking_scope") == "capper":
+            return await channel.send(
+                content=f"<@&{ROOKIE_ROLE_ID}>",
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
+                ),
+                embed=embed,
+            )
         return await channel.send(embed=embed)
 
     async def update_play_message(self, message: discord.Message | None, play_id: int, result: str) -> None:
