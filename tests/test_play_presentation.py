@@ -159,6 +159,24 @@ def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch):
     assert sent["allowed_mentions"].replied_user is False
 
 
+def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypatch):
+    monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
+    presentation = cog()
+    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    data = {
+        **payload(),
+        "tracking_scope": "capper",
+        "legs": 1,
+        "summary": "<@&789>",
+        "play_text": "Pick <@&789>",
+    }
+    asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
+    embed = presentation.resolve_channel.return_value.send.call_args.kwargs["embed"]
+    assert embed.description == "1u \u2022 1-leg \u2022 +150"
+    assert "<@&789>" not in embed.description
+    assert "<@&789>" not in embed.fields[-1].value
+
+
 def test_publishing_official_play_does_not_add_rookie_mention(monkeypatch):
     presentation = cog()
     presentation.bot.user = SimpleNamespace(

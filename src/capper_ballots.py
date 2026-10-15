@@ -185,7 +185,6 @@ class CapperBallots(commands.Cog):
             try:
                 kwargs = {}
                 if file is not None:
-                    embed.set_image(url=f"attachment://{file.filename}")
                     kwargs["file"] = file
                 published = await channel.send(
                     content=f"<@&{HIGHROLLER_ROLE_ID}>",

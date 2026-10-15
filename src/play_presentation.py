@@ -95,6 +95,16 @@ class PlayPresentation(commands.Cog):
             name=author.display_name,
             icon_url=author.display_avatar.url,
         )
+        if payload.get("tracking_scope") == "capper":
+            role_mention = f"<@&{HIGHROLLER_ROLE_ID}>"
+            description = (embed.description or "").replace(role_mention, "").strip()
+            embed.description = description or (
+                f"{float(payload['units']):g}u • {int(payload['legs'])}-leg • {int(payload['odds']):+d}"
+            )
+            for index, field in enumerate(embed.fields):
+                value = field.value.replace(role_mention, "").strip()
+                if value != field.value:
+                    embed.set_field_at(index, name=field.name, value=value, inline=field.inline)
         if payload.get("image_url"):
             embed.set_image(url=payload["image_url"])
         if payload.get("tracking_scope") == "capper":

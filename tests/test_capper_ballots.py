@@ -90,7 +90,8 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     assert sent["allowed_mentions"].replied_user is False
     assert embed.author.name == "Playmaker Picks Team" and embed.author.icon_url == "https://cdn/bot"
     assert embed.fields[3].value == "⭐" * yes
-    assert embed.image.url == "attachment://slip.png"
+    assert embed.image.url is None
+    assert sent["file"].filename == "slip.png"
     assert embed.footer.text is None
     cog.official.attach_message_id.assert_called_once_with(7, 800)
     assert cog.store.finish.call_args.kwargs["official_message_id"] == "800"
