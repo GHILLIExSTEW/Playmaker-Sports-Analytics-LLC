@@ -45,10 +45,11 @@ def setup(monkeypatch):
     return channels, complete, alert
 
 
-def test_bang_uploads_slip_to_winning_slips_only_with_highroller_mention(monkeypatch, load_presentation):
+def test_bang_uploads_slip_to_winning_slips_with_highroller_mention(monkeypatch, load_presentation):
     channels, complete, _ = setup(monkeypatch)
     message = source()
     load_presentation()
+    monkeypatch.setattr(presentation_module, "WINNING_SLIPS_CHANNEL_ID", 101)
     asyncio.run(bot_module.send_bang_notifications(message, 7))
     kwargs = channels[101].send.call_args.kwargs
     assert kwargs["content"] == f"## 💰 BANG! 💸 🤑\n<@&{bot_module.HIGHROLLER_ROLE_ID}>"
@@ -81,7 +82,7 @@ def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(mo
     alert.assert_awaited_once()
 
 
-def test_vip_destination_failure_does_not_fall_back_to_free_chat(monkeypatch, load_presentation):
+def test_winning_slips_destination_failure_does_not_fall_back_to_free_chat(monkeypatch, load_presentation):
     channels, complete, alert = setup(monkeypatch)
     channels[101].send.side_effect = RuntimeError("Unavailable")
     load_presentation()
@@ -104,9 +105,15 @@ def test_testing_does_not_ping_or_send_to_live_channels(monkeypatch, load_presen
     assert channel.send.call_args.kwargs["allowed_mentions"].roles is False
 
 
-def test_reaction_requires_settlement_authority_and_only_win_posts_bang(monkeypatch, load_settlement):
+@pytest.mark.parametrize(
+    ("tracking_scope", "bang_expected"),
+    [("official", True), ("capper", False)],
+)
+def test_reaction_requires_settlement_authority_and_only_official_win_posts_bang(
+    monkeypatch, load_settlement, tracking_scope, bang_expected,
+):
     setup(monkeypatch)
-    play = {"id": 7, "discord_user_id": "42", "status": "open"}
+    play = {"id": 7, "discord_user_id": "42", "status": "open", "tracking_scope": tracking_scope}
     monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lambda message_id: play)
     settle = Mock()
     monkeypatch.setattr(bot_module.official_play_service, "settle_play", settle)
@@ -125,7 +132,10 @@ def test_reaction_requires_settlement_authority_and_only_win_posts_bang(monkeypa
                                   member=SimpleNamespace(id=user_id, bot=False))
         asyncio.run(bot_module.on_raw_reaction_add(payload))
     assert [call.args for call in settle.call_args_list] == [(7, "loss"), (7, "win")]
-    bang.assert_awaited_once_with(message, 7)
+    if bang_expected:
+        bang.assert_awaited_once_with(message, 7)
+    else:
+        bang.assert_not_awaited()
 
 
 def test_claim_does_not_retry_uncertain_database_commit(monkeypatch):

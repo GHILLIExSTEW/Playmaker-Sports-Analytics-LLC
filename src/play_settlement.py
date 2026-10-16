@@ -97,7 +97,7 @@ class PlaySettlement(commands.Cog):
             await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
             message = await channel.fetch_message(payload.message_id)
             await self.update_message(message, int(play["id"]), result)
-            if result == "win":
+            if result == "win" and play.get("tracking_scope", "official") == "official":
                 await self.bang_notifications(message, int(play["id"]))
         except Exception as exc:
             logger.exception("reaction_settlement_failed message=%s user=%s", payload.message_id, payload.user_id)
@@ -135,7 +135,7 @@ class PlaySettlement(commands.Cog):
             if result:
                 await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
                 await self.update_message(message, int(play["id"]), result)
-                if result == "win":
+                if result == "win" and play.get("tracking_scope", "official") == "official":
                     await self.bang_notifications(message, int(play["id"]))
                 settled_count += 1
         return settled_count

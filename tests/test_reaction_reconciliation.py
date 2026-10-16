@@ -1,7 +1,9 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import src.bot as bot_module
+import pytest
 
 
 class FakeReaction:
@@ -26,7 +28,13 @@ class FakeChannel:
         return self.message
 
 
-def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch, load_settlement, load_presentation):
+@pytest.mark.parametrize(
+    ("tracking_scope", "bang_expected"),
+    [("official", True), ("capper", False)],
+)
+def test_reconcile_open_play_reactions_settles_owner_reaction(
+    monkeypatch, load_settlement, load_presentation, tracking_scope, bang_expected,
+):
     message = SimpleNamespace(
         reactions=[FakeReaction("✅", [SimpleNamespace(id=999), SimpleNamespace(id=123)])],
         embeds=[],
@@ -36,9 +44,10 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch, load_
         message.edited = kwargs
 
     message.edit = edit
-    plays = [{"id": 42, "user_id": 7, "status": "open", "message_id": "500"}]
+    plays = [{"id": 42, "user_id": 7, "status": "open", "message_id": "500", "tracking_scope": tracking_scope}]
     users = [{"id": 7, "discord_user_id": "123"}]
     settlements = []
+    bang = AsyncMock()
     monkeypatch.setattr(
         bot_module.official_play_service,
         "settle_play",
@@ -46,7 +55,7 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch, load_
     )
 
     load_presentation()
-    load_settlement()
+    load_settlement(bang_notifications=bang)
     settled_count = asyncio.run(
         bot_module.reconcile_open_play_reactions(plays, users, [FakeChannel(message)])
     )
@@ -54,6 +63,10 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(monkeypatch, load_
     assert settled_count == 1
     assert settlements == [(42, "win")]
     assert message.edited["embed"].title == "Play #42 • Win"
+    if bang_expected:
+        bang.assert_awaited_once_with(message, 42)
+    else:
+        bang.assert_not_awaited()
 
 
 def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch, load_settlement, load_presentation):
