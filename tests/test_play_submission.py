@@ -219,7 +219,8 @@ def test_image_confirmation_tracks_exactly_one_published_card(reposted):
     repost = SimpleNamespace(id=202) if reposted else None
     cog.repost_play.return_value = repost
     interaction = request()
-    interaction.channel = SimpleNamespace(fetch_message=AsyncMock(return_value=SimpleNamespace(id=8)))
+    source_message = SimpleNamespace(id=8, delete=AsyncMock())
+    interaction.channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source_message))
     interaction.message = SimpleNamespace(delete=AsyncMock())
 
     async def check():
@@ -236,8 +237,34 @@ def test_image_confirmation_tracks_exactly_one_published_card(reposted):
     if reposted:
         cog.announce_play.assert_not_awaited()
         cog.publish_play.assert_not_awaited()
+        source_message.delete.assert_not_awaited()
     else:
+        cog.publish_play.assert_awaited_once()
+        assert cog.publish_play.call_args.args[1]["image_url"] == "https://cdn/slip"
+        source_message.delete.assert_awaited_once()
         assert cog.announce_play.call_args.args[-1].id == 101
+
+
+def test_image_confirmation_reports_source_image_cleanup_failure():
+    cog = submission()
+    cog.official.get_play_for_message.return_value = None
+    cog.repost_play.return_value = None
+    source_message = SimpleNamespace(
+        id=8,
+        delete=AsyncMock(side_effect=discord.Forbidden(
+            SimpleNamespace(status=403, reason="Forbidden"), "Missing permissions",
+        )),
+    )
+    interaction = request()
+    interaction.channel = SimpleNamespace(fetch_message=AsyncMock(return_value=source_message))
+    interaction.message = SimpleNamespace(delete=AsyncMock())
+
+    asyncio.run(ConfirmImageView(cog, 42, parsed(), 8).confirm.callback(interaction))
+
+    cog.publish_play.assert_awaited_once()
+    cog.staff_alert.assert_awaited_once()
+    assert "duplicate image" in cog.staff_alert.call_args.args[1]
+    cog.official.attach_message_id.assert_called_once_with(7, 101)
 
 
 def test_concurrent_image_confirmation_only_creates_once():

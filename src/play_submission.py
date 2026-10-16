@@ -360,6 +360,22 @@ class ConfirmImageView(discord.ui.View):
             if self.source_message_id and interaction.channel is not None:
                 repost = await self.submission.repost_play(interaction.channel, self.source_message_id, payload, interaction.user)
             message = repost or await self.submission.publish_play(interaction, payload, self.submission.submission_target(interaction))
+            if repost is None and self.source_message_id and interaction.channel is not None:
+                try:
+                    source = await interaction.channel.fetch_message(int(self.source_message_id))
+                    await source.delete()
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException:
+                    logger.warning(
+                        "image_source_delete_failed play=%s source=%s",
+                        payload["play_id"], self.source_message_id, exc_info=True,
+                    )
+                    await self.submission.staff_alert(
+                        f"image_source_delete:{payload['play_id']}",
+                        f"Play #{payload['play_id']} was published with its image, but the original image post "
+                        "could not be removed. Check the channel for a duplicate image.",
+                    )
             tracked_message_id = message.id
             await asyncio.to_thread(official.attach_message_id, payload["play_id"], tracked_message_id)
             await self.submission.confirm_recorded(interaction, payload)
