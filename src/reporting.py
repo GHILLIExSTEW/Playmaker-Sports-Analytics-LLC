@@ -283,6 +283,7 @@ class Reporting(commands.Cog):
         return build_official_tracker_embed(plays, users, cutoff=self.get_tracker_start())
 
     async def update_or_post_tracker_embed(self, channel, embed: discord.Embed, image: BytesIO | None = None) -> None:
+        """Edit the existing tracker, even when newer posts have pushed it out of recent history."""
         image_embed = embed
         image_file = None
         try:
@@ -290,7 +291,7 @@ class Reporting(commands.Cog):
                 image_file = discord.File(image, filename="unit-summary.png")
                 image_embed = discord.Embed(color=embed.color)
                 image_embed.set_image(url="attachment://unit-summary.png")
-            async for message in channel.history(limit=50):
+            async for message in channel.history(limit=None):
                 has_tracker_image = any(
                     attachment.filename == "unit-summary.png"
                     for attachment in getattr(message, "attachments", ())

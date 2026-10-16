@@ -194,7 +194,7 @@ def test_tracker_publication_matches_bot_and_title_and_closes_file(monkeypatch, 
     other = SimpleNamespace(author=reporting.bot.user, embeds=[discord.Embed(title="Other")], edit=AsyncMock())
 
     async def history(limit):
-        assert limit == 50
+        assert limit is None
         for message in [stranger, other] + ([ours] if existing else []):
             yield message
     channel = SimpleNamespace(history=history, send=AsyncMock())
@@ -213,6 +213,58 @@ def test_tracker_publication_matches_bot_and_title_and_closes_file(monkeypatch, 
         assert action.call_args.kwargs["embed"].image.url == "attachment://unit-summary.png"
     else:
         assert "file" not in action.call_args.kwargs and "attachments" not in action.call_args.kwargs
+
+
+@pytest.mark.parametrize("image_only", [False, True])
+def test_tracker_refresh_reuses_summary_beyond_recent_history(image_only):
+    reporting = cog()
+    summary = SimpleNamespace(
+        author=reporting.bot.user,
+        embeds=[discord.Embed() if image_only else discord.Embed(title="Summary")],
+        attachments=[SimpleNamespace(filename="unit-summary.png")] if image_only else [],
+        edit=AsyncMock(),
+    )
+    newer = [
+        SimpleNamespace(author=reporting.bot.user, embeds=[discord.Embed(title="Recap")], attachments=[])
+        for _ in range(75)
+    ]
+
+    async def history(limit):
+        messages = newer + [summary]
+        for message in messages if limit is None else messages[:limit]:
+            yield message
+
+    channel = SimpleNamespace(history=history, send=AsyncMock())
+
+    async def check():
+        for _ in range(2):
+            await reporting.update_or_post_tracker_embed(
+                channel, discord.Embed(title="Summary"), BytesIO(b"png"),
+            )
+
+    asyncio.run(check())
+    assert summary.edit.await_count == 2
+    assert summary.edit.call_args.kwargs["embed"].image.url == "attachment://unit-summary.png"
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure", ["history", "edit"])
+def test_tracker_lookup_or_edit_error_does_not_post_replacement(failure):
+    reporting = cog()
+    summary = SimpleNamespace(
+        author=reporting.bot.user, embeds=[discord.Embed(title="Summary")],
+        edit=AsyncMock(side_effect=RuntimeError("offline")),
+    )
+
+    async def history(limit):
+        if failure == "history":
+            raise RuntimeError("offline")
+        yield summary
+
+    channel = SimpleNamespace(history=history, send=AsyncMock())
+    with pytest.raises(RuntimeError, match="offline"):
+        asyncio.run(reporting.update_or_post_tracker_embed(channel, discord.Embed(title="Summary")))
+    channel.send.assert_not_awaited()
 
 
 def test_tracker_send_error_propagates_and_releases_file(monkeypatch):
