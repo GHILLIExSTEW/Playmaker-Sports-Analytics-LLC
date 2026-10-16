@@ -2,14 +2,14 @@ import asyncio
 from datetime import date, datetime
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import discord
 import pytest
 
 import src.bot as bot_module
 import src.reporting as module
-from src.reporting import Reporting, TRACKER_TIMEZONE, build_official_tracker_embed
+from src.reporting import Reporting, TRACKER_TIMEZONE, TrackerMessageStore, build_official_tracker_embed
 
 
 def cog():
@@ -20,6 +20,7 @@ def cog():
         reconcile_reactions=AsyncMock(return_value=0),
         tracked_operators=AsyncMock(return_value={42}),
         resolve_channel=AsyncMock(), can_manage_plays=Mock(), staff_alert=AsyncMock(),
+        tracker_message_store=Mock(get_message_id=Mock(return_value=None), set_message_id=Mock()),
     )
 
 
@@ -29,6 +30,31 @@ def play(play_id=7, **overrides):
         "created_at": "2026-10-01T12:00:00+00:00", "settled_at": "2026-10-02T12:00:00+00:00",
         **overrides,
     }
+
+
+def test_tracker_message_store_reads_and_saves_discord_message_id(monkeypatch):
+    select = Mock(return_value=SimpleNamespace(data=[{"message_id": "123456789012345678"}]))
+    update = Mock(return_value=SimpleNamespace(data=[{"message_id": "123456789012345678"}]))
+    monkeypatch.setattr(module.supabase_service, "select", select)
+    monkeypatch.setattr(module.supabase_service, "update", update)
+    store = TrackerMessageStore()
+
+    assert store.get_message_id() == 123456789012345678
+    store.set_message_id(123456789012345678)
+
+    select.assert_called_once_with("tracker_message_settings", "message_id", {"singleton": True})
+    update.assert_called_once_with(
+        "tracker_message_settings",
+        {"message_id": "123456789012345678"},
+        {"singleton": True},
+    )
+
+
+def test_tracker_message_store_requires_applied_migration(monkeypatch):
+    monkeypatch.setattr(module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
+
+    with pytest.raises(RuntimeError, match="tracker message migration"):
+        TrackerMessageStore().get_message_id()
 
 
 def test_tracker_fetch_paginates_both_tables_without_truncation(monkeypatch):
@@ -189,12 +215,15 @@ def test_tracker_publication_matches_bot_and_title_and_closes_file(monkeypatch, 
             close()
         return SimpleNamespace(filename=file.filename, close=close_file)
     monkeypatch.setattr(module.discord, "File", create)
-    ours = SimpleNamespace(author=reporting.bot.user, embeds=[discord.Embed(title="Summary")], edit=AsyncMock())
+    ours = SimpleNamespace(
+        id=499, author=SimpleNamespace(id=reporting.bot.user.id),
+        embeds=[discord.Embed(title="Summary")], edit=AsyncMock(),
+    )
     stranger = SimpleNamespace(author=object(), embeds=[discord.Embed(title="Summary")], edit=AsyncMock())
     other = SimpleNamespace(author=reporting.bot.user, embeds=[discord.Embed(title="Other")], edit=AsyncMock())
 
-    async def history(limit):
-        assert limit is None
+    async def history(limit, oldest_first):
+        assert limit is None and oldest_first is True
         for message in [stranger, other] + ([ours] if existing else []):
             yield message
     channel = SimpleNamespace(history=history, send=AsyncMock())
@@ -204,6 +233,7 @@ def test_tracker_publication_matches_bot_and_title_and_closes_file(monkeypatch, 
     other.edit.assert_not_awaited()
     action = ours.edit if existing else channel.send
     action.assert_awaited_once()
+    reporting.tracker_message_store.set_message_id.assert_called_once_with(499 if existing else channel.send.return_value.id)
     if existing:
         channel.send.assert_not_awaited()
     if with_image:
@@ -219,19 +249,28 @@ def test_tracker_publication_matches_bot_and_title_and_closes_file(monkeypatch, 
 def test_tracker_refresh_reuses_summary_beyond_recent_history(image_only):
     reporting = cog()
     summary = SimpleNamespace(
-        author=reporting.bot.user,
+        author=SimpleNamespace(id=reporting.bot.user.id),
+        id=500,
         embeds=[discord.Embed() if image_only else discord.Embed(title="Summary")],
         attachments=[SimpleNamespace(filename="unit-summary.png")] if image_only else [],
         edit=AsyncMock(),
     )
     newer = [
-        SimpleNamespace(author=reporting.bot.user, embeds=[discord.Embed(title="Recap")], attachments=[])
+        SimpleNamespace(author=SimpleNamespace(id=reporting.bot.user.id), embeds=[discord.Embed(title="Recap")], attachments=[])
         for _ in range(75)
     ]
+    newer_tracker = SimpleNamespace(
+        id=501,
+        author=SimpleNamespace(id=reporting.bot.user.id),
+        embeds=[discord.Embed()],
+        attachments=[SimpleNamespace(filename="unit-summary.png")],
+        edit=AsyncMock(),
+    )
 
-    async def history(limit):
-        messages = newer + [summary]
-        for message in messages if limit is None else messages[:limit]:
+    async def history(limit, oldest_first):
+        assert limit is None and oldest_first is True
+        messages = [summary] + newer + [newer_tracker]
+        for message in messages:
             yield message
 
     channel = SimpleNamespace(history=history, send=AsyncMock())
@@ -245,18 +284,124 @@ def test_tracker_refresh_reuses_summary_beyond_recent_history(image_only):
     asyncio.run(check())
     assert summary.edit.await_count == 2
     assert summary.edit.call_args.kwargs["embed"].image.url == "attachment://unit-summary.png"
+    reporting.tracker_message_store.set_message_id.assert_has_calls([call(500), call(500)])
+    newer_tracker.edit.assert_not_awaited()
     channel.send.assert_not_awaited()
+
+
+def test_overlapping_tracker_refreshes_reuse_newly_published_message():
+    reporting = cog()
+    published = None
+    stored_id = None
+    message = SimpleNamespace(
+        id=700,
+        author=SimpleNamespace(id=reporting.bot.user.id),
+        embeds=[],
+        attachments=[],
+        edit=AsyncMock(),
+    )
+
+    async def history(limit, oldest_first):
+        assert limit is None and oldest_first is True
+        if published is not None:
+            yield published
+
+    async def send(**kwargs):
+        nonlocal published
+        published = message
+        return message
+
+    def get_message_id():
+        return stored_id
+
+    def set_message_id(message_id):
+        nonlocal stored_id
+        stored_id = message_id
+
+    reporting.tracker_message_store.get_message_id.side_effect = get_message_id
+    reporting.tracker_message_store.set_message_id.side_effect = set_message_id
+
+    async def fetch_message(message_id):
+        assert message_id == message.id
+        return message
+
+    channel = SimpleNamespace(
+        history=history,
+        fetch_message=AsyncMock(side_effect=fetch_message),
+        send=AsyncMock(side_effect=send),
+    )
+
+    async def check():
+        await asyncio.gather(
+            reporting.update_or_post_tracker_embed(channel, discord.Embed(title="Summary")),
+            reporting.update_or_post_tracker_embed(channel, discord.Embed(title="Summary")),
+        )
+
+    asyncio.run(check())
+    channel.send.assert_awaited_once()
+    message.edit.assert_awaited_once()
+    channel.fetch_message.assert_awaited_once_with(message.id)
+    reporting.tracker_message_store.set_message_id.assert_has_calls([call(message.id), call(message.id)])
+
+
+def test_tracker_refresh_uses_persisted_message_id_without_history_search():
+    reporting = cog()
+    reporting.tracker_message_store.get_message_id.return_value = 600
+    message = SimpleNamespace(id=600, edit=AsyncMock())
+    channel = SimpleNamespace(
+        fetch_message=AsyncMock(return_value=message),
+        history=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    asyncio.run(reporting.update_or_post_tracker_embed(channel, discord.Embed(title="Summary")))
+
+    channel.fetch_message.assert_awaited_once_with(600)
+    channel.history.assert_not_awaited()
+    channel.send.assert_not_awaited()
+    message.edit.assert_awaited_once()
+    reporting.tracker_message_store.set_message_id.assert_called_once_with(600)
+
+
+def test_tracker_refresh_discovers_and_persists_message_when_saved_id_is_stale():
+    reporting = cog()
+    reporting.tracker_message_store.get_message_id.return_value = 600
+    response = SimpleNamespace(status=404, reason="Not Found")
+    stale_message = discord.NotFound(response, "Message not found")
+    message = SimpleNamespace(
+        id=601,
+        author=SimpleNamespace(id=reporting.bot.user.id),
+        embeds=[discord.Embed(title="Summary")],
+        attachments=[],
+        edit=AsyncMock(),
+    )
+
+    async def history(limit, oldest_first):
+        assert limit is None and oldest_first is True
+        yield message
+
+    channel = SimpleNamespace(
+        fetch_message=AsyncMock(side_effect=stale_message),
+        history=history,
+        send=AsyncMock(),
+    )
+
+    asyncio.run(reporting.update_or_post_tracker_embed(channel, discord.Embed(title="Summary")))
+
+    message.edit.assert_awaited_once()
+    channel.send.assert_not_awaited()
+    reporting.tracker_message_store.set_message_id.assert_has_calls([call(None), call(601)])
 
 
 @pytest.mark.parametrize("failure", ["history", "edit"])
 def test_tracker_lookup_or_edit_error_does_not_post_replacement(failure):
     reporting = cog()
     summary = SimpleNamespace(
-        author=reporting.bot.user, embeds=[discord.Embed(title="Summary")],
+        id=500, author=SimpleNamespace(id=reporting.bot.user.id), embeds=[discord.Embed(title="Summary")],
         edit=AsyncMock(side_effect=RuntimeError("offline")),
     )
 
-    async def history(limit):
+    async def history(limit, oldest_first):
         if failure == "history":
             raise RuntimeError("offline")
         yield summary
@@ -269,7 +414,7 @@ def test_tracker_lookup_or_edit_error_does_not_post_replacement(failure):
 
 def test_tracker_send_error_propagates_and_releases_file(monkeypatch):
     reporting = cog()
-    async def history(limit):
+    async def history(limit, oldest_first):
         if False:
             yield
     channel = SimpleNamespace(history=history, send=AsyncMock(side_effect=RuntimeError("offline")))

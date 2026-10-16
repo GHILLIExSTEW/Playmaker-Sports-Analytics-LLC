@@ -34,6 +34,26 @@ RECAP_TIME = time(hour=10, tzinfo=TRACKER_TIMEZONE)
 MEDALS = ["🥇", "🥈", "🥉"]
 
 
+class TrackerMessageStore:
+    def get_message_id(self) -> int | None:
+        rows = supabase_service.select(
+            "tracker_message_settings", "message_id", {"singleton": True},
+        ).data
+        if not rows:
+            raise RuntimeError("Apply the tracker message migration before refreshing the tracker.")
+        message_id = rows[0].get("message_id")
+        return int(message_id) if message_id else None
+
+    def set_message_id(self, message_id: int | None) -> None:
+        result = supabase_service.update(
+            "tracker_message_settings",
+            {"message_id": str(message_id) if message_id is not None else None},
+            {"singleton": True},
+        )
+        if not result.data:
+            raise RuntimeError("The tracker message ID was not saved.")
+
+
 def fetch_official_tracker_rows() -> tuple[list[dict], list[dict]]:
     client = supabase_service._ensure_client()
 
@@ -264,6 +284,7 @@ class Reporting(commands.Cog):
         resolve_channel: Callable[..., Awaitable],
         can_manage_plays: Callable[[discord.abc.User, discord.Guild | None], bool],
         staff_alert: Callable[[str, str], Awaitable[None]],
+        tracker_message_store: TrackerMessageStore | None = None,
     ) -> None:
         self.bot = bot
         self.features = features
@@ -275,6 +296,8 @@ class Reporting(commands.Cog):
         self.resolve_channel = resolve_channel
         self.can_manage_plays = can_manage_plays
         self.staff_alert = staff_alert
+        self.tracker_message_store = tracker_message_store or TrackerMessageStore()
+        self._tracker_update_lock = asyncio.Lock()
 
     def tracker_rows(self) -> tuple[list[dict], list[dict]]:
         return fetch_official_tracker_rows()
@@ -283,33 +306,58 @@ class Reporting(commands.Cog):
         return build_official_tracker_embed(plays, users, cutoff=self.get_tracker_start())
 
     async def update_or_post_tracker_embed(self, channel, embed: discord.Embed, image: BytesIO | None = None) -> None:
-        """Edit the existing tracker, even when newer posts have pushed it out of recent history."""
-        image_embed = embed
-        image_file = None
-        try:
-            if image is not None:
-                image_file = discord.File(image, filename="unit-summary.png")
-                image_embed = discord.Embed(color=embed.color)
-                image_embed.set_image(url="attachment://unit-summary.png")
-            async for message in channel.history(limit=None):
-                has_tracker_image = any(
-                    attachment.filename == "unit-summary.png"
-                    for attachment in getattr(message, "attachments", ())
-                )
-                has_tracker_title = message.embeds and message.embeds[0].title == embed.title
-                if message.author == self.bot.user and (has_tracker_title or has_tracker_image):
-                    if image_file:
-                        await message.edit(embed=image_embed, attachments=[image_file])
-                    else:
-                        await message.edit(embed=embed)
+        """Edit the persisted tracker message, discovering it once when its ID is unset."""
+        async with self._tracker_update_lock:
+            image_embed = embed
+            image_file = None
+            try:
+                if image is not None:
+                    image_file = discord.File(image, filename="unit-summary.png")
+                    image_embed = discord.Embed(color=embed.color)
+                    image_embed.set_image(url="attachment://unit-summary.png")
+
+                message_id = await asyncio.to_thread(self.tracker_message_store.get_message_id)
+                message = None
+                if message_id is not None:
+                    try:
+                        message = await channel.fetch_message(message_id)
+                    except discord.NotFound:
+                        await asyncio.to_thread(self.tracker_message_store.set_message_id, None)
+
+                if message is None:
+                    bot_user_id = getattr(self.bot.user, "id", None)
+                    if bot_user_id is None:
+                        raise RuntimeError("Bot identity is unavailable while locating the tracker message.")
+                    async for candidate in channel.history(limit=None, oldest_first=True):
+                        if getattr(getattr(candidate, "author", None), "id", None) != bot_user_id:
+                            continue
+                        has_tracker_image = any(
+                            attachment.filename == "unit-summary.png"
+                            for attachment in getattr(candidate, "attachments", ())
+                        )
+                        has_tracker_title = any(
+                            item.title == embed.title for item in getattr(candidate, "embeds", ())
+                        )
+                        if has_tracker_title or has_tracker_image:
+                            message = candidate
+                            break
+
+                if message is not None:
+                    await message.edit(
+                        embed=image_embed,
+                        **({"attachments": [image_file]} if image_file else {}),
+                    )
+                    await asyncio.to_thread(self.tracker_message_store.set_message_id, message.id)
                     return
-            if image_file:
-                await channel.send(embed=image_embed, file=image_file)
-            else:
-                await channel.send(embed=embed)
-        finally:
-            if image_file is not None:
-                image_file.close()
+
+                if image_file:
+                    message = await channel.send(embed=image_embed, file=image_file)
+                else:
+                    message = await channel.send(embed=embed)
+                await asyncio.to_thread(self.tracker_message_store.set_message_id, message.id)
+            finally:
+                if image_file is not None:
+                    image_file.close()
 
     async def refresh_tracker(self) -> int:
         if not RESULT_CHANNEL_ID:

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import discord
 from PIL import Image
 
-import src.bot as bot_module
 from src.services.tracker_image_service import _plain_text, render_tracker_image
 from src.reporting import Reporting
 from unittest.mock import AsyncMock, Mock
@@ -36,8 +35,10 @@ def test_tracker_image_has_transparency_and_renders_performance_metrics():
 
 
 def test_tracker_refresh_replaces_image_on_existing_summary_message():
+    bot = Mock(user=SimpleNamespace(id=999))
     message = SimpleNamespace(
-        author=bot_module.bot.user,
+        author=SimpleNamespace(id=999),
+        id=501,
         embeds=[discord.Embed(title="Playmaker Picks | Unit Summary")],
     )
 
@@ -47,7 +48,7 @@ def test_tracker_refresh_replaces_image_on_existing_summary_message():
     message.edit = edit
 
     class Channel:
-        async def history(self, limit):
+        async def history(self, limit, oldest_first):
             yield message
 
     embed = discord.Embed(title="Playmaker Picks | Unit Summary", description="Results for today")
@@ -55,10 +56,11 @@ def test_tracker_refresh_replaces_image_on_existing_summary_message():
     embed.add_field(name="Monthly Units", value="-3u", inline=True)
     embed.set_footer(text="Auto-updates hourly")
     cog = Reporting(
-        bot_module.bot, features=Mock(), rankings=Mock(),
+        bot, features=Mock(), rankings=Mock(),
         get_tracker_start=Mock(return_value=None), settlement_channels=Mock(return_value=[]),
         reconcile_reactions=AsyncMock(), tracked_operators=AsyncMock(), resolve_channel=AsyncMock(),
         can_manage_plays=Mock(), staff_alert=AsyncMock(),
+        tracker_message_store=Mock(get_message_id=Mock(return_value=None), set_message_id=Mock()),
     )
     asyncio.run(cog.update_or_post_tracker_embed(Channel(), embed, BytesIO(b"png data")))
 
@@ -72,8 +74,10 @@ def test_tracker_refresh_replaces_image_on_existing_summary_message():
 
 
 def test_tracker_refresh_finds_image_only_post_by_attachment_name():
+    bot = Mock(user=SimpleNamespace(id=999))
     message = SimpleNamespace(
-        author=bot_module.bot.user,
+        author=SimpleNamespace(id=999),
+        id=502,
         embeds=[discord.Embed().set_image(url="https://cdn/unit-summary.png")],
         attachments=[SimpleNamespace(filename="unit-summary.png")],
     )
@@ -84,15 +88,16 @@ def test_tracker_refresh_finds_image_only_post_by_attachment_name():
     message.edit = edit
 
     class Channel:
-        async def history(self, limit):
+        async def history(self, limit, oldest_first):
             yield message
 
     embed = discord.Embed(title="Playmaker Picks | Unit Summary", description="Tracker text")
     cog = Reporting(
-        bot_module.bot, features=Mock(), rankings=Mock(),
+        bot, features=Mock(), rankings=Mock(),
         get_tracker_start=Mock(return_value=None), settlement_channels=Mock(return_value=[]),
         reconcile_reactions=AsyncMock(), tracked_operators=AsyncMock(), resolve_channel=AsyncMock(),
         can_manage_plays=Mock(), staff_alert=AsyncMock(),
+        tracker_message_store=Mock(get_message_id=Mock(return_value=None), set_message_id=Mock()),
     )
     asyncio.run(cog.update_or_post_tracker_embed(Channel(), embed, BytesIO(b"new png")))
     assert message.edit_kwargs["embed"].title is None
