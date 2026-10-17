@@ -33,6 +33,7 @@ async function mock(page: Page, approved = true) {
     const data = route.request().postDataJSON()
     ai.push(data)
     return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json: {
+      ...(data.action === 'pull' ? { message: 'Saved 16 team games. Weather, odds and player logs were not refreshed.' } : {}),
       text: data.action === 'extract' ? 'User screenshot: Chiefs -3.5, report date not visible.' : 'Matchup snapshot\nCached evidence only. Injury coverage unavailable.',
       generated_at: '2026-10-17T03:00:00Z', request_id: 'ai-1', action: data.action,
     } })
@@ -98,4 +99,17 @@ test('AI infrastructure errors are visible and not retried', async ({ page }) =>
   await expect(page.getByRole('alert')).toContainText('AI analysis is not configured yet.')
   expect(count).toBe(1)
   expect(h.ai).toHaveLength(0)
+})
+test('selected team pull reloads cached report and uses a separate allowance without analysis', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const h = await mock(page)
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByLabel('Team to refresh').selectOption('1')
+  await page.getByRole('button', { name: 'Pull latest team data', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText('One data pull used; no AI action used.')
+  expect(h.ai).toEqual([{ action: 'pull', competition: 'nfl', game_id: '1', team_id: '1' }])
+  expect(h.calls.filter(name => name === 'capper_tools_game')).toHaveLength(2)
+  await expect(page.getByRole('heading', { name: 'Your breakdown' })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })

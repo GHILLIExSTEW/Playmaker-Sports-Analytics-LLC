@@ -25,18 +25,41 @@ function Freshness({ at, hours }: { at: unknown; hours: number }) {
   const stale = typeof at !== 'string' || !Number.isFinite(Date.parse(at)) || now - Date.parse(at) > hours * 3_600_000
   return <p className={`tools-freshness${stale ? ' is-stale' : ''}`}>{stale ? 'May be stale · ' : 'Cached · '}{when(at)}</p>
 }
-function Matchup({ report }: { report: Report }) {
+function Matchup({ report, onReport }: { report: Report; onReport: (value: Report) => void }) {
   const [notes, setNotes] = useState(''), [reportDate, setReportDate] = useState('')
   const [image, setImage] = useState<File | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const [analysis, setAnalysis] = useState(''), [generatedAt, setGeneratedAt] = useState(''), [copied, setCopied] = useState(false)
   const [player, setPlayer] = useState(''), [stat, setStat] = useState(''), [threshold, setThreshold] = useState('')
   const [action, setAction] = useState(''), [reviewed, setReviewed] = useState(true), [extracted, setExtracted] = useState(false)
+  const [pullTeam, setPullTeam] = useState(report.game.away_id ?? report.game.home_id ?? '')
+  const [pullMessage, setPullMessage] = useState('')
   const { game, weather, odds } = report
   const logs = report.players.filter(row => row.playerId === player && Date.parse(row.date) < Date.parse(game.start_at))
   const players = [...new Map(report.players.map(row => [row.playerId, row])).values()]
   const stats = [...new Set(logs.flatMap(row => Object.keys(row.stats)))].sort()
   const values = logs.flatMap(row => row.stats[stat] === undefined ? [] : [row.stats[stat]])
   const line = threshold.trim() ? Number(threshold) : NaN
+  const pull = async () => {
+    setBusy(true); setAction('pull'); setError(''); setPullMessage(''); setAnalysis(''); setGeneratedAt('')
+    try {
+      const { data: session, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      if (!session.session) throw new Error('Sign in with Discord before pulling data.')
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL || 'https://lhsevzucmmzetpshpffv.supabase.co'}/functions/v1/capper-research`, {
+        method: 'POST', headers: { Authorization: `Bearer ${session.session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pull', competition: game.competition, game_id: game.game_id, team_id: pullTeam }),
+        signal: AbortSignal.timeout(75_000),
+      })
+      const result: unknown = await response.json()
+      if (!response.ok) throw new Error(object(result) && typeof result.error === 'string' ? result.error : 'Data pull failed.')
+      if (!object(result) || typeof result.message !== 'string') throw new Error('Invalid data pull response.')
+      setPullMessage(`${result.message} One data pull used; no AI action used.`)
+      const refreshed = await supabase.rpc('capper_tools_game', { p_competition: game.competition, p_game_id: game.game_id })
+      if (refreshed.error) throw new Error(`Pull saved, but reloading the report failed: ${refreshed.error.message}`)
+      onReport(parseReport(refreshed.data))
+    } catch (reason) { setError(`${errorText(reason)} No automatic retry was made.`) }
+    finally { setBusy(false); setAction('') }
+  }
   const ai = async (mode: 'analyze' | 'extract') => {
     setBusy(true); setError(''); setCopied(false); setAction(mode)
     try {
@@ -76,6 +99,15 @@ function Matchup({ report }: { report: Report }) {
       <p>{when(game.start_at)} · {game.status}</p>
       <p>Score: {score(game.away_score) ?? '—'} – {score(game.home_score) ?? '—'}</p>
       <Freshness at={game.synced_at} hours={24} />
+      <label>Team to refresh<select value={pullTeam} disabled={busy} onChange={event => setPullTeam(event.target.value)}>
+        {[{ id: game.away_id, name: game.away_name }, { id: game.home_id, name: game.home_name }].filter(team => team.id).map(team =>
+          <option key={team.id} value={team.id ?? ''}>{team.name}</option>)}
+      </select></label>
+      <button className="tools-primary" disabled={busy || !pullTeam} onClick={() => void pull()}>
+        {action === 'pull' ? 'Pulling latest team data…' : 'Pull latest team data'}
+      </button>
+      <p className="tools-muted">50 data pulls per capper / 500 shared per UTC day, separate from AI. Wait 15 seconds between pulls. Pulls fetch this team’s games for the selected matchup’s season and available NFL injuries. Weather, odds and player logs keep their existing cache timestamps. Failed attempts count; no automatic retries.</p>
+      {pullMessage && <p role="status">{pullMessage}</p>}
     </section>
     <p className="tools-disclosure">Cached research, not a live feed. Missing information is not a clean injury report. Current reports are not historical pregame evidence.</p>
     <div className="tools-grid">
@@ -185,7 +217,7 @@ function Tools() {
           <button disabled={search.offset + 20 >= results.total} onClick={() => updateSearch({ ...search, offset: search.offset + 20 })}>Next</button></div>
       </section>}
     </> : <><button className="tools-back" onClick={() => { setSelected(''); setReport(null); setError('') }}><ArrowLeft size={16} /> Back to games</button>
-      {!report && !error && <p role="status">Opening your research…</p>}{report && <Matchup key={`${report.game.competition}:${report.game.game_id}`} report={report} />}</>}
+      {!report && !error && <p role="status">Opening your research…</p>}{report && <Matchup key={`${report.game.competition}:${report.game.game_id}`} report={report} onReport={setReport} />}</>}
     {error && <p className="tools-error" role="alert">{error} <button onClick={() => updateSearch({ ...search })}>Reload games</button></p>}
   </>
 }

@@ -6,6 +6,15 @@ const body = { action: 'analyze', competition: 'nfl', game_id: '1', notes: 'My l
 const req = (value = body, origin = 'https://playmakersportsanalytics.com', token = 'user-jwt') => new Request('https://example.com', {
   method: 'POST', headers: { 'content-type': 'application/json', origin, authorization: `Bearer ${token}` }, body: JSON.stringify(value),
 })
+test('team pulls require a verified session and dispatch independently from AI actions', async () => {
+  let pulls = 0
+  const deps = { apiKey: '', model: 'unused', log: () => {}, fetch: async () => { throw new Error('AI must not run') },
+    authorize: async () => async () => { throw new Error('AI RPC must not run') },
+    pull: async (body) => { pulls++; assert.equal(body.team_id, '2'); return { status: 200, body: { message: 'Saved' } } } }
+  assert.equal((await createResearchHandler(deps)(req({ action: 'pull', competition: 'nfl', game_id: '1', team_id: '2' }))).status, 200)
+  assert.equal((await createResearchHandler({ ...deps, authorize: async () => null })(req({ action: 'pull' }))).status, 401)
+  assert.equal(pulls, 1)
+})
 function harness({ auth = true, rejectContext = false, rejectBudget = false, providerStatus = 200, incomplete = false, apiKey = 'private-ai-key' } = {}) {
   const calls = [], provider = [], logs = []
   const handle = createResearchHandler({

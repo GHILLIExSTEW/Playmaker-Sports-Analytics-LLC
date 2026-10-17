@@ -5,6 +5,7 @@ type Dependencies = {
   apiKey: string
   model: string
   log: (event: string) => void
+  pull?: (body: Record<string, unknown>, rpc: Rpc) => Promise<{ status: number; body: Record<string, unknown> }>
 }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const origins = new Set(['https://playmakersportsanalytics.com', 'https://www.playmakersportsanalytics.com'])
@@ -59,6 +60,11 @@ export function createResearchHandler(deps: Dependencies) {
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
       body = JSON.parse(new TextDecoder().decode(bytes))
     } catch { return json(400, { error: 'Invalid request. Use JSON and one image of at most 4 MiB.' }) }
+    if (object(body) && body.action === 'pull') {
+      if (!deps.pull) return json(503, { error: 'Team data pulls are not configured.' })
+      const result = await deps.pull(body, rpc)
+      return json(result.status, result.body)
+    }
     if (!object(body) || !['analyze', 'extract'].includes(String(body.action))
       || typeof body.competition !== 'string' || !competitions.includes(body.competition)
       || typeof body.game_id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(body.game_id)

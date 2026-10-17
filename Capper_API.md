@@ -9,17 +9,33 @@ Website-only approval does not issue an API key or grant staff models.
 
 The page provides cached game search, recent form, supported player logs and
 threshold comparisons, available NFL injuries, venue weather, and market
-snapshots with timestamps and missing/stale coverage warnings. It does not
-trigger provider refreshes or use SportsDataIO trial data.
+snapshots with timestamps and missing/stale coverage warnings. Inside a matchup,
+select **Team to refresh**, then tap **Pull latest team data**. This fetches that
+team's games for the selected matchup's season, plus the current NFL injury feed
+where supported. It saves the provider results and reloads the research report.
+Weather, odds and player logs are not refreshed by this button; their original
+cache timestamps remain visible. No SportsDataIO trial data is used.
+
+Data pulls have a **separate** allowance: 50 per capper and 500 shared per UTC
+day, with a 15-second per-user cooldown. Each button press uses one pull, including
+failed provider attempts. NFL pulls reserve two API-Sports calls (games and
+injuries); other leagues reserve one (games). All calls also count against the
+existing shared 7,500-provider-request UTC-day ceiling. Incomplete, paginated or
+invalid responses do not overwrite cached data, and no automatic retries occur.
 
 The `capper-research` Edge Function uses the signed-in user's verified Supabase
 session and database approval, never a browser-held provider key. Set its
 server-only `OPENAI_API_KEY`; optionally set `OPENAI_RESEARCH_MODEL` (default
 `gpt-4.1-mini`). Deploy with gateway JWT verification disabled as in
 [config.toml](supabase/config.toml); the handler verifies the session through
-Supabase Auth and uses the user's JWT for all data and allowance RPCs.
+Supabase Auth and uses the user's JWT for reads and allowance RPCs. Only the
+server uses the service role to persist validated provider results; a browser
+cannot write provider data or complete a pull.
 Apply [the tools migration](supabase/migrations/20261017070000_capper_research_tools.sql),
-then [the AI limits migration](supabase/migrations/20261017080000_capper_research_ai_limits.sql).
+then [the AI limits migration](supabase/migrations/20261017080000_capper_research_ai_limits.sql)
+and [the team-pull migration](supabase/migrations/20261017090000_capper_team_pulls.sql).
+Deploy all three function files (`index.ts`, `handler.ts`, `pull.ts`) and
+configure server-only `API_SPORTS_KEY` for data pulls.
 
 AI extraction and analysis share 50 actions per user and 500 globally per UTC
 day, with a 15-second user cooldown. Failed provider actions count; no automatic

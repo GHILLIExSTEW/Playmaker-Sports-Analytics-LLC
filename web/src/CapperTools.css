@@ -31,6 +31,7 @@
 .tools-matchup h2{display:flex;flex-direction:column;gap:8px;font-size:clamp(1.7rem,4vw,2.5rem);margin:18px 0}
 .tools-matchup h2 span{font-size:.8rem;text-transform:uppercase;letter-spacing:.15em;color:var(--muted)}
 .tools-matchup p{font-size:.9rem}
+.tools-matchup>label{max-width:420px;margin:20px auto 12px;text-align:left}
 .tools-disclosure{font-size:.8rem;line-height:1.6;padding:12px 16px;border-left:3px solid #cba75c;background:#cba75c0c}
 .tools-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
 .tools-grid .tools-card{margin:0;min-width:0}
