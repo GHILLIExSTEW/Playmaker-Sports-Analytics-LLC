@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import src.bot as bot_module
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_play_cards")
 
 class FakeReaction:
     def __init__(self, emoji, users):
@@ -28,14 +29,12 @@ class FakeChannel:
         return self.message
 
 
-@pytest.mark.parametrize(
-    ("tracking_scope", "bang_expected"),
-    [("official", True), ("capper", False)],
-)
+@pytest.mark.parametrize("tracking_scope", ["official", "capper"])
 def test_reconcile_open_play_reactions_settles_owner_reaction(
-    monkeypatch, load_settlement, load_presentation, tracking_scope, bang_expected,
+    monkeypatch, load_settlement, load_presentation, tracking_scope,
 ):
     message = SimpleNamespace(
+        id=500,
         reactions=[FakeReaction("✅", [SimpleNamespace(id=999), SimpleNamespace(id=123)])],
         embeds=[],
         guild=None,
@@ -53,6 +52,9 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(
         "settle_play",
         lambda play_id, result: settlements.append((play_id, result)),
     )
+    monkeypatch.setattr(bot_module.official_play_service, "_fetch_play", lambda play_id: {
+        "id": play_id, "status": "win", "tracking_scope": tracking_scope, "units": 1, "odds": 100,
+    })
 
     load_presentation()
     load_settlement(bang_notifications=bang)
@@ -63,10 +65,7 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(
     assert settled_count == 1
     assert settlements == [(42, "win")]
     assert message.edited["embed"].title == "Play #42 • Win"
-    if bang_expected:
-        bang.assert_awaited_once_with(message, 42)
-    else:
-        bang.assert_not_awaited()
+    bang.assert_awaited_once_with(message, 42)
 
 
 def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch, load_settlement, load_presentation):
@@ -77,6 +76,7 @@ def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch
     )
     guild = SimpleNamespace(get_member=lambda user_id: operator if user_id == 555 else None)
     message = SimpleNamespace(
+        id=500,
         reactions=[FakeReaction("❌", [operator])],
         embeds=[],
         guild=guild,
@@ -95,15 +95,20 @@ def test_reconcile_settles_owner_role_reaction_on_another_users_play(monkeypatch
         "settle_play",
         lambda play_id, result: settlements.append((play_id, result)),
     )
+    monkeypatch.setattr(bot_module.official_play_service, "_fetch_play", lambda play_id: {
+        "id": play_id, "status": "loss", "tracking_scope": "capper", "units": 1, "odds": 100,
+    })
 
     load_presentation()
-    load_settlement()
+    bang = AsyncMock()
+    load_settlement(bang_notifications=bang)
     settled_count = asyncio.run(
         bot_module.reconcile_open_play_reactions(plays, users, [FakeChannel(message)])
     )
 
     assert settled_count == 1
     assert settlements == [(43, "loss")]
+    bang.assert_awaited_once_with(message, 43)
 
 
 def test_reconcile_ignores_reaction_from_unrelated_member(monkeypatch, load_settlement):

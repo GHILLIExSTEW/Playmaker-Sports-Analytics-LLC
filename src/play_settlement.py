@@ -69,7 +69,7 @@ class PlaySettlement(commands.Cog):
         reaction_results: dict[str, str],
         channel_settings: Callable[[], list[tuple[str, int | None]]],
         user_can_settle: Callable[[discord.abc.User, str, discord.Guild | None], bool],
-        bang_notifications: Callable[[discord.Message, int], Awaitable[None]],
+        bang_notifications: Callable[[discord.Message | None, int], Awaitable[None]],
     ) -> None:
         self.bot, self.official, self.features = bot, official, features
         self.is_official, self.can_manage_plays = is_official, can_manage_plays
@@ -97,8 +97,7 @@ class PlaySettlement(commands.Cog):
             await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
             message = await channel.fetch_message(payload.message_id)
             await self.update_message(message, int(play["id"]), result)
-            if result == "win" and play.get("tracking_scope", "official") == "official":
-                await self.bang_notifications(message, int(play["id"]))
+            await self.bang_notifications(message, int(play["id"]))
         except Exception as exc:
             logger.exception("reaction_settlement_failed message=%s user=%s", payload.message_id, payload.user_id)
             await self.staff_alert("reaction_settlement", f"Reaction settlement failed for message {payload.message_id}: `{str(exc)[:1500]}`")
@@ -135,8 +134,7 @@ class PlaySettlement(commands.Cog):
             if result:
                 await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
                 await self.update_message(message, int(play["id"]), result)
-                if result == "win" and play.get("tracking_scope", "official") == "official":
-                    await self.bang_notifications(message, int(play["id"]))
+                await self.bang_notifications(message, int(play["id"]))
                 settled_count += 1
         return settled_count
 
@@ -238,6 +236,7 @@ class PlaySettlement(commands.Cog):
         await asyncio.to_thread(self.official.settle_play, play_id, result)
         message = await self.fetch_message(interaction.guild, int(current["message_id"])) if current.get("message_id") else None
         await self.update_message(message, play_id, result)
+        await self.bang_notifications(message, play_id)
         embed.color = RESULT_COLORS.get(result, discord.Color.blurple())
         embed.set_footer(text=f"Settled as {result.upper()} by {interaction.user.display_name}")
         await interaction.edit_original_response(embed=embed, view=None)
@@ -382,6 +381,7 @@ class UnsettleConfirmView(OwnerOnlyView):
             await interaction.edit_original_response(content=f"Could not reopen play #{play_id}: {exc}", view=None)
             return
         await self.settlement.refresh_card(interaction.guild, play_id)
+        await self.settlement.bang_notifications(None, play_id)
         await interaction.edit_original_response(
             content=f"Play #{play_id} reopened (was **{outcome['previous'].upper()}**). Settle it again with /settle.", view=None,
         )
@@ -420,6 +420,7 @@ class SettleResultView(OwnerOnlyView):
             outcome = await asyncio.to_thread(self.settlement.official.settle_play, play_id, result)
             message = await self.settlement.fetch_message(interaction.guild, int(current["message_id"])) if current.get("message_id") else None
             await self.settlement.update_message(message, play_id, outcome["result"])
+            await self.settlement.bang_notifications(message, play_id)
         except Exception as exc:
             logger.exception("settle_picker_failed play=%s user=%s", play_id, interaction.user.id)
             await interaction.edit_original_response(content=f"Could not settle play #{play_id}: {exc}", view=None)
@@ -463,6 +464,7 @@ class RegradeModal(discord.ui.Modal):
             content=f"Play #{play_id} regraded to {outcome['legs_left']}-leg at {outcome['odds']:+d}.", view=None,
         )
         await self.settlement.refresh_card(interaction.guild, play_id)
+        await self.settlement.bang_notifications(None, play_id)
 
 
 class EditBetModal(discord.ui.Modal, title="Edit Recorded Bet"):

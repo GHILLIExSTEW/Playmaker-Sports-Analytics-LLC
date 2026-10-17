@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock, Mock
 import discord
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_play_cards")
+
 import src.capper_ballots as module
 from src.capper_ballots import CapperBallots, ballot_counts, ballot_rating
+from src.play_presentation import build_play_card_embed
 
 
 @pytest.mark.parametrize("yes", range(6))
@@ -50,6 +53,7 @@ def message(vote=None):
     image = SimpleNamespace(
         content_type="image/png", url="https://cdn/slip",
         to_file=AsyncMock(return_value=Mock(filename="slip.png")),
+        read=AsyncMock(return_value=b"original slip"),
     )
     return SimpleNamespace(
         id=500, poll=vote or poll(), content="", attachments=[image],
@@ -72,7 +76,7 @@ def test_invalid_ballots_are_not_accepted(labels, multiple):
 
 
 @pytest.mark.parametrize("yes", [3, 4, 5])
-def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, yes):
+def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, yes, mock_play_cards):
     monkeypatch.setattr(module, "GUILD_ID", 123)
     cog = make_cog()
     source = message(poll(yes, 1, passed=10))
@@ -90,14 +94,21 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     assert mentions == {"roles": [module.HIGHROLLER_ROLE_ID], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
     assert embed.author.name == "Playmaker Picks Team" and embed.author.icon_url == "https://cdn/bot"
-    assert embed.fields[3].value == "⭐" * yes
-    assert embed.image.url is None
-    assert sent["file"].filename == "slip.png"
+    assert embed.fields == []
+    assert embed.description is None
+    rendered_play = mock_play_cards.call_args.args[0]
+    assert rendered_play["stars"] == yes and rendered_play["units"] == yes - 2
+    assert embed.image.url == f"attachment://{sent['file'].filename}"
+    updated = build_play_card_embed(
+        SimpleNamespace(embeds=[embed]),
+        {"id": 7, "status": "win", "units": yes - 2, "odds": 150},
+    )
+    assert updated.image.url == embed.image.url
+    assert sent["file"].filename == "playmaker-card-7.png"
     assert embed.footer.text is None
     cog.official.attach_message_id.assert_called_once_with(7, 800)
     assert cog.store.finish.call_args.kwargs["official_message_id"] == "800"
     cog.staff_alert.assert_not_awaited()
-    source.attachments[0].to_file.return_value.close.assert_called_once()
 
 
 @pytest.mark.parametrize("yes,no", [(0, 0), (2, 0), (3, 3), (4, 5)])
@@ -252,8 +263,9 @@ def test_no_image_posts_readable_text_without_capper_credit(monkeypatch):
     asyncio.run(cog.evaluate(source))
     cog.images.extract_text_play.assert_called_once_with("Capitals ML -110\n")
     sent = cog.resolve_channel.return_value.send.call_args.kwargs
-    assert "file" not in sent
-    assert sent["embed"].fields[-1].value == "Leg 1: Capitals ML (-110)"
+    assert sent["file"].filename == "playmaker-card-7.png"
+    assert sent["embed"].image.url == "attachment://playmaker-card-7.png"
+    assert sent["embed"].fields == []
     assert sent["embed"].author.name == "Playmaker Picks Team"
     cog.staff_alert.assert_not_awaited()
 

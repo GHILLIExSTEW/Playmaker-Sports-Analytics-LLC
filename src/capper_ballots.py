@@ -15,6 +15,7 @@ from src.play_presentation import build_engagement_view, build_play_embed
 from src.services.image_play_service import ImagePlayService, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
+from src.services.play_card_service import play_card_service
 from src.services.supabase_service import supabase_service
 
 logger = logging.getLogger("official_play_bot")
@@ -187,10 +188,16 @@ class CapperBallots(commands.Cog):
             await asyncio.to_thread(self.store.finish, message.id, "processing", play_id=payload["play_id"], votes=counts)
             embed = build_play_embed(payload)
             embed.set_author(name=self.bot.user.display_name, icon_url=self.bot.user.display_avatar.url)
-            file = await image.to_file() if image is not None else None
+            file = await play_card_service.file(
+                {**payload, "id": payload["play_id"], "status": "open"},
+                message.guild, slip=await image.read() if image is not None else None, legs=legs,
+            )
             try:
                 kwargs = {}
                 if file is not None:
+                    embed.clear_fields()
+                    embed.description = None
+                    embed.set_image(url=f"attachment://{file.filename}")
                     kwargs["file"] = file
                 published = await channel.send(
                     content=f"<@&{HIGHROLLER_ROLE_ID}>",

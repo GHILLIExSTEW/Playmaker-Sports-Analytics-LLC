@@ -1,6 +1,17 @@
 import pytest
 
 @pytest.fixture
+def mock_play_cards(monkeypatch):
+    from io import BytesIO
+    from unittest.mock import AsyncMock
+    import discord
+    from src.services.play_card_service import play_card_service
+
+    mock = AsyncMock(side_effect=lambda *args, **kwargs: discord.File(BytesIO(b"generated card"), filename="playmaker-card-7.png"))
+    monkeypatch.setattr(play_card_service, "file", mock)
+    return mock
+
+@pytest.fixture
 def load_presentation(monkeypatch):
     import src.bot as bot_module
     from src.play_presentation import PlayPresentation
@@ -20,11 +31,32 @@ def load_presentation(monkeypatch):
 
 
 @pytest.fixture
-def load_settlement(monkeypatch):
+def load_bang(monkeypatch):
+    import src.bot as bot_module
+    from src.bang_notifications import BangNotifications
+
+    def load(**overrides):
+        kwargs = {
+            "official": bot_module.official_play_service,
+            "get_testing": bot_module.get_testing_enabled,
+            "resolve_channel": bot_module.resolve_channel,
+            "staff_alert": bot_module.send_staff_alert,
+        }
+        kwargs.update(overrides)
+        cog = BangNotifications(bot_module.bot, **kwargs)
+        existing = bot_module.bot.get_cog
+        monkeypatch.setattr(bot_module.bot, "get_cog", lambda name: cog if name == "BangNotifications" else existing(name))
+        return cog
+    return load
+
+
+@pytest.fixture
+def load_settlement(monkeypatch, load_bang):
     import src.bot as bot_module
     from src.play_settlement import PlaySettlement
 
     def load(**overrides):
+        load_bang()
         kwargs = {
             "official": bot_module.official_play_service,
             "features": bot_module.play_features_service,

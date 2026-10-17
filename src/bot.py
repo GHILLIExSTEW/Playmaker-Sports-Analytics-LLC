@@ -20,6 +20,7 @@ from src.model_projections import ModelProjections
 from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
 from src.capper_ballots import CapperBallots
+from src.bang_notifications import BangNotifications
 from src.config import CAPPER_CHANNEL_ID
 from src.play_settlement import PlaySettlement, build_suggestion_view as build_suggestion_view
 from src.play_presentation import (
@@ -113,6 +114,10 @@ class OfficialBot(commands.Bot):
         await self.add_cog(PlayPresentation(
             self, official=official_play_service, features=play_features_service,
             get_testing=get_testing_enabled, play_post_target=play_post_target,
+            resolve_channel=resolve_channel, staff_alert=send_staff_alert,
+        ))
+        await self.add_cog(BangNotifications(
+            self, official=official_play_service, get_testing=get_testing_enabled,
             resolve_channel=resolve_channel, staff_alert=send_staff_alert,
         ))
         await self.add_cog(PlaySubmission(
@@ -421,8 +426,11 @@ def can_manage_plays(user, guild: discord.Guild | None) -> bool:
     ))
 
 
-async def send_bang_notifications(source: discord.Message, play_id: int) -> None:
-    await get_play_presentation().send_bang_notifications(source, play_id)
+async def send_bang_notifications(source: discord.Message | None, play_id: int) -> None:
+    cog = bot.get_cog("BangNotifications")
+    if not isinstance(cog, BangNotifications):
+        raise RuntimeError("BANG notifications are not loaded.")
+    await cog.send(source, play_id)
 
 STAFF_ALERT_INTERVAL = timedelta(minutes=10)
 staff_alert_sent: dict[str, datetime] = {}

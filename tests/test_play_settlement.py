@@ -119,23 +119,26 @@ def test_menu_rechecks_requester_and_current_role(load_settlement):
 
 
 @pytest.mark.parametrize("status", ["open", "regraded", "win"])
-def test_picker_settlement_checks_current_status_and_updates_card(load_settlement, status):
+@pytest.mark.parametrize("result", ["win", "loss", "partial", "void"])
+def test_picker_settlement_checks_current_status_and_updates_card(load_settlement, status, result):
     cog = make_cog(load_settlement)
     cog.official._fetch_play.return_value = {"id": 7, "status": status, "message_id": "500"}
-    cog.official.settle_play.return_value = {"result": "partial"}
+    cog.official.settle_play.return_value = {"result": result}
     click = request()
 
     async def settle():
-        await SettleResultView(cog, 42, {"id": 7}, 0).settle(click, "partial")
+        await SettleResultView(cog, 42, {"id": 7}, 0).settle(click, result)
     asyncio.run(settle())
     if status == "win":
         cog.official.settle_play.assert_not_called()
         cog.update_message.assert_not_awaited()
+        cog.bang_notifications.assert_not_awaited()
         assert "already settled" in click.edit_original_response.call_args.kwargs["content"]
     else:
-        cog.official.settle_play.assert_called_once_with(7, "partial")
+        cog.official.settle_play.assert_called_once_with(7, result)
         cog.fetch_message.assert_awaited_once_with(None, 500)
-        cog.update_message.assert_awaited_once_with(cog.fetch_message.return_value, 7, "partial")
+        cog.update_message.assert_awaited_once_with(cog.fetch_message.return_value, 7, result)
+        cog.bang_notifications.assert_awaited_once_with(cog.fetch_message.return_value, 7)
 
 
 def test_reopen_refreshes_card_and_reports_previous_result(load_settlement):
@@ -148,6 +151,7 @@ def test_reopen_refreshes_card_and_reports_previous_result(load_settlement):
     asyncio.run(reopen())
     cog.official.unsettle_play.assert_called_once_with(7)
     cog.refresh_card.assert_awaited_once_with(None, 7)
+    cog.bang_notifications.assert_awaited_once_with(None, 7)
     assert "LOSS" in click.edit_original_response.call_args.kwargs["content"]
 
 
@@ -160,6 +164,7 @@ def test_reopen_failure_never_refreshes_or_claims_success(load_settlement):
         await UnsettleConfirmView(cog, 42, {"id": 7}, 0).confirm.callback(click)
     asyncio.run(reopen())
     cog.refresh_card.assert_not_awaited()
+    cog.bang_notifications.assert_not_awaited()
     assert click.edit_original_response.call_args.kwargs["content"] == "Play 7 is not settled."
 
 
@@ -179,6 +184,7 @@ def test_regrade_validates_inputs_rechecks_role_and_refreshes_card(load_settleme
     asyncio.run(regrade())
     cog.official.regrade_play.assert_called_once_with(7, 2, -110, "Reason")
     cog.refresh_card.assert_awaited_once_with(None, 7)
+    cog.bang_notifications.assert_awaited_once_with(None, 7)
 
 
 def test_regrade_database_failure_is_explicit(load_settlement):
@@ -266,14 +272,16 @@ def test_suggestion_authority_and_current_status_are_checked(load_settlement):
     cog.official.settle_play.assert_not_called()
 
 
-def test_suggestion_confirmation_updates_source_card(load_settlement):
+@pytest.mark.parametrize("result", ["win", "loss", "void", "partial"])
+def test_suggestion_confirmation_updates_source_card(load_settlement, result):
     cog = make_cog(load_settlement)
     cog.official._fetch_play.return_value = {"status": "regraded", "message_id": "500"}
     click = request()
-    asyncio.run(cog.handle_suggestion_click(click, 7, "win"))
-    cog.official.settle_play.assert_called_once_with(7, "win")
-    cog.update_message.assert_awaited_once_with(cog.fetch_message.return_value, 7, "win")
-    assert "Settled as WIN" in click.edit_original_response.call_args.kwargs["embed"].footer.text
+    asyncio.run(cog.handle_suggestion_click(click, 7, result))
+    cog.official.settle_play.assert_called_once_with(7, result)
+    cog.update_message.assert_awaited_once_with(cog.fetch_message.return_value, 7, result)
+    cog.bang_notifications.assert_awaited_once_with(cog.fetch_message.return_value, 7)
+    assert f"Settled as {result.upper()}" in click.edit_original_response.call_args.kwargs["embed"].footer.text
 
 
 def test_suggestion_dismissal_does_not_settle(load_settlement):
@@ -328,6 +336,37 @@ def test_reaction_outside_configured_channels_is_ignored(load_settlement):
     )
     asyncio.run(cog.handle_reaction(payload))
     cog.official.get_play_for_message.assert_not_called()
+
+
+@pytest.mark.parametrize("emoji,result", [("✅", "win"), ("❌", "loss"), ("🅿️", "void"), ("🌓", "partial")])
+def test_live_reactions_synchronize_bang_after_authorized_settlement(load_settlement, emoji, result):
+    message = SimpleNamespace(id=500)
+    channel = SimpleNamespace(guild=SimpleNamespace(id=123), fetch_message=AsyncMock(return_value=message))
+    cog = make_cog(
+        load_settlement, channel_settings=lambda: [("official", 101)],
+        user_can_settle=Mock(return_value=True),
+    )
+    cog.bot = Mock(user=SimpleNamespace(id=999), get_channel=Mock(return_value=channel))
+    cog.official.get_play_for_message.return_value = {
+        "id": 7, "status": "open", "discord_user_id": "42", "tracking_scope": "official",
+    }
+    payload = SimpleNamespace(user_id=42, member=SimpleNamespace(id=42, bot=False), emoji=emoji, channel_id=101, message_id=500)
+    asyncio.run(cog.handle_reaction(payload))
+    cog.official.settle_play.assert_called_once_with(7, result)
+    cog.update_message.assert_awaited_once_with(message, 7, result)
+    cog.bang_notifications.assert_awaited_once_with(message, 7)
+    cog.staff_alert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("bot_user,authorized", [(True, True), (False, False)])
+def test_unauthorized_and_bot_reactions_never_settle_or_notify(load_settlement, bot_user, authorized):
+    cog = make_cog(load_settlement, channel_settings=lambda: [("official", 101)], user_can_settle=Mock(return_value=authorized))
+    cog.bot = Mock(user=SimpleNamespace(id=999), get_channel=Mock(return_value=SimpleNamespace(guild=None)))
+    cog.official.get_play_for_message.return_value = {"id": 7, "status": "open", "discord_user_id": "42"}
+    payload = SimpleNamespace(user_id=43, member=SimpleNamespace(id=43, bot=bot_user), emoji="✅", channel_id=101, message_id=500)
+    asyncio.run(cog.handle_reaction(payload))
+    cog.official.settle_play.assert_not_called()
+    cog.bang_notifications.assert_not_awaited()
 
 
 def test_confirmation_uses_loaded_settlement_view(load_settlement, monkeypatch):

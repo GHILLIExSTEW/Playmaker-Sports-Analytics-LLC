@@ -7,12 +7,12 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from src.config import GUILD_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID, TEST_CHANNEL_ID, WINNING_SLIPS_CHANNEL_ID
+from src.config import HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID
 from src.play_settlement import SETTLEABLE_STATUSES
-from src.services import bang_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_features_service import PlayFeaturesService
 from src.services.play_service import PlayService
+from src.services.play_card_service import download_artwork, play_card_service
 
 logger = logging.getLogger("official_play_bot")
 
@@ -29,6 +29,17 @@ def build_play_embed(payload: dict) -> discord.Embed:
     return embed
 
 
+def play_image_url(message: discord.Message) -> str | None:
+    image_url = next((embed.image.url for embed in message.embeds if embed.image and embed.image.url), None)
+    if image_url:
+        return image_url
+    image = next(
+        (item for item in getattr(message, "attachments", []) if (item.content_type or "").startswith("image/")),
+        None,
+    )
+    return f"attachment://{image.filename}" if image is not None else None
+
+
 def build_settled_play_embed(message: discord.Message, play_id: int, result: str) -> discord.Embed:
     embed = discord.Embed.from_dict(message.embeds[0].to_dict()) if message.embeds else discord.Embed(description=f"Bet result: **{result.upper()}**")
     for index in reversed(range(len(embed.fields))):
@@ -43,6 +54,8 @@ def build_settled_play_embed(message: discord.Message, play_id: int, result: str
     }
     embed.title = f"Play #{play_id} • {result.title()}"
     embed.color = colors.get(result, discord.Color.blurple())
+    if image_url := play_image_url(message):
+        embed.set_image(url=image_url)
     return embed
 
 
@@ -115,14 +128,39 @@ class PlayPresentation(commands.Cog):
                 ),
                 embed=embed,
             )
+        if payload.get("tracking_scope") == "official":
+            file = await play_card_service.file(
+                {**payload, "id": payload["play_id"], "status": "open"}, interaction.guild,
+                slip=await asyncio.to_thread(download_artwork, payload["image_url"]) if payload.get("image_url") else None,
+                legs=payload.get("leg_records"),
+            )
+            try:
+                embed.clear_fields()
+                embed.description = None
+                embed.set_image(url=f"attachment://{file.filename}")
+                return await channel.send(embed=embed, file=file)
+            finally:
+                file.close()
         return await channel.send(embed=embed)
 
     async def update_play_message(self, message: discord.Message | None, play_id: int, result: str) -> None:
         if message is None:
             return
         try:
-            await message.edit(embed=build_settled_play_embed(message, play_id, result))
-        except discord.HTTPException:
+            play = await asyncio.to_thread(self.official._fetch_play, play_id)
+            embed = build_settled_play_embed(message, play_id, result)
+            if play.get("tracking_scope") == "official":
+                file = await play_card_service.file(play, message.guild, source=message)
+                try:
+                    embed.clear_fields()
+                    embed.description = None
+                    embed.set_image(url=f"attachment://{file.filename}")
+                    await message.edit(embed=embed, attachments=[file])
+                finally:
+                    file.close()
+            else:
+                await message.edit(embed=embed)
+        except Exception:
             logger.warning("play_card_edit_failed play=%s message=%s", play_id, message.id, exc_info=True)
             await self.staff_alert(f"play_card:{play_id}", f"Play #{play_id} is recorded as {result}, but its card could not be updated.")
 
@@ -144,7 +182,18 @@ class PlayPresentation(commands.Cog):
             message = await self.fetch_guild_message(guild, int(play["message_id"]))
             if message is None or self.bot.user is None or message.author.id != self.bot.user.id:
                 return
-            await message.edit(embed=build_play_card_embed(message, play))
+            embed = build_play_card_embed(message, play)
+            if play.get("tracking_scope") == "official":
+                file = await play_card_service.file(play, message.guild, source=message)
+                try:
+                    embed.clear_fields()
+                    embed.description = None
+                    embed.set_image(url=f"attachment://{file.filename}")
+                    await message.edit(embed=embed, attachments=[file])
+                finally:
+                    file.close()
+            else:
+                await message.edit(embed=embed)
         except Exception:
             logger.warning("play_card_refresh_failed play=%s", play_id, exc_info=True)
             await self.staff_alert(f"play_card:{play_id}", f"Could not refresh the card for Play #{play_id}. Check bot logs; its saved record may already be updated.")
@@ -165,7 +214,16 @@ class PlayPresentation(commands.Cog):
                 icon_url=author.display_avatar.url,
             )
             kwargs = {}
-            if image is not None:
+            if payload.get("tracking_scope") == "official":
+                file = await play_card_service.file(
+                    {**payload, "id": payload["play_id"], "status": "open"}, channel.guild,
+                    slip=await image.read() if image is not None else None, legs=payload.get("leg_records"),
+                )
+                embed.clear_fields()
+                embed.description = None
+                embed.set_image(url=f"attachment://{file.filename}")
+                kwargs["file"] = file
+            elif image is not None:
                 # Re-upload before deleting the source attachment.
                 file = await image.to_file()
                 embed.set_image(url=f"attachment://{file.filename}")
@@ -248,58 +306,3 @@ class PlayPresentation(commands.Cog):
                     await interaction.response.send_message("Something went wrong. Please try again.", ephemeral=True)
             except discord.HTTPException:
                 logger.warning("play_feature_error_response_failed user=%s", interaction.user.id, exc_info=True)
-
-    async def send_bang_notifications(self, source: discord.Message, play_id: int) -> None:
-        if source.guild is None or source.guild.id != GUILD_ID:
-            return
-        targets = (
-            [("TEST_CHANNEL_ID", TEST_CHANNEL_ID, None)]
-            if self.get_testing() else [
-                ("WINNING_SLIPS_CHANNEL_ID", WINNING_SLIPS_CHANNEL_ID, HIGHROLLER_ROLE_ID),
-            ]
-        )
-        image = next((attachment for attachment in source.attachments if (attachment.content_type or "").startswith("image/")), None)
-        image_url = next((embed.image.url for embed in source.embeds if embed.image and embed.image.url), None)
-        if image is None and image_url is None:
-            logger.warning("bang_slip_missing play=%s message=%s", play_id, source.id)
-            await self.staff_alert(f"bang_image:{play_id}", f"BANG for Play #{play_id} has no slip image. Text/link only.")
-        for name, channel_id, role_id in targets:
-            file = None
-            try:
-                channel = await self.resolve_channel(channel_id, name, required=True)
-                if channel is None:
-                    raise RuntimeError(f"{name} is unavailable.")
-                embed = discord.Embed(title=f"💰 BANG! 💸 Play #{play_id} won 🤑", color=discord.Color.green())
-                embed.set_footer(text="💵 Playmaker Picks • Official play WIN ✅")
-                embed.description = f"[📕│𝑽𝑰𝑷-𝑷𝑰𝑪𝑲𝑺]({source.jump_url})"
-                if source.embeds and source.embeds[0].author.name:
-                    embed.set_author(name=source.embeds[0].author.name, icon_url=source.embeds[0].author.icon_url)
-                files = {}
-                if image is not None:
-                    file = await image.to_file()
-                    files["file"] = file
-                    embed.set_image(url=f"attachment://{file.filename}")
-                elif image_url:
-                    embed.set_image(url=image_url)
-                else:
-                    embed.description += "\nNo slip image is available for this play."
-                if not await asyncio.to_thread(bang_service.claim, play_id, channel.id):
-                    continue
-                sent = await channel.send(
-                    content=f"## 💰 BANG! 💸 🤑\n<@&{role_id}>" if role_id else "## 💰 BANG! 💸 🤑",
-                    embed=embed, **files,
-                    allowed_mentions=discord.AllowedMentions(
-                        roles=[discord.Object(id=role_id)] if role_id else False, users=False, everyone=False,
-                    ),
-                )
-                await asyncio.to_thread(bang_service.complete, play_id, channel.id, sent.id)
-            except Exception:
-                logger.exception("bang_notification_failed play=%s channel=%s", play_id, channel_id)
-                await self.staff_alert(
-                    f"bang:{play_id}:{channel_id}",
-                    f"BANG delivery/tracking failed for Play #{play_id} in {name}. "
-                    "Inspect logs, the destination and play_bang_notifications before retrying; a claim may remain.",
-                )
-            finally:
-                if file is not None:
-                    file.close()

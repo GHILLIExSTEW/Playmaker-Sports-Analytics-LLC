@@ -3,139 +3,391 @@ from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import src.bot as bot_module
-import src.play_presentation as presentation_module
+import discord
 import pytest
+
+import src.bang_notifications as module
+import src.bot as bot_module
+from src.bang_notifications import BangNotifications
 from src.services import bang_service
 
+pytestmark = pytest.mark.usefixtures("mock_play_cards")
 
-def source(image=True):
-    embed = bot_module.discord.Embed()
-    embed.set_author(name="Capper")
+@pytest.fixture
+def env(monkeypatch):
+    for name, value in {
+        "GUILD_ID": 123, "OFFICIAL_CHANNEL_ID": 111, "WINNING_SLIPS_CHANNEL_ID": 101,
+        "TEST_CHANNEL_ID": 303, "HIGHROLLER_ROLE_ID": 789,
+    }.items():
+        monkeypatch.setattr(module, name, value)
+    role = SimpleNamespace(mentionable=True, is_default=lambda: False)
+    guild = SimpleNamespace(id=123, me=object(), icon=Mock(), get_role=Mock(return_value=role))
+    permissions = SimpleNamespace(**dict.fromkeys(
+        ("view_channel", "read_message_history", "send_messages", "embed_links", "attach_files", "mention_everyone"), True,
+    ))
+    channels, messages = {}, {}
+    author = SimpleNamespace(id=999, display_name="Playmaker Picks", display_avatar=SimpleNamespace(url="https://cdn.example/bot.png"))
+    for channel_id in (101, 111, 202, 303):
+        channel = SimpleNamespace(id=channel_id, guild=guild, permissions_for=Mock(return_value=permissions))
+
+        async def send(channel_id=channel_id, **kwargs):
+            message = SimpleNamespace(id=900 + channel_id, author=author, embeds=[kwargs["embed"]])
+
+            async def edit(**changes):
+                message.embeds = [changes["embed"]]
+
+            message.edit = AsyncMock(side_effect=edit)
+            messages[(channel_id, message.id)] = message
+            return message
+
+        async def fetch(message_id, channel_id=channel_id):
+            return messages[(channel_id, message_id)]
+
+        channel.send, channel.fetch_message = AsyncMock(side_effect=send), AsyncMock(side_effect=fetch)
+        channels[channel_id] = channel
+    source_embed = discord.Embed()
+    source_embed.set_author(name="Personal Capper")
     attachment = SimpleNamespace(
         content_type="image/png",
-        to_file=AsyncMock(side_effect=lambda: bot_module.discord.File(BytesIO(b"slip"), filename="slip.png")),
+        to_file=AsyncMock(side_effect=lambda: discord.File(BytesIO(b"slip"), filename="slip.png")),
     )
+    source = SimpleNamespace(
+        id=500, guild=guild, attachments=[attachment], embeds=[source_embed],
+        jump_url="https://discord.com/channels/123/111/500",
+    )
+    messages[(111, 500)] = source
+    messages[(303, 500)] = source
+    play = {
+        "id": 7, "message_id": "500", "status": "win", "tracking_scope": "official",
+        "units": 2, "odds": 109, "play_text": "Three-way parlay",
+    }
+    records = {}
+
+    def claim(play_id, channel_id, is_test):
+        if channel_id in records:
+            return None
+        records[channel_id] = {
+            "play_id": play_id, "channel_id": str(channel_id), "attempt_id": "attempt-1",
+            "is_test": is_test, "state": "claimed", "message_id": None, "displayed_status": None,
+            "updated_at": "2026-10-16T23:00:00Z", "last_error": None,
+        }
+        return "attempt-1"
+
+    def complete(play_id, channel_id, attempt_id, message_id, status):
+        records[channel_id].update(state="delivered", message_id=str(message_id), displayed_status=status)
+
+    def fail(play_id, channel_id, attempt_id, error, uncertain):
+        if records[channel_id]["state"] == "claimed":
+            records[channel_id].update(state="uncertain" if uncertain else "failed", last_error=error)
+
+    def recover(play_id, channel_id, attempt_id, actor_id, message_id):
+        row = records[channel_id]
+        if row["message_id"]:
+            raise RuntimeError("A delivered message is already tracked.")
+        row.update(attempt_id="attempt-2", message_id=str(message_id) if message_id else None,
+                   state="delivered" if message_id else "claimed", displayed_status=None)
+        return "attempt-2"
+
+    for name, function in {
+        "claim": claim, "complete": complete, "fail": fail, "recover": recover,
+        "deliveries": lambda play_id: list(records.values()), "stale": lambda is_test, test_channel_id: [],
+        "pending": lambda: [], "finish_event": lambda play_id, revision: None,
+    }.items():
+        monkeypatch.setattr(bang_service, name, Mock(side_effect=function))
+    bot = Mock(user=author, get_guild=Mock(return_value=guild))
+    official = Mock(_fetch_play=Mock(side_effect=lambda play_id: dict(play)))
+    resolve = AsyncMock(side_effect=lambda channel_id, *args, **kwargs: channels[channel_id])
+    cog = BangNotifications(bot, official=official, get_testing=Mock(return_value=False),
+                            resolve_channel=resolve, staff_alert=AsyncMock())
     return SimpleNamespace(
-        id=500, guild=SimpleNamespace(id=bot_module.GUILD_ID), attachments=[attachment] if image else [],
-        embeds=[embed], jump_url="https://discord.com/channels/1/2/500",
+        cog=cog, play=play, source=source, guild=guild, channels=channels, permissions=permissions,
+        records=records, messages=messages, role=role, author=author,
     )
 
 
-def setup(monkeypatch):
-    monkeypatch.setattr(bot_module, "testing_enabled", False)
-    channels = {101: SimpleNamespace(id=101, send=AsyncMock(return_value=SimpleNamespace(id=900))),
-                202: SimpleNamespace(id=202, send=AsyncMock(return_value=SimpleNamespace(id=901)))}
-    monkeypatch.setattr(presentation_module, "WINNING_SLIPS_CHANNEL_ID", 101)
-    monkeypatch.setattr(bot_module, "resolve_channel", AsyncMock(side_effect=lambda channel_id, *args, **kwargs: channels[channel_id]))
-    claims = set()
-
-    def claim(play_id, channel_id):
-        key = play_id, channel_id
-        if key in claims:
-            return False
-        claims.add(key)
-        return True
-
-    monkeypatch.setattr(bang_service, "claim", claim)
-    complete = Mock()
-    monkeypatch.setattr(bang_service, "complete", complete)
-    alert = AsyncMock()
-    monkeypatch.setattr(bot_module, "send_staff_alert", alert)
-    return channels, complete, alert
+def click(env, manager=True, guild=None):
+    return SimpleNamespace(
+        guild=env.guild if guild is None else guild, guild_id=123,
+        user=SimpleNamespace(id=42, bot=False, roles=[], guild_permissions=SimpleNamespace(manage_guild=manager)),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
 
 
-def test_bang_uploads_slip_to_winning_slips_with_highroller_mention(monkeypatch, load_presentation):
-    channels, complete, _ = setup(monkeypatch)
-    message = source()
-    load_presentation()
-    monkeypatch.setattr(presentation_module, "WINNING_SLIPS_CHANNEL_ID", 101)
-    asyncio.run(bot_module.send_bang_notifications(message, 7))
-    kwargs = channels[101].send.call_args.kwargs
-    assert kwargs["content"] == f"## 💰 BANG! 💸 🤑\n<@&{bot_module.HIGHROLLER_ROLE_ID}>"
-    assert "💰 BANG!" in kwargs["embed"].title
-    assert "Official play WIN" in kwargs["embed"].footer.text
-    assert kwargs["embed"].image.url == "attachment://slip.png"
-    assert kwargs["file"].filename == "slip.png"
-    assert [role.id for role in kwargs["allowed_mentions"].roles] == [bot_module.HIGHROLLER_ROLE_ID]
-    assert not kwargs["allowed_mentions"].users and not kwargs["allowed_mentions"].everyone
-    assert kwargs["embed"].description == f"[📕│𝑽𝑰𝑷-𝑷𝑰𝑪𝑲𝑺]({message.jump_url})"
-    channels[202].send.assert_not_awaited()
-    bot_module.resolve_channel.assert_awaited_once_with(101, "WINNING_SLIPS_CHANNEL_ID", required=True)
-    message.attachments[0].to_file.assert_awaited_once()
-    complete.assert_called_once_with(7, 101, 900)
-    asyncio.run(bot_module.send_bang_notifications(message, 7))
-    channels[101].send.assert_awaited_once()
-    channels[202].send.assert_not_awaited()
+def test_bang_branding_image_profit_and_highroller_only_once(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    sent = env.channels[101].send.call_args.kwargs
+    assert sent["content"] == "## 💰 BANG! 💸 🤑\n<@&789>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [789], "parse": []}
+    assert sent["allowed_mentions"].replied_user is False
+    assert sent["embed"].author.name == "Playmaker Picks"
+    assert sent["embed"].author.icon_url == env.author.display_avatar.url
+    assert "Official play WIN" in sent["embed"].footer.text
+    assert sent["embed"].description == f"[Official Playmaker Picks]({env.source.jump_url})"
+    assert sent["embed"].fields == []
+    assert sent["embed"].image.url == "attachment://playmaker-card-7.png"
+    assert sent["file"].filename == "playmaker-card-7.png"
+    bang_service.complete.assert_called_once_with(7, 101, "attempt-1", 1001, "win")
+    asyncio.run(env.cog.send(env.source, 7))
+    env.channels[101].send.assert_awaited_once()
+    env.channels[202].send.assert_not_awaited()
+    env.cog.staff_alert.assert_not_awaited()
 
 
-def test_bang_preserves_embed_only_image_and_missing_image_reports_explicitly(monkeypatch, load_presentation):
-    channels, _, alert = setup(monkeypatch)
-    message = source(False)
-    load_presentation()
-    message.embeds[0].set_image(url="https://cdn.example/slip.png")
-    asyncio.run(bot_module.send_bang_notifications(message, 7))
-    assert channels[101].send.call_args.kwargs["embed"].image.url == "https://cdn.example/slip.png"
-    alert.assert_not_awaited()
-    asyncio.run(bot_module.send_bang_notifications(source(False), 8))
-    assert "No slip image" in channels[101].send.call_args.kwargs["embed"].description
-    alert.assert_awaited_once()
+@pytest.mark.parametrize("odds,profit", [(-200, "+1u"), (150, "+3u"), (109, "+2.18u")])
+def test_profit_uses_repository_settlement_math(env, odds, profit, mock_play_cards):
+    env.play["odds"] = odds
+    asyncio.run(env.cog.send(env.source, 7))
+    card_play = mock_play_cards.call_args.args[0]
+    assert module.SettlementService.tally_for_result(card_play["status"], card_play["units"], card_play["odds"]) == float(profit.removesuffix("u"))
 
 
-def test_winning_slips_destination_failure_does_not_fall_back_to_free_chat(monkeypatch, load_presentation):
-    channels, complete, alert = setup(monkeypatch)
-    channels[101].send.side_effect = RuntimeError("Unavailable")
-    load_presentation()
-    asyncio.run(bot_module.send_bang_notifications(source(), 7))
-    channels[202].send.assert_not_awaited()
-    complete.assert_not_called()
-    alert.assert_awaited_once()
+@pytest.mark.parametrize("scope,status", [("capper", "win"), ("test", "win"), ("official", "open"), ("official", "loss")])
+def test_non_official_or_non_winning_play_does_not_create_bang(env, scope, status):
+    env.play.update(tracking_scope=scope, status=status)
+    asyncio.run(env.cog.send(env.source, 7))
+    bang_service.claim.assert_not_called()
+    env.channels[101].send.assert_not_awaited()
 
 
-def test_testing_does_not_ping_or_send_to_live_channels(monkeypatch, load_presentation):
-    _, _, _ = setup(monkeypatch)
-    monkeypatch.setattr(bot_module, "testing_enabled", True)
-    monkeypatch.setattr(presentation_module, "TEST_CHANNEL_ID", 303)
-    channel = SimpleNamespace(id=303, send=AsyncMock(return_value=SimpleNamespace(id=999)))
-    resolve = AsyncMock(return_value=channel)
-    monkeypatch.setattr(bot_module, "resolve_channel", resolve)
-    load_presentation()
-    asyncio.run(bot_module.send_bang_notifications(source(), 7))
-    resolve.assert_awaited_once_with(303, "TEST_CHANNEL_ID", required=True)
-    assert channel.send.call_args.kwargs["allowed_mentions"].roles is False
+def test_embed_only_image_and_missing_image_are_passed_to_card_renderer(env, mock_play_cards):
+    env.source.attachments = []
+    env.source.embeds[0].set_image(url="https://cdn.example/slip.png")
+    asyncio.run(env.cog.send(env.source, 7))
+    assert mock_play_cards.call_args.kwargs["source"] is env.source
+    assert env.channels[101].send.call_args.kwargs["embed"].image.url == "attachment://playmaker-card-7.png"
+    env.cog.staff_alert.assert_not_awaited()
+    env.records.clear()
+    env.source.embeds = []
+    asyncio.run(env.cog.send(env.source, 7))
+    assert mock_play_cards.call_args.kwargs["source"].embeds == []
+    env.cog.staff_alert.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    ("tracking_scope", "bang_expected"),
-    [("official", True), ("capper", False)],
-)
-def test_reaction_requires_settlement_authority_and_only_official_win_posts_bang(
-    monkeypatch, load_settlement, tracking_scope, bang_expected,
-):
-    setup(monkeypatch)
-    play = {"id": 7, "discord_user_id": "42", "status": "open", "tracking_scope": tracking_scope}
-    monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lambda message_id: play)
-    settle = Mock()
-    monkeypatch.setattr(bot_module.official_play_service, "settle_play", settle)
-    monkeypatch.setattr(type(bot_module.bot), "user", property(lambda self: SimpleNamespace(id=999)))
-    monkeypatch.setattr(bot_module, "settlement_channel_settings", lambda: [("test", 101)])
-    message = source()
-    channel = SimpleNamespace(guild=message.guild, fetch_message=AsyncMock(return_value=message))
-    monkeypatch.setattr(bot_module.bot, "get_channel", lambda channel_id: channel)
-    monkeypatch.setattr(bot_module, "user_can_settle", lambda user, owner, guild: user.id == 42)
-    monkeypatch.setattr(bot_module, "update_play_message", AsyncMock())
-    bang = AsyncMock()
-    monkeypatch.setattr(bot_module, "send_bang_notifications", bang)
-    load_settlement()
-    for user_id, emoji in [(43, "✅"), (42, "❌"), (42, "✅")]:
-        payload = SimpleNamespace(user_id=user_id, emoji=emoji, channel_id=101, message_id=500,
-                                  member=SimpleNamespace(id=user_id, bot=False))
-        asyncio.run(bot_module.on_raw_reaction_add(payload))
-    assert [call.args for call in settle.call_args_list] == [(7, "loss"), (7, "win")]
-    if bang_expected:
-        bang.assert_awaited_once_with(message, 7)
+@pytest.mark.parametrize("status", ["open", "regraded", "loss", "void", "partial"])
+def test_corrections_update_existing_message_without_ping_and_rewin_does_not_duplicate(env, status):
+    asyncio.run(env.cog.send(env.source, 7))
+    message = env.messages[(101, 1001)]
+    env.play["status"] = status
+    asyncio.run(env.cog.send(None, 7))
+    updated = message.edit.call_args.kwargs
+    assert "BANG CORRECTION" in updated["content"]
+    assert status.upper() in updated["embed"].title
+    assert "no longer valid" in updated["embed"].description
+    assert updated["embed"].image.url == "attachment://playmaker-card-7.png"
+    assert updated["allowed_mentions"].to_dict() == {"parse": []}
+    assert env.records[101]["displayed_status"] == status
+    env.play["status"] = "win"
+    asyncio.run(env.cog.send(None, 7))
+    assert "CORRECTION" not in message.edit.call_args.kwargs["content"]
+    assert env.records[101]["displayed_status"] == "win"
+    env.channels[101].send.assert_awaited_once()
+
+
+def test_previously_misclassified_capper_bang_is_corrected(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.play["tracking_scope"] = "capper"
+    asyncio.run(env.cog.send(None, 7))
+    assert "NOT AN OFFICIAL PLAY" in env.messages[(101, 1001)].edit.call_args.kwargs["embed"].title
+    env.channels[101].send.assert_awaited_once()
+
+
+def test_failed_correction_alerts_and_does_not_mark_updated_or_republish(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.messages[(101, 1001)].edit.side_effect = RuntimeError("Discord unavailable")
+    env.play["status"] = "loss"
+    asyncio.run(env.cog.send(None, 7))
+    assert env.records[101]["displayed_status"] == "win"
+    env.channels[101].send.assert_awaited_once()
+    env.cog.staff_alert.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", ["send", "complete"])
+def test_uncertain_delivery_is_never_automatically_retried(env, failure):
+    if failure == "send":
+        env.channels[101].send.side_effect = RuntimeError("Connection lost")
     else:
-        bang.assert_not_awaited()
+        bang_service.complete.side_effect = RuntimeError("Database unavailable")
+    asyncio.run(env.cog.send(env.source, 7))
+    assert env.records[101]["state"] == "uncertain"
+    asyncio.run(env.cog.send(env.source, 7))
+    env.channels[101].send.assert_awaited_once()
+    assert env.cog.staff_alert.await_count == 2
+
+
+def test_definitive_discord_rejection_is_recorded_as_failed(env):
+    env.channels[101].send.side_effect = discord.Forbidden(Mock(status=403, reason="Forbidden"), "no access")
+    asyncio.run(env.cog.send(env.source, 7))
+    assert env.records[101]["state"] == "failed"
+    env.channels[202].send.assert_not_awaited()
+
+
+def test_testing_never_pings_or_touches_live_delivery(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.cog.get_testing.return_value = True
+    env.play["status"] = "loss"
+    asyncio.run(env.cog.send(None, 7))
+    env.messages[(101, 1001)].edit.assert_not_awaited()
+    env.play["status"] = "win"
+    asyncio.run(env.cog.send(env.source, 7))
+    kwargs = env.channels[303].send.call_args.kwargs
+    assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
+    assert kwargs["allowed_mentions"].replied_user is False
+    assert "<@&" not in kwargs["content"]
+    assert env.records[303]["is_test"] is True
+    env.channels[101].send.assert_awaited_once()
+
+
+@pytest.mark.parametrize("guild", [None, SimpleNamespace(id=456)])
+def test_wrong_guild_does_not_claim(env, guild):
+    env.source.guild = guild
+    asyncio.run(env.cog.send(env.source, 7))
+    env.cog.official._fetch_play.assert_not_called()
+    bang_service.claim.assert_not_called()
+
+
+@pytest.mark.parametrize("permission", ["view_channel", "send_messages", "read_message_history", "embed_links", "attach_files"])
+def test_missing_permission_is_explicit_and_does_not_claim(env, permission):
+    setattr(env.permissions, permission, False)
+    asyncio.run(env.cog.send(env.source, 7))
+    bang_service.claim.assert_not_called()
+    assert permission in env.cog.staff_alert.call_args.args[1]
+
+
+@pytest.mark.parametrize("role_missing", [True, False])
+def test_invalid_role_configuration_prevents_unknown_or_unpingable_role(env, role_missing):
+    if role_missing:
+        env.guild.get_role.return_value = None
+    else:
+        env.role.mentionable = False
+        env.permissions.mention_everyone = False
+    asyncio.run(env.cog.send(env.source, 7))
+    bang_service.claim.assert_not_called()
+    assert "HIGHROLLER" in env.cog.staff_alert.call_args.args[1]
+
+
+def test_startup_checks_source_destination_role_and_database(env):
+    asyncio.run(env.cog.validate_configuration())
+    assert [call.args[1] for call in env.cog.resolve_channel.call_args_list] == ["OFFICIAL_CHANNEL_ID", "WINNING_SLIPS_CHANNEL_ID"]
+    bang_service.stale.assert_called_once_with(False, 303)
+    env.cog.staff_alert.assert_not_awaited()
+
+
+def test_startup_database_migration_failure_alerts(env):
+    bang_service.stale.side_effect = RuntimeError("Migration missing")
+    asyncio.run(env.cog.validate_configuration())
+    assert "Migration missing" in env.cog.staff_alert.call_args.args[1]
+
+
+def test_startup_missing_server_icon_alerts_staff(env):
+    env.guild.icon = None
+    asyncio.run(env.cog.validate_configuration())
+    assert "server icon" in env.cog.staff_alert.call_args.args[1]
+
+
+def test_background_scan_repairs_corrections_but_never_creates_new_notifications(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.play["status"] = "void"
+    bang_service.stale.side_effect = lambda is_test, test_channel_id: [{"play_id": 7}]
+    asyncio.run(env.cog.refresh_bangs.coro(env.cog))
+    assert env.records[101]["displayed_status"] == "void"
+    env.records.clear()
+    env.play["status"] = "win"
+    asyncio.run(env.cog.refresh_bangs.coro(env.cog))
+    env.channels[101].send.assert_awaited_once()
+
+
+def test_durable_event_scan_catches_script_settlements_and_acknowledges_revision(env):
+    bang_service.pending.side_effect = lambda: [{"play_id": 7, "revision": "revision-1"}]
+    asyncio.run(env.cog.refresh_bangs.coro(env.cog))
+    env.channels[101].send.assert_awaited_once()
+    bang_service.finish_event.assert_called_once_with(7, "revision-1")
+
+
+def test_event_failure_stays_pending_and_testing_mode_does_not_consume_live_events(env):
+    bang_service.pending.side_effect = lambda: [{"play_id": 7, "revision": "revision-1"}]
+    env.cog.official._fetch_play.side_effect = RuntimeError("Database unavailable")
+    asyncio.run(env.cog.refresh_bangs.coro(env.cog))
+    bang_service.finish_event.assert_not_called()
+    bang_service.pending.reset_mock()
+    env.cog.get_testing.return_value = True
+    asyncio.run(env.cog.refresh_bangs.coro(env.cog))
+    bang_service.pending.assert_not_called()
+    bang_service.finish_event.assert_not_called()
+
+
+def test_staff_status_reports_uncertain_delivery_and_how_to_recover(env):
+    bang_service.claim(7, 101, False)
+    env.records[101].update(state="uncertain", last_error="Connection lost")
+    request = click(env)
+    asyncio.run(BangNotifications.status_command.callback(env.cog, request, 7))
+    text = request.followup.send.call_args.args[0]
+    assert "uncertain" in text and "Connection lost" in text and "/bang_recover" in text
+    assert request.followup.send.call_args.kwargs["ephemeral"]
+
+
+@pytest.mark.parametrize("command,args", [("status_command", (7,)), ("retry_command", (7, True)), ("recover_command", (7, "1001"))])
+def test_recovery_commands_require_staff_authority(env, command, args):
+    request = click(env, manager=False)
+    asyncio.run(getattr(BangNotifications, command).callback(env.cog, request, *args))
+    request.response.send_message.assert_awaited_once()
+    bang_service.deliveries.assert_not_called()
+    bang_service.recover.assert_not_called()
+
+
+def test_retry_requires_explicit_confirmation(env):
+    request = click(env)
+    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, False))
+    bang_service.recover.assert_not_called()
+    env.channels[101].send.assert_not_awaited()
+    assert "No retry" in request.followup.send.call_args.args[0]
+
+
+def test_retry_refuses_already_delivered_message(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    request = click(env)
+    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, True))
+    env.channels[101].send.assert_awaited_once()
+    assert "already tracked" in request.followup.send.call_args.args[0]
+
+
+def test_staff_can_retry_checked_uncertain_delivery_with_rotated_token(env):
+    bang_service.claim(7, 101, False)
+    env.records[101]["state"] = "uncertain"
+    request = click(env)
+    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, True))
+    bang_service.recover.assert_called_once_with(7, 101, "attempt-1", 42, None)
+    assert env.records[101]["attempt_id"] == "attempt-2"
+    assert env.records[101]["state"] == "delivered"
+    env.channels[101].send.assert_awaited_once()
+
+
+def test_staff_links_existing_uncertain_bang_without_resending(env):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.records[101].update(state="uncertain", message_id=None, displayed_status=None)
+    env.play["status"] = "loss"
+    request = click(env)
+    asyncio.run(BangNotifications.recover_command.callback(env.cog, request, 7, "1001"))
+    bang_service.recover.assert_called_once_with(7, 101, "attempt-1", 42, 1001)
+    assert env.records[101]["displayed_status"] == "loss"
+    assert env.messages[(101, 1001)].edit.call_args.kwargs["allowed_mentions"].to_dict() == {"parse": []}
+    env.channels[101].send.assert_awaited_once()
+
+
+@pytest.mark.parametrize("bad_message", ["other_author", "other_play", "not_bang"])
+def test_recovery_rejects_unrelated_messages(env, bad_message):
+    asyncio.run(env.cog.send(env.source, 7))
+    env.records[101].update(state="uncertain", message_id=None, displayed_status=None)
+    message = env.messages[(101, 1001)]
+    if bad_message == "other_author":
+        message.author = SimpleNamespace(id=12345)
+    elif bad_message == "other_play":
+        message.embeds[0].title = "BANG Play #70 won"
+    else:
+        message.embeds[0].title = "Play #7 Open"
+    request = click(env)
+    asyncio.run(BangNotifications.recover_command.callback(env.cog, request, 7, "1001"))
+    bang_service.recover.assert_not_called()
 
 
 def test_claim_does_not_retry_uncertain_database_commit(monkeypatch):
@@ -143,15 +395,27 @@ def test_claim_does_not_retry_uncertain_database_commit(monkeypatch):
     client.rpc.return_value.execute.side_effect = RuntimeError("Connection lost")
     monkeypatch.setattr(bang_service.supabase_service, "_ensure_client", lambda: client)
     with pytest.raises(RuntimeError, match="Connection lost"):
-        bang_service.claim(7, 101)
+        bang_service.claim(7, 101, False)
     client.rpc.return_value.execute.assert_called_once()
 
 
-def test_other_bot_reactions_do_not_trigger_settlement_or_bang(monkeypatch, load_settlement):
-    monkeypatch.setattr(type(bot_module.bot), "user", property(lambda self: SimpleNamespace(id=999)))
-    lookup = Mock()
-    monkeypatch.setattr(bot_module.official_play_service, "get_play_for_message", lookup)
-    payload = SimpleNamespace(user_id=888, member=SimpleNamespace(bot=True))
-    load_settlement()
-    asyncio.run(bot_module.on_raw_reaction_add(payload))
-    lookup.assert_not_called()
+def test_recover_does_not_retry_uncertain_database_commit(monkeypatch):
+    client = Mock()
+    client.rpc.return_value.execute.side_effect = RuntimeError("Connection lost")
+    monkeypatch.setattr(bang_service.supabase_service, "_ensure_client", lambda: client)
+    with pytest.raises(RuntimeError, match="Connection lost"):
+        bang_service.recover(7, 101, "attempt", 42, None)
+    client.rpc.return_value.execute.assert_called_once()
+
+
+def test_bot_bridge_requires_loaded_bang_cog(monkeypatch):
+    monkeypatch.setattr(bot_module.bot, "get_cog", Mock(return_value=None))
+    with pytest.raises(RuntimeError, match="not loaded"):
+        asyncio.run(bot_module.send_bang_notifications(None, 7))
+
+
+def test_bot_bridge_delegates_to_bang_cog(env, monkeypatch):
+    monkeypatch.setattr(bot_module.bot, "get_cog", Mock(return_value=env.cog))
+    env.cog.send = AsyncMock()
+    asyncio.run(bot_module.send_bang_notifications(env.source, 7))
+    env.cog.send.assert_awaited_once_with(env.source, 7)

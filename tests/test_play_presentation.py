@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, Mock
 import discord
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_play_cards")
+
 import src.bot as bot_module
 import src.play_presentation as module
 from src.play_presentation import PlayPresentation, build_engagement_view
@@ -183,7 +185,7 @@ def test_publishing_official_play_does_not_add_rookie_mention(monkeypatch):
         display_name="Playmaker Picks Team",
         display_avatar=SimpleNamespace(url="https://example.com/bot.png"),
     )
-    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "tracking_scope": "official"}
     asyncio.run(presentation.publish_play_message(request, data, ("OFFICIAL_CHANNEL_ID", 303)))
     sent = presentation.resolve_channel.return_value.send.call_args.kwargs
@@ -301,7 +303,6 @@ def test_bot_bridges_delegate_to_loaded_owner(load_presentation):
     presentation.refresh_play_card = AsyncMock()
     presentation.repost_official_play = AsyncMock(return_value=message)
     presentation.announce_new_play = AsyncMock()
-    presentation.send_bang_notifications = AsyncMock()
 
     async def check():
         assert await bot_module.publish_play_message(user, payload(), ("OFFICIAL_CHANNEL_ID", 101)) is message
@@ -310,7 +311,6 @@ def test_bot_bridges_delegate_to_loaded_owner(load_presentation):
         await bot_module.refresh_play_card(guild, 7)
         assert await bot_module.repost_official_play(channel, 500, payload(), user) is message
         await bot_module.announce_new_play(payload(), "Ace", message, message)
-        await bot_module.send_bang_notifications(message, 7)
     asyncio.run(check())
     presentation.publish_play_message.assert_awaited_once_with(user, payload(), ("OFFICIAL_CHANNEL_ID", 101))
     presentation.update_play_message.assert_awaited_once_with(message, 7, "win")
@@ -318,18 +318,6 @@ def test_bot_bridges_delegate_to_loaded_owner(load_presentation):
     presentation.refresh_play_card.assert_awaited_once_with(guild, 7)
     presentation.repost_official_play.assert_awaited_once_with(channel, 500, payload(), user)
     presentation.announce_new_play.assert_awaited_once_with(payload(), "Ace", message, message)
-    presentation.send_bang_notifications.assert_awaited_once_with(message, 7)
-
-
-def test_bang_wrong_guild_does_not_claim_or_publish(monkeypatch):
-    presentation = cog()
-    monkeypatch.setattr(module, "GUILD_ID", 123)
-    claim = Mock()
-    monkeypatch.setattr(module.bang_service, "claim", claim)
-    for guild in [None, SimpleNamespace(id=456)]:
-        asyncio.run(presentation.send_bang_notifications(SimpleNamespace(guild=guild), 7))
-    claim.assert_not_called()
-    presentation.resolve_channel.assert_not_awaited()
 
 
 def test_missing_presentation_cog_is_explicit(monkeypatch):
