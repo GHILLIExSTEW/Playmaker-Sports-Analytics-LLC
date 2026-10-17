@@ -1,6 +1,8 @@
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from src import research_workspace as workspace
@@ -11,6 +13,7 @@ from src.services.api_budget_service import member_request_user
 def service(monkeypatch):
     monkeypatch.setattr(workspace, "API_SPORTS_BUDGET_ENABLED", True)
     db = Mock()
+    db._execute_once.side_effect = lambda operation: operation()
     db._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
     db.select.return_value.data = [{"game_id": "1"}]
     return workspace.ResearchRefreshService(database=db, api=Mock(), multi=Mock(), players=Mock())
@@ -104,3 +107,29 @@ def test_uncertain_claim_is_not_retried(service):
     with pytest.raises(TimeoutError):
         service.process_next()
     assert service.db._ensure_client.return_value.rpc.return_value.execute.call_count == 1
+
+
+def test_transport_failure_is_reported_then_successful_poll_reports_recovery():
+    service = Mock()
+    service.process_next.side_effect = [httpx.RemoteProtocolError("HTTP/2 disconnected"), False, False]
+    alert = AsyncMock()
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=alert, service=service)
+    asyncio.run(cog.refresh_requests.coro(cog))
+    assert cog.transport_failed is True
+    assert alert.await_args.args[0] == "research_refresh_transport"
+    assert "migration" not in alert.await_args.args[1]
+    asyncio.run(cog.refresh_requests.coro(cog))
+    assert cog.transport_failed is False
+    assert alert.await_args.args[0] == "research_refresh_recovered"
+    asyncio.run(cog.refresh_requests.coro(cog))
+    assert alert.await_count == 2
+    assert service.process_next.call_count == 3
+
+
+def test_nontransport_worker_error_remains_explicit():
+    service = Mock()
+    service.process_next.side_effect = RuntimeError("missing RPC")
+    alert = AsyncMock()
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=alert, service=service)
+    asyncio.run(cog.refresh_requests.coro(cog))
+    assert alert.await_args.args[0] == "research_refresh_worker"

@@ -26,6 +26,14 @@ class SupabaseService:
                     raise
                 self.client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+    def _execute_once(self, operation):
+        """Discard a failed transport without replaying a possibly committed operation."""
+        try:
+            return operation()
+        except httpx.TransportError:
+            self.client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            raise
+
     def select(self, table: str, columns: str = "*", filters: dict[str, Any] | None = None):
         def operation():
             query = self._ensure_client().table(table).select(columns)

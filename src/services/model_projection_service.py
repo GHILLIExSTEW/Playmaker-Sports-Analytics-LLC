@@ -157,7 +157,7 @@ class ModelProjectionService:
     def process_team_pull(self) -> bool:
         """Recalculate one saved pull using the same engine, without additional provider calls."""
         # A claim is not idempotent: a transport retry could claim a second job.
-        job = self._db().rpc("claim_capper_model_refresh").execute().data
+        job = supabase_service._execute_once(lambda: self._db().rpc("claim_capper_model_refresh").execute()).data
         if job is None:
             return False
         if not isinstance(job, dict) or job.get("competition") not in COMPETITIONS:

@@ -80,6 +80,12 @@ remain service-only. Jobs are completed only after projection writes finish;
 estimates no longer produced in the current model window are removed.
 The bot must have `API_SPORTS_KEY` configured (the existing model-cog enablement)
 and database service-role access.
+Queue claim transport failures discard the Supabase client without replaying
+the uncertain claim. The next scheduled poll uses a new connection. The older
+website research worker distinguishes transport errors from schema/application
+errors and reports connection recovery after a successful poll. A successful
+poll does not prove an uncertain claimed job completed; inspect its tracking
+state before retrying provider work. Full tracebacks remain in the bot journal.
 
 On the Proxmox bot VM/container, pull the latest repository and restart the bot.
 If using the supplied [systemd unit](scripts/discord-bot.service):

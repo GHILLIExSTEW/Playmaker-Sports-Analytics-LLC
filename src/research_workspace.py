@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from discord.ext import commands, tasks
 
 from src.config import API_SPORTS_BUDGET_ENABLED
@@ -97,7 +98,8 @@ class ResearchRefreshService:
 
     def process_next(self) -> bool:
         # Claim is intentionally not automatically retried after an uncertain commit.
-        rows = self.db._ensure_client().rpc("claim_research_refresh", {}).execute().data
+        rows = self.db._execute_once(
+            lambda: self.db._ensure_client().rpc("claim_research_refresh", {}).execute()).data
         if not rows:
             return False
         request = rows[0]
@@ -108,9 +110,9 @@ class ResearchRefreshService:
             logger.exception("research_refresh_failed request=%s", request["id"])
             result = str(exc)[:1000]
             state = "failed"
-        updated = self.db._ensure_client().table("research_refresh_requests").update({
+        updated = self.db._execute_once(lambda: self.db._ensure_client().table("research_refresh_requests").update({
             "state": state, "result": result, "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", request["id"]).eq("state", "running").execute().data
+        }).eq("id", request["id"]).eq("state", "running").execute()).data
         if not updated:
             raise RuntimeError("Research refresh tracking changed; inspect the request before retrying.")
         return True
@@ -121,6 +123,7 @@ class ResearchWorkspace(commands.Cog):
         self.bot = bot
         self.staff_alert = staff_alert
         self.service = service or ResearchRefreshService()
+        self.transport_failed = False
 
     async def cog_load(self):
         if self.bot.is_ready() and not self.refresh_requests.is_running():
@@ -138,9 +141,21 @@ class ResearchWorkspace(commands.Cog):
     async def refresh_requests(self):
         try:
             await asyncio.to_thread(self.service.process_next)
+        except httpx.TransportError:
+            self.transport_failed = True
+            logger.exception("research_refresh_transport_failed")
+            await self.staff_alert(
+                "research_refresh_transport",
+                "Website research worker lost its Supabase connection. Connection reset; polling resumes in 15 seconds. "
+                "The uncertain operation was not retried. Check logs for any job needing reconciliation.")
         except Exception:
             logger.exception("research_refresh_worker_failed")
             await self.staff_alert("research_refresh_worker", "Website research refresh worker failed. Check bot logs and the migration.")
+        else:
+            if self.transport_failed:
+                self.transport_failed = False
+                logger.info("research_refresh_connection_recovered")
+                await self.staff_alert("research_refresh_recovered", "Website research worker Supabase connection recovered; polling is working again.")
 
     @refresh_requests.before_loop
     async def before_refresh(self):
