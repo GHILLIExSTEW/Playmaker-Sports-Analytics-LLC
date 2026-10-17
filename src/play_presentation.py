@@ -91,6 +91,32 @@ class PlayPresentation(commands.Cog):
         self.bot, self.official, self.features = bot, official, features
         self.get_testing, self.play_post_target = get_testing, play_post_target
         self.resolve_channel, self.staff_alert = resolve_channel, staff_alert
+        self._capper_webhooks: dict[int, discord.Webhook] = {}
+        self._webhook_lock = asyncio.Lock()
+
+    async def capper_webhook(self, channel) -> discord.Webhook:
+        async with self._webhook_lock:
+            if channel.id in self._capper_webhooks:
+                return self._capper_webhooks[channel.id]
+            if self.bot.user is None:
+                raise RuntimeError("Bot identity is unavailable.")
+            hooks = await channel.webhooks()
+            hook = next((item for item in hooks if item.name == "Playmaker Capper Plays"
+                         and item.user is not None and item.user.id == self.bot.user.id
+                         and item.token), None)
+            if hook is None:
+                hook = await channel.create_webhook(name="Playmaker Capper Plays", reason="Capper play name/avatar attribution")
+            self._capper_webhooks[channel.id] = hook
+            return hook
+
+    async def edit_play_message(self, message, **kwargs) -> None:
+        if getattr(message, "webhook_id", None):
+            hook = await self.capper_webhook(message.channel)
+            if message.webhook_id != hook.id:
+                raise ValueError("Refusing to edit a message from an unrelated webhook.")
+            await hook.edit_message(message.id, **kwargs)
+        else:
+            await message.edit(**kwargs)
 
     async def publish_play_message(
         self, interaction: discord.Interaction, payload: dict,
@@ -134,7 +160,9 @@ class PlayPresentation(commands.Cog):
                 embed.description = None
                 embed.set_image(url=f"attachment://{file.filename}")
                 if payload["tracking_scope"] == "capper":
-                    return await channel.send(
+                    hook = await self.capper_webhook(channel)
+                    return await hook.send(
+                        username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
                         content=f"<@&{ROOKIE_ROLE_ID}>",
                         allowed_mentions=discord.AllowedMentions(
                             everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
@@ -161,11 +189,11 @@ class PlayPresentation(commands.Cog):
                     embed.clear_fields()
                     embed.description = None
                     embed.set_image(url=f"attachment://{file.filename}")
-                    await message.edit(embed=embed, attachments=[file])
+                    await self.edit_play_message(message, embed=embed, attachments=[file])
                 finally:
                     file.close()
             else:
-                await message.edit(embed=embed)
+                await self.edit_play_message(message, embed=embed)
         except Exception:
             logger.warning("play_card_edit_failed play=%s message=%s", play_id, message.id, exc_info=True)
             await self.staff_alert(f"play_card:{play_id}", f"Play #{play_id} is recorded as {result}, but its card could not be updated.")
@@ -186,8 +214,14 @@ class PlayPresentation(commands.Cog):
             if not play.get("message_id"):
                 return
             message = await self.fetch_guild_message(guild, int(play["message_id"]))
-            if message is None or self.bot.user is None or message.author.id != self.bot.user.id:
+            if message is None or self.bot.user is None:
                 return
+            if message.author.id != self.bot.user.id:
+                if play.get("tracking_scope") != "capper" or not getattr(message, "webhook_id", None):
+                    return
+                hook = await self.capper_webhook(message.channel)
+                if message.webhook_id != hook.id:
+                    raise ValueError("Tracked capper message belongs to an unrelated webhook.")
             embed = build_play_card_embed(message, play)
             if play.get("tracking_scope") in {"official", "capper"}:
                 file = await play_card_service.file(
@@ -198,11 +232,11 @@ class PlayPresentation(commands.Cog):
                     embed.clear_fields()
                     embed.description = None
                     embed.set_image(url=f"attachment://{file.filename}")
-                    await message.edit(embed=embed, attachments=[file])
+                    await self.edit_play_message(message, embed=embed, attachments=[file])
                 finally:
                     file.close()
             else:
-                await message.edit(embed=embed)
+                await self.edit_play_message(message, embed=embed)
         except Exception:
             logger.warning("play_card_refresh_failed play=%s", play_id, exc_info=True)
             await self.staff_alert(f"play_card:{play_id}", f"Could not refresh the card for Play #{play_id}. Check bot logs; its saved record may already be updated.")
@@ -237,7 +271,15 @@ class PlayPresentation(commands.Cog):
                 file = await image.to_file()
                 embed.set_image(url=f"attachment://{file.filename}")
                 kwargs["file"] = file
-            repost = await channel.send(embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs)
+            if payload.get("tracking_scope") == "capper":
+                hook = await self.capper_webhook(channel)
+                repost = await hook.send(
+                    username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs,
+                )
+            else:
+                repost = await channel.send(embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs)
         except Exception:
             logger.warning("official_repost_failed play=%s source=%s", payload.get("play_id"), source_message_id, exc_info=True)
             await self.staff_alert(
@@ -264,7 +306,7 @@ class PlayPresentation(commands.Cog):
         tracked = tracked or card
         try:
             if tracked.id == card.id:
-                await card.edit(view=view)
+                await self.edit_play_message(card, view=view)
             else:
                 await tracked.reply("Tailing this play? Tap below.", view=view, mention_author=False)
         except discord.HTTPException:

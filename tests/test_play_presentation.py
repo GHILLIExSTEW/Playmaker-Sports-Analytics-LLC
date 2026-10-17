@@ -13,12 +13,14 @@ from src.play_presentation import PlayPresentation, build_engagement_view
 
 
 def cog():
-    return PlayPresentation(
+    presentation = PlayPresentation(
         Mock(user=SimpleNamespace(id=999)), official=Mock(), features=Mock(),
         get_testing=Mock(return_value=False), play_post_target=Mock(return_value=("CONFIRMATION_CHANNEL_ID", 101)),
         resolve_channel=AsyncMock(return_value=SimpleNamespace(send=AsyncMock())),
         staff_alert=AsyncMock(),
     )
+    presentation.capper_webhook = AsyncMock(return_value=SimpleNamespace(id=777, send=AsyncMock(), edit_message=AsyncMock()))
+    return presentation
 
 
 def click(custom_id="pm:tail:7"):
@@ -155,11 +157,14 @@ def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play
     request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
-    sent = presentation.resolve_channel.return_value.send.call_args.kwargs
+    sent = presentation.capper_webhook.return_value.send.call_args.kwargs
     assert sent["content"] == "<@&456>"
     assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
     assert sent["embed"].author.name == "Ace"
+    assert sent["username"] == "Ace"
+    assert sent["avatar_url"] == request.user.display_avatar.url
+    assert sent["wait"] is True
     assert sent["embed"].image.url.startswith("attachment://playmaker-card-")
     assert sent["embed"].fields == []
     assert sent["embed"].description is None
@@ -179,7 +184,7 @@ def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypat
         "play_text": "Pick <@&789>",
     }
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
-    embed = presentation.resolve_channel.return_value.send.call_args.kwargs["embed"]
+    embed = presentation.capper_webhook.return_value.send.call_args.kwargs["embed"]
     assert embed.description is None
     assert embed.fields == []
     assert mock_play_cards.call_args.args[0]["play_text"] == "Pick"
@@ -249,7 +254,7 @@ def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_
     author = SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.repost_official_play(channel, 500, data, author))
-    sent = channel.send.call_args.kwargs
+    sent = presentation.capper_webhook.return_value.send.call_args.kwargs
     assert sent["embed"].author.name == "Ace"
     assert sent["embed"].fields == []
     assert sent["file"]
@@ -257,6 +262,50 @@ def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_
     assert mock_play_cards.call_args.kwargs["source"] is source
     assert mock_play_cards.call_args.args[0]["tracking_scope"] == "capper"
     source.delete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("operation", ["settle", "refresh"])
+def test_webhook_capper_cards_edit_through_owned_webhook(operation):
+    presentation = cog()
+    presentation.official._fetch_play.return_value = {
+        "id": 7, "message_id": "500", "tracking_scope": "capper", "status": "win", "units": 2, "odds": 100,
+    }
+    presentation.official.get_play_legs.return_value = []
+    message = SimpleNamespace(
+        id=500, webhook_id=777, channel=SimpleNamespace(id=303), guild=SimpleNamespace(id=123),
+        author=SimpleNamespace(id=777), embeds=[discord.Embed()], attachments=[], edit=AsyncMock(),
+    )
+    presentation.fetch_guild_message = AsyncMock(return_value=message)
+    if operation == "settle":
+        asyncio.run(presentation.update_play_message(message, 7, "win"))
+    else:
+        asyncio.run(presentation.refresh_play_card(message.guild, 7))
+    presentation.capper_webhook.return_value.edit_message.assert_awaited_once()
+    message.edit.assert_not_awaited()
+    presentation.staff_alert.assert_not_awaited()
+
+
+def test_unrelated_webhook_cannot_be_edited():
+    presentation = cog()
+    message = SimpleNamespace(id=500, webhook_id=888, channel=SimpleNamespace(id=303), edit=AsyncMock())
+    with pytest.raises(ValueError, match="unrelated webhook"):
+        asyncio.run(presentation.edit_play_message(message, embed=discord.Embed()))
+    presentation.capper_webhook.return_value.edit_message.assert_not_awaited()
+
+
+def test_capper_webhook_reuses_only_bot_owned_named_hook():
+    presentation = cog()
+    del presentation.capper_webhook
+    own = SimpleNamespace(id=777, name="Playmaker Capper Plays", user=SimpleNamespace(id=999), token="test")
+    unrelated = SimpleNamespace(id=888, name=own.name, user=SimpleNamespace(id=42), token="test")
+    channel = SimpleNamespace(id=303, webhooks=AsyncMock(return_value=[unrelated, own]), create_webhook=AsyncMock())
+
+    async def run():
+        assert await presentation.capper_webhook(channel) is own
+        assert await presentation.capper_webhook(channel) is own
+    asyncio.run(run())
+    channel.webhooks.assert_awaited_once()
+    channel.create_webhook.assert_not_awaited()
 
 
 def test_settled_card_http_failure_alerts_without_undoing_result():

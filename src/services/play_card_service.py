@@ -12,7 +12,7 @@ import discord
 from PIL import Image, ImageDraw, ImageOps, UnidentifiedImageError
 import requests
 
-from src.services.play_features_service import PlayFeaturesService, clean_leg_details
+from src.services.play_features_service import GRADABLE_SPORTS, PlayFeaturesService, clean_leg_details
 from src.services.play_service import PlayService
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
@@ -180,10 +180,25 @@ class PlayCardService:
             return None, "Playmaker Picks"
         leg = legs[0]
         details = clean_leg_details(leg.get("details") or {})
-        if not details or not (details.get("event_date") or play.get("created_at")):
+        if not details:
             return None, "Playmaker Picks"
-        found = self.features.find_event(details, play.get("created_at", ""))
+        found = self.features.find_event(details, play.get("created_at", "")) if details.get("event_date") or play.get("created_at") else None
+        if found is None and (details.get("event_date") or play.get("created_at")):
+            # OCR can mislabel the sport. Artwork alone may recover it from one
+            # unambiguous full matchup/date; do not change the grading metadata.
+            matches = []
+            for sport in sorted(GRADABLE_SPORTS - {details["sport"]}):
+                candidate = {**details, "sport": sport}
+                match = self.features.find_event(candidate, play.get("created_at", ""))
+                if match is not None:
+                    matches.append((candidate, match))
+            if len(matches) == 1:
+                details, found = matches[0]
         if found is None:
+            # Artwork may use a unique cached team logo without a matching game;
+            # settlement must still require its stricter event/date match.
+            if details.get("market") in {"moneyline", "spread"} and details.get("side") in {"home", "away"}:
+                return self.cached_team_artwork(details["sport"], details.get(f"{details['side']}_name"))
             return None, "Playmaker Picks"
         event, flipped = found
         sport = details["sport"]
@@ -209,11 +224,60 @@ class PlayCardService:
             url = rows[0].get(f"{side}_logo") if rows else None
         return url, event[f"{side}_name"] if url else "Server icon"
 
+    def cached_team_artwork(self, sport: str, name: str | None) -> tuple[str | None, str]:
+        if not name or sport not in {"nfl", "ncaa", "basketball", "baseball", "hockey", "football", "other"}:
+            return None, "Server icon"
+        logos = set()
+        for side in ("home", "away"):
+            table = "api_sports_nfl_games" if sport == "nfl" else "api_sports_events"
+            field = f"{side}_team_logo" if sport == "nfl" else f"{side}_logo"
+            filters = {f"{side}_team_name" if sport == "nfl" else f"{side}_name": name}
+            if sport not in {"nfl", "other"}:
+                filters["sport_slug"] = sport
+            rows = self.db.select(table, field, filters).data or []
+            logos.update(row[field] for row in rows if row.get(field))
+        return (next(iter(logos)), name) if len(logos) == 1 else (None, "Server icon")
+
+    async def badge(self, play: dict, legs: list[dict]) -> tuple[bytes | None, str]:
+        images = []
+        seen = set()
+        for leg in legs[:10]:
+            url, label = await asyncio.to_thread(self.artwork, play, [leg])
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            try:
+                data = await asyncio.to_thread(download_artwork, url)
+                images.append((data, label))
+            except (requests.RequestException, ValueError, UnidentifiedImageError, OSError):
+                logger.warning("play_card_api_artwork_unavailable play=%s label=%s", play["id"], label, exc_info=True)
+        if not images:
+            return None, "Server icon"
+        if len(images) == 1:
+            return images[0]
+        columns = 2
+        rows = (len(images) + columns - 1) // columns
+        canvas = Image.new("RGBA", (480, rows * 240), (0, 0, 0, 0))
+        for index, (data, _) in enumerate(images):
+            with Image.open(BytesIO(data)) as image:
+                image = image.convert("RGBA")
+                image.thumbnail((220, 220), Image.Resampling.LANCZOS)
+                canvas.alpha_composite(image, ((index % columns) * 240 + (240 - image.width) // 2,
+                                               (index // columns) * 240 + (240 - image.height) // 2))
+        output = BytesIO()
+        canvas.save(output, format="PNG")
+        return output.getvalue(), " / ".join(label for _, label in images)
+
     async def file(
         self, play: dict, guild: discord.Guild, *, slip: bytes | None = None,
         legs: list[dict] | None = None, source: discord.Message | None = None,
     ) -> discord.File:
         assets = await asyncio.to_thread(self.load, int(play["id"]))
+        if assets is not None and legs:
+            badge, label = await self.badge(play, legs)
+            if badge is not None:
+                assets = {**assets, "badge_base64": base64.b64encode(badge).decode("ascii"), "badge_label": label}
+                await asyncio.to_thread(self.db.upsert, "play_card_assets", assets, ["play_id"])
         if assets is None:
             if slip is None and source is not None:
                 attachment = next((item for item in source.attachments if (item.content_type or "").startswith("image/")), None)
@@ -231,9 +295,12 @@ class PlayCardService:
                 await asyncio.to_thread(image_bytes, slip)
             badge, label = None, "Server icon"
             try:
-                url, label = await asyncio.to_thread(self.artwork, play, legs or [])
-                if url:
-                    badge = await asyncio.to_thread(download_artwork, url)
+                if legs:
+                    badge, label = await self.badge(play, legs)
+                else:
+                    url, label = await asyncio.to_thread(self.artwork, play, [])
+                    if url:
+                        badge = await asyncio.to_thread(download_artwork, url)
             except (requests.RequestException, ValueError, UnidentifiedImageError, OSError):
                 logger.warning("play_card_api_artwork_unavailable play=%s; using server icon", play["id"], exc_info=True)
             if badge is None:

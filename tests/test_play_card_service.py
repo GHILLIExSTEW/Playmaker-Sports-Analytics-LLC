@@ -243,3 +243,65 @@ def test_api_player_without_photo_uses_server_icon_instead_of_unrelated_team_log
     }}
     assert service.artwork(play(), [leg]) == (None, "Server icon")
     db.select.assert_called_once()
+
+
+def test_team_logo_can_resolve_without_a_current_matching_game():
+    db = Mock()
+    service = PlayCardService(db)
+    service.features.find_event = Mock(return_value=None)
+    db.select.return_value = SimpleNamespace(data=[{"home_logo": "https://media.api-sports.io/guardians.png",
+                                                   "away_logo": "https://media.api-sports.io/guardians.png"}])
+    leg = {"selection": "Cleveland Guardians moneyline", "details": {
+        "sport": "baseball", "market": "moneyline", "side": "home", "home_name": "Cleveland Guardians",
+    }}
+    assert service.artwork(play(), [leg]) == ("https://media.api-sports.io/guardians.png", "Cleveland Guardians")
+    assert all(call.args[2]["sport_slug"] == "baseball" for call in db.select.call_args_list)
+
+
+def test_conflicting_cached_logos_are_not_guessed():
+    db = Mock()
+    service = PlayCardService(db)
+    db.select.return_value = SimpleNamespace(data=[{"home_logo": "https://media.api-sports.io/a.png",
+                                                   "away_logo": "https://media.api-sports.io/b.png"}])
+    assert service.cached_team_artwork("baseball", "Team") == (None, "Server icon")
+
+
+def test_artwork_recovers_ocr_sport_only_from_unique_full_matchup_without_changing_leg():
+    db = Mock()
+    service = PlayCardService(db)
+    service.features.find_event = Mock(side_effect=lambda details, created: (
+        ({"id": "15", "home_name": "Coastal Carolina", "away_name": "Appalachian State"}, False)
+        if details["sport"] == "ncaa" else None
+    ))
+    db.select.side_effect = lambda table, columns, filters: SimpleNamespace(
+        data=[] if table == "api_sports_player_game_stats" else [{"home_logo": "https://media.api-sports.io/logo.png"}],
+    )
+    leg = {"selection": "Coastal Carolina +7.5", "details": {
+        "sport": "other", "home_name": "Coastal Carolina", "away_name": "Appalachian State",
+        "side": "home", "market": "spread", "event_date": "2026-10-16",
+    }}
+    assert service.artwork(play(), [leg]) == ("https://media.api-sports.io/logo.png", "Coastal Carolina")
+    assert leg["details"]["sport"] == "other"
+    assert db.select.call_args.args[2]["sport_slug"] == "ncaa"
+
+
+def test_multileg_badge_includes_each_unique_available_logo(cards, monkeypatch):
+    cards.service.artwork.side_effect = [
+        ("https://media.api-sports.io/a.png", "A"), ("https://media.api-sports.io/b.png", "B"),
+    ]
+    monkeypatch.setattr("src.services.play_card_service.download_artwork", Mock(return_value=png()))
+    badge, label = asyncio.run(cards.service.badge(play(), [{"selection": "A"}, {"selection": "B"}]))
+    assert label == "A / B"
+    assert Image.open(BytesIO(badge)).size == (480, 240)
+
+
+def test_stored_server_fallback_upgrades_without_losing_original_slip(cards, monkeypatch):
+    original = png()
+    file = asyncio.run(cards.service.file(play(), cards.guild, slip=original))
+    file.close()
+    cards.service.artwork.return_value = ("https://media.api-sports.io/a.png", "Team")
+    monkeypatch.setattr("src.services.play_card_service.download_artwork", Mock(return_value=png(color="#00ff00")))
+    file = asyncio.run(cards.service.file(play(), cards.guild, legs=[{"selection": "Team"}]))
+    assert cards.saved[232]["badge_label"] == "Team"
+    assert base64.b64decode(cards.saved[232]["slip_base64"]) == original
+    file.close()
