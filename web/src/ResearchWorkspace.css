@@ -23,3 +23,4 @@
 .research-game-option:has(input:checked) { background: #243b49; }
 .member-stats-favorites { display: flex; flex-wrap: wrap; gap: 1rem; padding: 0; list-style: none; }
 .member-stats-favorites li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 100%; overflow-wrap: anywhere; }
+.capper-api-example { white-space: pre-wrap; overflow-wrap: anywhere; }
