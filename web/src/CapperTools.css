@@ -12,6 +12,8 @@
 .tools-card p,.tools-card li{font-size:.9rem;line-height:1.6}
 .capper-tools label{display:flex;flex-direction:column;gap:8px;font-size:.85rem;font-weight:650}
 .capper-tools input:not([type=checkbox]),.capper-tools select,.capper-tools textarea{width:100%;max-width:100%;min-width:0;border:1px solid var(--line);border-radius:10px;padding:12px;background:transparent;color:inherit;font:inherit;box-sizing:border-box}
+.capper-tools select{color-scheme:dark;background:#14232e;color:#f4f7fa}
+.capper-tools select option,.capper-tools select optgroup{background:#14232e;color:#f4f7fa}
 .capper-tools textarea{resize:vertical}
 .capper-tools button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:.85rem;cursor:pointer}
 .capper-tools button:disabled{opacity:.5;cursor:not-allowed}

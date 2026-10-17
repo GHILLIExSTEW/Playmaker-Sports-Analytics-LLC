@@ -113,3 +113,28 @@ test('selected team pull reloads cached report and uses a separate allowance wit
   await expect(page.getByRole('heading', { name: 'Your breakdown' })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
+test('research dropdowns use readable dark control and option colors', async ({ page }) => {
+  await mock(page)
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  const selects = page.locator('.capper-tools select')
+  expect(await selects.count()).toBeGreaterThan(0)
+  for (const select of await selects.all()) {
+    await expect(select).toHaveCSS('color-scheme', 'dark')
+    for (const element of [select, ...await select.locator('option').all()]) {
+      const contrast = await element.evaluate(node => {
+        const style = getComputedStyle(node)
+        const luminance = (color: string) => {
+          const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(value => {
+            const channel = value / 255
+            return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4
+          })
+          return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722
+        }
+        const foreground = luminance(style.color), background = luminance(style.backgroundColor)
+        return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05)
+      })
+      expect(contrast).toBeGreaterThanOrEqual(4.5)
+    }
+  }
+})
