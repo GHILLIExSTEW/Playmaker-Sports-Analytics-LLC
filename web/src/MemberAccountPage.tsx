@@ -99,7 +99,7 @@ export default function MemberAccountPage() {
         const userName = String(sessionMetadata?.full_name || sessionMetadata?.name || sessionMetadata?.username || 'Playmaker Member')
         setDisplayName(nextProfile?.display_name && nextProfile.display_name !== 'Playmaker Member' ? nextProfile.display_name : userName)
         setPublicHandle(nextProfile?.public_handle || '')
-        setAvatarUrl(nextProfile?.avatar_url || String(sessionMetadata?.avatar_url || sessionMetadata?.picture || ''))
+        setAvatarUrl(nextProfile?.avatar_url || '')
         setPublicProfileEnabled(Boolean(nextProfile?.public_profile_enabled))
         setTimezone(nextProfile?.timezone || 'America/New_York')
         setDiscordAlertsEnabled(Boolean(nextProfile?.discord_alerts_enabled))
@@ -237,6 +237,7 @@ export default function MemberAccountPage() {
       }).eq('user_id', session.user.id).select('age_verified_at,created_at,display_name,public_handle,avatar_url,public_profile_enabled,timezone,discord_alerts_enabled,email_alerts_enabled').single()
       if (error) throw error
       setProfile(data as MemberProfile)
+      setAvatarUrl((data as MemberProfile).avatar_url || '')
       setPublicHandle(normalizedHandle)
       setMessage('Profile settings saved.')
     } catch {
@@ -363,7 +364,7 @@ export default function MemberAccountPage() {
       <div className="account-profile-fields">
         <label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} minLength={1} maxLength={60} required /></label>
         <label>Public handle<input value={publicHandle} onChange={(event) => setPublicHandle(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} minLength={3} maxLength={30} pattern="[a-z0-9][a-z0-9-]{2,29}" required /><small>Letters, numbers, and hyphens only.</small></label>
-        <label className="account-profile-wide">Avatar image URL<input type="url" value={avatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} placeholder="Use your Discord avatar" /></label>
+        <label className="account-profile-wide">Avatar image URL<input type="url" value={avatarUrl} onChange={(event) => setAvatarUrl(event.target.value)} placeholder="Use your Discord avatar" /><small>Leave blank to follow your Discord avatar. After changing it in Discord, sign out and sign back in here to sync the new photo. A custom HTTPS image URL overrides Discord.</small></label>
         <label>Time zone<select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
           <option value="America/New_York">Eastern Time</option>
           <option value="America/Chicago">Central Time</option>

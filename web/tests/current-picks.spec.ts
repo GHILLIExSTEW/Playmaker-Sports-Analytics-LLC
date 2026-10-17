@@ -28,7 +28,7 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     localStorage.setItem('sb-lhsevzucmmzetpshpffv-auth-token', JSON.stringify({
       access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600, expires_at: expiresAt,
       user: { id: userId, aud: 'authenticated', role: 'authenticated', created_at: '2026-10-01T00:00:00Z',
-        app_metadata: { provider: 'discord', providers: ['discord'] }, user_metadata: {} },
+        app_metadata: { provider: 'discord', providers: ['discord'] }, user_metadata: { avatar_url: 'https://example.com/current-discord-avatar.png' } },
     }))
   })
   const control = { state: options.state ?? 'active', feedRequests: 0, offsets: [] as number[], failAccess: options.accessError ?? false }
@@ -86,6 +86,48 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
   })
   return control
 }
+
+test('account saves automatic Discord avatar as null and preserves custom image overrides', async ({ page }) => {
+  await mockApi(page, { pageOwner: 'First Capper' })
+  const saves: Record<string, unknown>[] = []
+  await page.route('**/rest/v1/member_profiles*', async route => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    const body = route.request().postDataJSON()
+    saves.push(body)
+    return route.fulfill({ json: { ...body, age_verified_at: '2026-10-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z' } })
+  })
+  await page.goto('/account')
+  const avatar = page.getByLabel('Avatar image URL')
+  await expect(avatar).toHaveValue('')
+  await expect(page.getByText(/After changing it in Discord, sign out/)).toBeVisible()
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect(page.getByText('Profile settings saved.')).toBeVisible()
+  expect(saves.at(-1)?.avatar_url).toBeNull()
+  await avatar.fill('https://example.com/custom.webp')
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect.poll(() => saves.at(-1)?.avatar_url).toBe('https://example.com/custom.webp')
+  await expect(page.getByText('Profile settings saved.')).toBeVisible()
+  await avatar.fill('')
+  await page.getByRole('button', { name: 'Save profile', exact: true }).click()
+  await expect.poll(() => saves.at(-1)?.avatar_url).toBeNull()
+})
+
+test('public member profile reads the latest resolved avatar when reopened', async ({ page }) => {
+  await mockApi(page)
+  let avatar = 'https://example.com/old-avatar.png'
+  await page.route('**/rest/v1/rpc/public_member_profile', route => route.fulfill({ json: {
+    display_name: 'Chief', public_handle: 'chief', avatar_url: avatar, created_at: '2026-10-01T00:00:00Z',
+    favorite_sports: [], favorite_cappers: [],
+  } }))
+  await page.route('https://example.com/*', route => route.fulfill({
+    contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>',
+  }))
+  await page.goto('/members/chief')
+  await expect(page.getByRole('img', { name: 'Chief avatar' })).toHaveAttribute('src', avatar)
+  avatar = 'https://example.com/new-avatar.png'
+  await page.reload()
+  await expect(page.getByRole('img', { name: 'Chief avatar' })).toHaveAttribute('src', avatar)
+})
 
 for (const mobile of [false, true]) {
   test(`cappers navigation opens a dedicated directory and preserves the homepage listing (${mobile ? 'mobile' : 'desktop'})`, async ({ page }) => {

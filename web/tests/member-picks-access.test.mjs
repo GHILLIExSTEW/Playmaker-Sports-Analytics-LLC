@@ -76,6 +76,30 @@ test(`website member access and current picks enforce server authorization (${ha
   const access = async () => (await call('select public.website_member_access() as access'))[0].access
   const denied = async () => assert.rejects(call('select * from public.member_current_picks()'), /Verified active membership required/)
 
+  await t.test('public member avatars follow Discord login updates without overwriting custom images', async () => {
+    const profile = async () => (await call("select public.public_member_profile('saved-name') as profile", 'anon', ''))[0].profile
+    await db.exec(`update public.member_profiles set public_profile_enabled=true;
+      update auth.users set raw_user_meta_data=raw_user_meta_data || '{"avatar_url":"https://cdn.discordapp.com/avatars/123456789/new.png"}'::jsonb;
+      update public.member_profiles set avatar_url='https://cdn.discordapp.com/avatars/123456789/old.png'`)
+    await load('../../supabase/migrations/20261017040000_member_discord_avatar_sync.sql')
+    assert.equal((await db.query('select avatar_url from public.member_profiles')).rows[0].avatar_url, null)
+    await db.exec("update public.member_profiles set avatar_url='https://cdn.discordapp.com/avatars/123456789/older.png'")
+    assert.equal((await db.query('select avatar_url from public.member_profiles')).rows[0].avatar_url, null)
+    assert.equal((await profile()).avatar_url, 'https://cdn.discordapp.com/avatars/123456789/new.png')
+    await db.exec(`update auth.users set raw_user_meta_data=raw_user_meta_data || '{"avatar_url":"https://cdn.discordapp.com/avatars/123456789/newer.png"}'::jsonb`)
+    assert.equal((await profile()).avatar_url, 'https://cdn.discordapp.com/avatars/123456789/newer.png')
+    await db.exec("update public.member_profiles set avatar_url='https://example.com/custom.webp'")
+    assert.equal((await profile()).avatar_url, 'https://example.com/custom.webp')
+    await db.exec("update public.member_profiles set avatar_url='https://cdn.discordapp.com/avatars/999/custom.png'")
+    assert.equal((await profile()).avatar_url, 'https://cdn.discordapp.com/avatars/999/custom.png')
+    await db.exec("update public.member_profiles set avatar_url='https://media.discordapp.net/avatars/123456789/old.png?size=128'")
+    assert.equal((await profile()).avatar_url, 'https://cdn.discordapp.com/avatars/123456789/newer.png')
+    await db.exec('update public.member_profiles set public_profile_enabled=false')
+    assert.equal(await profile(), null)
+    await assert.rejects(call('select public.normalize_member_discord_avatar()', 'anon', ''), /permission denied/)
+    await assert.rejects(call('select public.normalize_member_discord_avatar()'), /permission denied/)
+  })
+
   await t.test('closed launch gate denies even paid members; anonymous cannot execute feed', async () => {
     assert.equal((await access()).state, 'launch-pending')
     await denied()
