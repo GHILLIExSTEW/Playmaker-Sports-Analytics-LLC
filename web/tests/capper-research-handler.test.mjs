@@ -16,7 +16,7 @@ function harness({ auth = true, rejectContext = false, rejectBudget = false, pro
         if (rejectContext) throw { code: '42501' }
         return { game: { start_at: '2026-10-18T12:00Z', home_name: 'Verified team' }, history: [],
           players: [{ start_at: '2026-10-19T12:00Z', secret_future_stat: 999 }, { start_at: '2026-10-17T12:00Z', payload: [] }],
-          injuries: [], weather: null, odds: null }
+          injuries: [], weather: null, odds: { home_probability: 0.569, home_spread: -2.5, total: 42.5, books: 2, fetched_at: '2026-10-17T12:00Z' } }
       }
       if (rejectBudget) throw { code: 'P0001', message: 'Daily AI allowance reached' }
       return 'request-1'
@@ -40,6 +40,8 @@ test('research verifies session, approval, server evidence and allowance before 
   assert.ok(request.input[0].content[0].text.includes('Verified team'))
   assert.ok(!request.input[0].content[0].text.includes('secret_future_stat'))
   assert.ok(request.input[0].content[0].text.includes('user_supplied_unverified'))
+  assert.ok(!request.input[0].content[0].text.includes('home_probability'))
+  assert.ok(request.instructions.includes('home designation does NOT verify the game venue'))
   assert.equal((await response.json()).text, 'Grounded breakdown.')
   assert.equal(h.provider.length, 1)
 })

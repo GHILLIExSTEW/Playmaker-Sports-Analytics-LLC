@@ -95,7 +95,8 @@ function Matchup({ report }: { report: Report }) {
       </section>
       <section className="tools-card"><h3><CloudSun size={18} /> Game weather</h3>
         {weather ? <><p className="tools-metric">{text(weather.temperature_f)}°F</p><p>Wind {text(weather.wind_mph)} mph · Precipitation {text(weather.precipitation_mm)} mm</p>
-          <p>{text(weather.source)} · Open-Meteo · Three-hour game window</p><Freshness at={weather.fetched_at} hours={3} /></>
+          <p>{text(weather.source)} · Open-Meteo · Three-hour game window</p><Freshness at={weather.fetched_at} hours={3} />
+          <p className="tools-muted">Cached home-venue estimate. Neutral-site location and roof status are unverified.</p></>
           : <p>Unavailable for this game. Indoor venues and missing venue/forecast coverage may have no weather record.</p>}
       </section>
       <section className="tools-card"><h3>Availability</h3><p className="tools-muted">Source: API-Sports · Currently connected injury feed: NFL.</p>
