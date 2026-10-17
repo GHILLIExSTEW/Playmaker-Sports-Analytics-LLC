@@ -120,15 +120,32 @@ test('team form computes 26-3 as a 23-point loss with correct team orientation a
   assert.equal(sent.server_computed_results, undefined)
   assert.match(sent.team_form_coverage, /rendered separately by the server/)
 })
-test('unsupported margin descriptions are blocked explicitly without retries; numeric margins remain valid', async () => {
+test('unsupported margin paragraphs are omitted with explicit partial disclosure, preserving other commentary without retries', async () => {
   for (const output of ['Texans form is mixed, with recent close loss to Titans (26-3)',
     'Houston lost narrowly.', 'A tight game.', 'A one-score loss.', 'A comfortable win.']) {
-    const h = harness({ output }), response = await h.handle(req())
-    assert.equal(response.status, 502)
-    assert.match((await response.json()).error, /unsupported qualitative margin/)
-    assert.deepEqual(h.logs, ['research_unsupported_margin_label'])
+    const h = harness({ output: `${output}\n\nAvailability: Injury coverage is unavailable.` }), response = await h.handle(req())
+    assert.equal(response.status, 200)
+    const result = await response.json()
+    assert.equal(result.partial, true)
+    assert.match(result.text, /Partial analysis/)
+    assert.match(result.text, /Availability: Injury coverage is unavailable/)
+    assert.ok(!result.text.includes(output))
+    assert.deepEqual(h.logs, ['research_unsupported_margin_label_omitted'])
     assert.equal(h.provider.length, 1)
   }
   const h = harness({ output: 'Texans lost 3-26 to the Titans, a loss by 23 points. The supplied line is close to the stored model total.' })
   assert.equal((await h.handle(req())).status, 200)
+})
+test('entirely flagged AI prose still shows calculated results with explicit no-commentary disclosure', async () => {
+  const h = harness({ output: 'A close loss.', history: [{
+    game_id: 'past', start_at: '2026-10-10T12:00Z', home_id: '3', home_name: 'Titans',
+    away_id: '1', away_name: 'Texans', home_score: 3, away_score: 26, status: 'FT',
+  }] })
+  const response = await h.handle(req()), result = await response.json()
+  assert.equal(response.status, 200)
+  assert.equal(result.partial, true)
+  assert.match(result.text, /No AI commentary remains/)
+  assert.match(result.text, /26-3, win by 23/)
+  assert.ok(!result.text.includes('A close loss.'))
+  assert.equal(h.provider.length, 1)
 })

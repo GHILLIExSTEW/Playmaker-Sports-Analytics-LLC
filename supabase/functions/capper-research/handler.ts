@@ -180,13 +180,19 @@ export function createResearchHandler(deps: Dependencies) {
       const text = result.output.flatMap(item => object(item) && Array.isArray(item.content) ? item.content : [])
         .flatMap(item => object(item) && item.type === 'output_text' && typeof item.text === 'string' ? [item.text] : []).join('\n')
       if (!text.trim()) throw new Error('Empty AI response')
-      if (body.action === 'analyze' && marginLabel.test(text)) {
-        deps.log('research_unsupported_margin_label')
-        return json(502, { request_id: requestId,
-          error: 'AI analysis used an unsupported qualitative margin description and was not shown. Use the numeric scores in Recent form. The AI action was counted; no automatic retry was made.' })
-      }
+      const paragraphs = text.split(/\n\s*\n/)
+      const retained = body.action === 'analyze' ? paragraphs.filter(paragraph => !marginLabel.test(paragraph)) : paragraphs
+      const omitted = retained.length !== paragraphs.length
+      if (omitted) deps.log('research_unsupported_margin_label_omitted')
+      const commentary = retained.join('\n\n').trim()
+      const warning = omitted
+        ? `Partial analysis: AI paragraphs containing unsupported game-margin descriptions were omitted. ${
+          commentary ? 'Remaining AI commentary is shown below; it is not independently verified.' : 'No AI commentary remains; only available calculated results are shown.'} No extra AI request was made.`
+        : ''
+      const calculated = body.action === 'analyze' && form
+        ? `Team form (calculated from cached scores; up to 5 final games per team, sample may be incomplete)\n${form}` : ''
       return json(200, { request_id: requestId,
-        text: body.action === 'analyze' && form ? `Team form (calculated from cached scores; up to 5 final games per team, sample may be incomplete)\n${form}\n\n${text}` : text,
+        text: [warning, calculated, commentary].filter(Boolean).join('\n\n'), partial: omitted,
         generated_at: new Date().toISOString(), action: body.action })
     } catch {
       deps.log('research_openai_failed')

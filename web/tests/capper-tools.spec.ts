@@ -216,3 +216,31 @@ test('unavailable model status is explicit and does not repeat a provider pull',
   await expect(page.getByRole('alert')).toContainText('model refresh status could not be checked')
   expect(h.ai).toHaveLength(1)
 })
+test('analysis renders partial disclosure and calculated scores without a blocking error', async ({ page }) => {
+  await mock(page)
+  await page.route('**/functions/v1/capper-research', route => {
+    if (route.request().method() === 'OPTIONS') return route.fallback()
+    return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json: {
+      partial: true, text: 'Partial analysis: unsupported paragraphs were omitted.\n\nTeam form\nTexans vs Titans: 26-3, win by 23.',
+      generated_at: '2026-10-17T03:00:00Z',
+    } })
+  })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Analyze matchup', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Your breakdown' })).toBeVisible()
+  await expect(page.getByText(/Partial analysis: unsupported paragraphs/)).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+test('server retry notices are displayed once without a duplicated client suffix', async ({ page }) => {
+  await mock(page)
+  await page.route('**/functions/v1/capper-research', route => {
+    if (route.request().method() === 'OPTIONS') return route.fallback()
+    return route.fulfill({ status: 502, headers: { 'access-control-allow-origin': '*' },
+      json: { error: 'AI provider rejected this request. No automatic retry was made.' } })
+  })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Analyze matchup', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText('AI provider rejected this request. No automatic retry was made.')
+})

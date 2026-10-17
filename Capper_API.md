@@ -109,8 +109,11 @@ opponents, results and numeric margins (up to five final scored games per team
 before the matchup). It is not AI-authored. Historical game scores are excluded
 from AI input, and the model is instructed not to recap individual results.
 Analysis must not add qualitative margin labels such as "close" or "narrow".
-Responses containing those unsupported game-result labels are rejected explicitly,
-not silently rewritten or automatically retried; the AI action still counts.
+AI paragraphs containing those unsupported game-result labels are omitted,
+with an explicit "Partial analysis" disclosure. Calculated results and remaining
+AI paragraphs are preserved; the disclosure does not claim that remaining prose
+has been independently verified. If all AI paragraphs are omitted, this is
+stated explicitly. No additional AI call or retry is made; the action still counts.
 
 Selected cappers can integrate API-Sports reads into their own **server-side**
 systems. This is an authenticated HTTP endpoint, not a Discord webhook or a

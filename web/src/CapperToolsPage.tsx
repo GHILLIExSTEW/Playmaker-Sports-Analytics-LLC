@@ -100,7 +100,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
       onReport(parseReport(refreshed.data))
       if (modelError) throw modelError
       setPullMessage(`${result.message} Playmaker model recalculated from the updated cache; matchups without eligible inputs remain unavailable. One data pull used; no AI action used.`)
-    } catch (reason) { setPullMessage(''); setError(`${errorText(reason)} No automatic retry was made.`) }
+    } catch (reason) { setPullMessage(''); setError(errorText(reason)) }
     finally { setBusy(false); setAction('') }
   }
   const ai = async (mode: 'analyze' | 'extract') => {
@@ -132,7 +132,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
         setNotes(result.text); setReviewed(false); setExtracted(true); setImage(null); setAnalysis(''); setGeneratedAt('')
       }
       else { setAnalysis(result.text); setGeneratedAt(result.generated_at) }
-    } catch (reason) { setError(`${errorText(reason)} No automatic retry was made.`) }
+    } catch (reason) { setError(errorText(reason)) }
     finally { setBusy(false); setAction('') }
   }
   return <>
