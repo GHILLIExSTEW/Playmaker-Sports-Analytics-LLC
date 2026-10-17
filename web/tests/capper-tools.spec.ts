@@ -1,0 +1,101 @@
+import { expect, test, type Page } from '@playwright/test'
+
+const game = { competition: 'nfl', sport: 'nfl', game_id: '1', start_at: '2026-10-18T17:00:00Z',
+  home_id: '1', home_name: 'Kansas City Chiefs', away_id: '2', away_name: 'Buffalo Bills',
+  home_score: null, away_score: null, status: 'NS', synced_at: '2026-10-17T02:00:00Z' }
+async function mock(page: Page, approved = true) {
+  const calls: string[] = [], ai: Record<string, unknown>[] = []
+  await page.addInitScript(() => {
+    const userId = '11111111-1111-1111-1111-111111111111', expiresAt = Math.floor(Date.now() / 1000) + 3600
+    const token = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({ sub: userId, exp: expiresAt, aud: 'authenticated', role: 'authenticated' }))}.test-signature`
+    localStorage.setItem('sb-lhsevzucmmzetpshpffv-auth-token', JSON.stringify({
+      access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer', expires_in: 3600, expires_at: expiresAt,
+      user: { id: userId, aud: 'authenticated', role: 'authenticated', created_at: '2026-10-01T00:00:00Z', app_metadata: { provider: 'discord' }, user_metadata: {} },
+    }))
+  })
+  await page.route('**/rest/v1/rpc/**', route => {
+    const name = route.request().url().split('/').at(-1) ?? ''
+    calls.push(name)
+    if (name === 'website_member_access') return route.fulfill({ json: { state: 'active', kind: 'operator', expires_at: null } })
+    if (name === 'capper_tools_access') return route.fulfill({ json: approved })
+    if (name === 'member_stats_games') return route.fulfill({ json: { games: [game], total: 1 } })
+    if (name === 'capper_tools_game') return route.fulfill({ json: {
+      game, history: [{ ...game, game_id: '2', status: 'FT', start_at: '2026-10-10T17:00:00Z', home_score: 27, away_score: 24 }],
+      players: [], injuries: [], weather: { temperature_f: 62, wind_mph: 8, precipitation_mm: 0, source: 'forecast', fetched_at: '2026-10-17T01:00:00Z' },
+      odds: null, generated_at: '2026-10-17T03:00:00Z',
+    } })
+    return route.fulfill({ json: [] })
+  })
+  await page.route('**/functions/v1/capper-research', route => {
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: {
+      'access-control-allow-origin': '*', 'access-control-allow-headers': '*',
+    } })
+    const data = route.request().postDataJSON()
+    ai.push(data)
+    return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json: {
+      text: data.action === 'extract' ? 'User screenshot: Chiefs -3.5, report date not visible.' : 'Matchup snapshot\nCached evidence only. Injury coverage unavailable.',
+      generated_at: '2026-10-17T03:00:00Z', request_id: 'ai-1', action: data.action,
+    } })
+  })
+  return { calls, ai }
+}
+test('unapproved members cannot open private research data', async ({ page }) => {
+  const h = await mock(page, false)
+  await page.goto('/tools')
+  await expect(page.getByRole('heading', { name: 'Invitation required' })).toBeVisible()
+  expect(h.calls).not.toContain('capper_tools_game')
+  expect(h.calls).not.toContain('member_stats_games')
+})
+test('mobile research has team/date search, missing coverage, weather and grounded analysis', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const h = await mock(page)
+  await page.goto('/tools')
+  await page.getByLabel('Team or matchup').fill('Chiefs')
+  await page.getByLabel('Game date').fill('2026-10-18')
+  await page.getByRole('button', { name: 'Find games' }).click()
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await expect(page.getByText('62°F')).toBeVisible()
+  await expect(page.getByText(/This does not mean no injuries/)).toBeVisible()
+  await page.getByLabel(/Your line, source, and notes/).fill('Chiefs -3.5 at my book')
+  await page.getByRole('button', { name: 'Analyze matchup', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Your breakdown' })).toBeVisible()
+  expect(h.ai).toHaveLength(1)
+  expect(h.ai[0].notes).toBe('Chiefs -3.5 at my book')
+  expect(h.ai[0]).not.toHaveProperty('cached')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.getByRole('button', { name: 'Back to games' }).click()
+  await expect(page.getByRole('heading', { name: 'Pick your matchup' })).toBeVisible()
+})
+test('screenshot extraction requires review and remains user supplied', async ({ page }) => {
+  const h = await mock(page)
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByText('Read a screenshot', { exact: true }).click()
+  await page.getByLabel('Sports screenshot').setInputFiles({
+    name: 'line.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4xoAAAAASUVORK5CYII=', 'base64'),
+  })
+  await page.getByRole('button', { name: 'Read screenshot', exact: true }).click()
+  await expect(page.getByLabel(/Your line, source, and notes/)).toHaveValue(/Chiefs -3.5/)
+  await expect(page.getByRole('button', { name: 'Analyze matchup', exact: true })).toBeDisabled()
+  await page.getByRole('checkbox', { name: /I reviewed/ }).check()
+  await page.getByRole('button', { name: 'Analyze matchup', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Your breakdown' })).toBeVisible()
+  expect(h.ai).toHaveLength(2)
+  expect(h.ai[0].action).toBe('extract')
+  expect(h.ai[1]).not.toHaveProperty('image')
+})
+test('AI infrastructure errors are visible and not retried', async ({ page }) => {
+  const h = await mock(page)
+  let count = 0
+  await page.route('**/functions/v1/capper-research', route => {
+    if (route.request().method() === 'OPTIONS') return route.fallback()
+    count++
+    return route.fulfill({ status: 503, headers: { 'access-control-allow-origin': '*' }, json: { error: 'AI analysis is not configured yet.' } })
+  })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Analyze matchup', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('AI analysis is not configured yet.')
+  expect(count).toBe(1)
+  expect(h.ai).toHaveLength(0)
+})

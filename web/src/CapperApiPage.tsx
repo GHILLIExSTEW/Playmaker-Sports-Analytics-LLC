@@ -20,6 +20,42 @@ function parseKeys(value: unknown): ApiKey[] {
   }
   return value
 }
+function ResearchApprovals() {
+  const [rows, setRows] = useState<{ discord_user_id: string; allowed: boolean }[] | null>(null)
+  const [id, setId] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState('')
+  const parse = (value: unknown) => {
+    if (!Array.isArray(value) || !value.every((row): row is { discord_user_id: string; allowed: boolean } =>
+      object(row) && typeof row.discord_user_id === 'string' && typeof row.allowed === 'boolean')) throw new Error('Invalid research approval response.')
+    return value
+  }
+  useEffect(() => {
+    let active = true
+    Promise.resolve(supabase.rpc('manage_capper_tools')).then(({ data, error }) => {
+      if (error) throw error
+      const value = parse(data)
+      if (active) setRows(value)
+    }).catch(reason => { if (active) setError(errorText(reason)) })
+    return () => { active = false }
+  }, [])
+  const update = async (discordId: string, allowed: boolean) => {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const { data, error } = await supabase.rpc('manage_capper_tools', { p_discord_user_id: discordId, p_allowed: allowed })
+      if (error) throw error
+      setRows(parse(data)); setNotice(allowed ? 'Research tools approved. Send this capper the /tools link; no API key needed.' : 'Research tools blocked. This does not revoke external API credentials.')
+    } catch (reason) { setError(errorText(reason)) }
+    finally { setBusy(false) }
+  }
+  return <section className="research-card"><h2>Phone-friendly research approvals</h2>
+    <p>Send approved cappers <Link to="/tools">Research tools</Link>. They sign in with Discord; no key or technical setup needed. Active integration keys also qualify unless explicitly blocked here. Website approval does not issue an external API key or grant staff models.</p>
+    <form className="research-controls" onSubmit={event => { event.preventDefault(); void update(id.trim(), true) }}>
+      <label>Research capper Discord ID<input required pattern="[0-9]{1,20}" maxLength={20} value={id} onChange={event => setId(event.target.value)} /></label>
+      <button disabled={busy}>Approve research tools</button>
+    </form>
+    {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
+    {rows && <ul>{rows.map(row => <li key={row.discord_user_id}>{row.discord_user_id} · {row.allowed ? 'Approved' : 'Blocked'} <button disabled={busy} onClick={() => void update(row.discord_user_id, !row.allowed)}>{row.allowed ? 'Block' : 'Approve'} {row.discord_user_id}</button></li>)}</ul>}
+  </section>
+}
 function OwnerKeys() {
   const [keys, setKeys] = useState<ApiKey[] | null>(null), [error, setError] = useState('')
   const [discordId, setDiscordId] = useState(''), [label, setLabel] = useState('')
@@ -60,6 +96,7 @@ function OwnerKeys() {
     finally { setBusy(false) }
   }
   return <>
+    <ResearchApprovals />
     <h2>Grant capper integration access</h2>
     <p>Recipients must be current verified cappers and must first sign in with Discord and complete age verification. Each key bypasses member daily limits and cooldowns, but not the shared 7,500-request UTC-day cap or provider restrictions. Keys do not grant website research or administration rights.</p>
     <form className="research-controls" onSubmit={event => { event.preventDefault(); void issue() }}>

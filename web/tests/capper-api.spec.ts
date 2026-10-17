@@ -32,7 +32,7 @@ test('Owner can issue a once-shown key and revoke it without saving its token in
     return route.fulfill({ json: [] })
   })
   await page.goto('/integrations')
-  await page.getByLabel('Capper Discord ID').fill('123456789')
+  await page.getByLabel('Capper Discord ID', { exact: true }).fill('123456789')
   await page.getByLabel('Integration label').fill('Chief server')
   await page.getByRole('button', { name: 'Create private API key' }).click()
   await expect(page.getByLabel('New private key')).toHaveValue(token)
@@ -44,4 +44,27 @@ test('Owner can issue a once-shown key and revoke it without saving its token in
   await expect(page.getByRole('cell', { name: 'Revoked', exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByLabel('New private key')).toHaveCount(0)
+})
+test('Owner can approve and block phone research without issuing an API credential', async ({ page }) => {
+  let allowed: boolean | null = null
+  const privateCalls: string[] = []
+  await page.route('**/rest/v1/rpc/**', route => {
+    const name = route.request().url().split('/').at(-1)
+    if (name === 'website_member_access') return route.fulfill({ json: { state: 'active', kind: 'owner', expires_at: null } })
+    if (name === 'website_can_edit_all_cappers') return route.fulfill({ json: true })
+    if (name === 'manage_capper_tools') {
+      const args = route.request().postDataJSON()
+      if (args?.p_discord_user_id) allowed = args.p_allowed
+      return route.fulfill({ json: allowed === null ? [] : [{ discord_user_id: '123456789', allowed }] })
+    }
+    if (name === 'issue_capper_api_key') privateCalls.push(name)
+    return route.fulfill({ json: [] })
+  })
+  await page.goto('/integrations')
+  await page.getByLabel('Research capper Discord ID').fill('123456789')
+  await page.getByRole('button', { name: 'Approve research tools', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Block 123456789' })).toBeVisible()
+  await page.getByRole('button', { name: 'Block 123456789' }).click()
+  await expect(page.getByRole('button', { name: 'Approve 123456789' })).toBeVisible()
+  expect(privateCalls).toEqual([])
 })

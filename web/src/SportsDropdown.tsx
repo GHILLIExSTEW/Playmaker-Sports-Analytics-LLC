@@ -6,6 +6,7 @@ export default function SportsDropdown({ onNavigate }: { onNavigate: () => void 
   return <details className="sports-dropdown">
     <summary>Sports <ChevronDown size={15} /></summary>
     <div className="sports-dropdown-panel">
+      <Link to="/tools" onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onNavigate() }}>Research tools (approved cappers)</Link>
       <Link to="/stats" onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onNavigate() }}>Member stats (HIGHROLLER)</Link>
       <Link to="/integrations" onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onNavigate() }}>API integrations (Owner only)</Link>
       <Link to="/research" onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); onNavigate() }}>Capper research workspace (team only)</Link>

@@ -1,2 +1,5 @@
 [functions.capper-api]
 verify_jwt = false
+
+[functions.capper-research]
+verify_jwt = false

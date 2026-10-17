@@ -1,5 +1,34 @@
 # Capper API integrations
 
+## Phone-friendly research tools
+
+Approved cappers can use `/tools` on the website without an API key or terminal.
+Owners approve or block Discord IDs in `/integrations`. An active integration
+key also qualifies unless the Owner explicitly blocks website research access.
+Website-only approval does not issue an API key or grant staff models.
+
+The page provides cached game search, recent form, supported player logs and
+threshold comparisons, available NFL injuries, venue weather, and market
+snapshots with timestamps and missing/stale coverage warnings. It does not
+trigger provider refreshes or use SportsDataIO trial data.
+
+The `capper-research` Edge Function uses the signed-in user's verified Supabase
+session and database approval, never a browser-held provider key. Set its
+server-only `OPENAI_API_KEY`; optionally set `OPENAI_RESEARCH_MODEL` (default
+`gpt-4.1-mini`). Deploy with gateway JWT verification disabled as in
+[config.toml](supabase/config.toml); the handler verifies the session through
+Supabase Auth and uses the user's JWT for all data and allowance RPCs.
+Apply [the tools migration](supabase/migrations/20261017070000_capper_research_tools.sql).
+
+AI extraction and analysis share 25 actions per user and 250 globally per UTC
+day, with a 15-second user cooldown. Failed provider actions count; no automatic
+retries or refunds. Cached browsing does not consume these actions or API-Sports
+requests. Screenshot extraction accepts one PNG/JPEG/WebP up to 4 MiB, sends it
+to OpenAI with `store: false`, and does not persist it in the website database.
+Provider retention policies still apply. Users must review extracted notes
+before analysis; notes and report dates are labeled user-supplied, unverified.
+Analysis receives server-loaded cache data, not client-authored evidence.
+
 Selected cappers can integrate API-Sports reads into their own **server-side**
 systems. This is an authenticated HTTP endpoint, not a Discord webhook or a
 push subscription. Never give recipients the underlying provider key.
