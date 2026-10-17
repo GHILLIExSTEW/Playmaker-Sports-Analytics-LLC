@@ -104,15 +104,17 @@ for (const path of ['/models', '/nfl/lab', '/guide']) {
       expect(guideRequests).toEqual([])
     })
   }
-  test(`${path} allows owner access`, async ({ page }) => {
+  for (const kind of ['owner', 'research']) {
+  test(`${path} allows ${kind} access`, async ({ page }) => {
     await page.route('**/rest/v1/rpc/**', (route) => route.fulfill({
       json: route.request().url().includes('website_member_access')
-        ? { state: 'active', kind: 'owner', expires_at: null }
+        ? { state: 'active', kind, expires_at: null }
         : route.request().url().includes('operator_user_guide') ? guideContent : [],
     }))
     await page.goto(path)
     await expect(page.getByRole('heading', { name: pageHeading(path), exact: true })).toBeVisible()
   })
+  }
   test(`${path} fails closed, retries, and removes research after access expiry`, async ({ page }) => {
     await page.clock.install({ time: new Date('2026-10-11T22:00:00Z') })
     let access: 'error' | 'operator' | 'paid' = 'error'

@@ -3,6 +3,56 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { PGlite } from '@electric-sql/pglite'
 
+test('Discord research exception preserves identity, age, other users and private helper permissions', async () => {
+  const db = new PGlite()
+  try {
+    await db.exec(`
+      create role anon; create role authenticated;
+      create schema auth;
+      create function auth.uid() returns uuid language sql as $$ select nullif(current_setting('test.uid', true), '')::uuid $$;
+      create table auth.identities (user_id uuid, provider text, provider_id text);
+      create table public.member_profiles (user_id uuid, age_verified_at timestamptz);
+      create function public.website_member_access() returns jsonb language sql as $$ select current_setting('test.access')::jsonb $$;
+      create function public.require_operator_research_access() returns void language plpgsql as $$ begin return; end $$;
+      alter default privileges grant execute on functions to anon, authenticated;
+      insert into auth.identities values ('00000000-0000-0000-0000-000000000001', 'discord', '1179625165332676632');
+      insert into public.member_profiles values ('00000000-0000-0000-0000-000000000001', now());
+      select set_config('test.uid','00000000-0000-0000-0000-000000000001',false);
+    `)
+    await db.exec(await readFile(new URL('../../supabase/migrations/20261017010000_website_research_exception.sql', import.meta.url), 'utf8'))
+    const access = async (value) => {
+      await db.query("select set_config('test.access',$1,false)", [JSON.stringify(value)])
+      return (await db.query('select public.website_member_access() as access')).rows[0].access
+    }
+    for (const state of ['membership-required', 'launch-pending', 'active']) {
+      assert.deepEqual(await access({ state, kind: 'paid' }), { state: 'active', kind: 'research', expires_at: null })
+      await db.query('select public.require_operator_research_access()')
+    }
+    for (const state of ['signed-out', 'age-required', 'discord-required']) {
+      assert.deepEqual(await access({ state }), { state })
+      await assert.rejects(db.query('select public.require_operator_research_access()'), /approved research exception required/)
+    }
+    for (const kind of ['owner', 'operator']) {
+      const original = { state: 'active', kind, expires_at: null }
+      assert.deepEqual(await access(original), original)
+    }
+    await db.exec("update public.member_profiles set age_verified_at = null")
+    assert.equal((await access({ state: 'membership-required' })).state, 'membership-required')
+    await db.exec("update public.member_profiles set age_verified_at = now(); update auth.identities set provider = 'email'")
+    assert.equal((await access({ state: 'membership-required' })).state, 'membership-required')
+    await db.exec("update auth.identities set provider = 'discord', provider_id = '999'")
+    assert.equal((await access({ state: 'active', kind: 'paid' })).kind, 'paid')
+    await assert.rejects(db.query('select public.require_operator_research_access()'), /approved research exception required/)
+    await db.exec("select set_config('test.uid','',false)")
+    assert.equal((await access({ state: 'membership-required' })).state, 'membership-required')
+    for (const role of ['anon', 'authenticated']) {
+      assert.equal((await db.query(`select has_function_privilege('${role}', 'public.website_member_access_before_research_exception()', 'execute') as allowed`)).rows[0].allowed, false)
+      assert.equal((await db.query(`select has_function_privilege('${role}', 'public.require_operator_research_access()', 'execute') as allowed`)).rows[0].allowed, false)
+      assert.equal((await db.query(`select has_function_privilege('${role}', 'public.website_member_access()', 'execute') as allowed`)).rows[0].allowed, true)
+    }
+  } finally { await db.close() }
+})
+
 test('research RPCs deny non-team roles and cannot bypass internal implementations', async () => {
   const db = new PGlite()
   try {
