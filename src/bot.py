@@ -21,6 +21,7 @@ from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
 from src.capper_ballots import CapperBallots
 from src.bang_notifications import BangNotifications
+from src.research_workspace import ResearchWorkspace
 from src.config import CAPPER_CHANNEL_ID
 from src.play_settlement import PlaySettlement, build_suggestion_view as build_suggestion_view
 from src.play_presentation import (
@@ -92,6 +93,7 @@ class OfficialBot(commands.Bot):
                         logger.error("background_shutdown_failed", exc_info=(type(outcome), outcome, outcome.__traceback__))
 
     async def setup_hook(self) -> None:
+        await self.add_cog(ResearchWorkspace(self, staff_alert=send_staff_alert))
         await self.add_cog(MemberStats())
         await self.add_cog(DataModels())
         await self.add_cog(MemberOnboarding())

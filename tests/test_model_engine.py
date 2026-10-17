@@ -278,6 +278,9 @@ def test_refresh_odds_pages_league_odds_and_keeps_known_games():
     rows = client.ops("sport_model_odds", "upsert")[0][1][0]
     assert [row["game_id"] for row in rows] == ["5"]
     assert rows[0]["home_probability"] == pytest.approx((1 / 1.8) / (1 / 1.8 + 1 / 2.0))
+    snapshots = client.ops("research_odds", "upsert")[0][1][0]
+    assert [row["game_id"] for row in snapshots] == ["5"]
+    assert snapshots[0]["bookmakers"] == line["bookmakers"]
 
 
 def test_refresh_football_odds_requests_only_pending_games_in_window():

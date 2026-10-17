@@ -159,12 +159,14 @@ class ModelInputsService:
     def refresh_odds(self, competition: str, sport: str, league: int, games: list) -> int:
         now = self.clock()
         fetched: dict[str, Market] = {}
+        bookmaker_snapshots: dict[str, list[dict]] = {}
         known = {game.id for game in games}
         if sport in {"nfl", "ncaa"}:
             horizon = now + timedelta(days=ODDS_DAYS.get(competition, 4))
             for game in games:
                 if _pending(game) and now - timedelta(hours=1) <= game.start <= horizon:
                     for row in self.multi._request(FOOTBALL_BASE, "odds", {"game": game.id}):
+                        bookmaker_snapshots.setdefault(game.id, []).extend(row.get("bookmakers") or [])
                         market = consensus_market(row.get("bookmakers") or [], now)
                         if market is not None:
                             fetched[game.id] = market
@@ -177,10 +179,16 @@ class ModelInputsService:
                 rows, total = self.multi._request_page(base_url, "odds", params)
                 for row in rows:
                     game_id = str((row.get("game") or {}).get("id") or "")
+                    if game_id in known:
+                        bookmaker_snapshots.setdefault(game_id, []).extend(row.get("bookmakers") or [])
                     market = consensus_market(row.get("bookmakers") or [], now)
                     if game_id in known and market is not None:
                         fetched[game_id] = market
                 page += 1
+        self._upsert("research_odds", [{
+            "competition": competition, "game_id": game_id, "bookmakers": bookmakers,
+            "fetched_at": now.isoformat(),
+        } for game_id, bookmakers in bookmaker_snapshots.items()], "competition,game_id")
         self._upsert("sport_model_odds", [{
             "competition": competition, "game_id": game_id, "home_probability": market.home_probability,
             "home_spread": market.home_spread, "total": market.total, "books": market.books,

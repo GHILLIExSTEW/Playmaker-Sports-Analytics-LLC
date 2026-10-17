@@ -41,6 +41,7 @@ const AllResultsPage = lazy(() => import('./AllResultsPage'))
 const NflPage = lazy(() => import('./NflPage'))
 const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
 const DataModelsPage = lazy(() => import('./DataModelsPage'))
+const ResearchWorkspace = lazy(() => import('./ResearchWorkspacePage'))
 const UserGuidePage = lazy(() => import('./UserGuidePage'))
 const SportsHomePreview = lazy(() => import('./SportsHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
@@ -396,6 +397,8 @@ function Website() {
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense></OperatorResearchAccess>
         ) : routePath === '/models' ? (
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense></OperatorResearchAccess>
+        ) : routePath === '/research' ? (
+          <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading capper research...</p>}><ResearchWorkspace /></Suspense></OperatorResearchAccess>
         ) : routePath === '/guide' ? (
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading user guide...</p>}><UserGuidePage /></Suspense></OperatorResearchAccess>
         ) : sportRouteSlug ? (
