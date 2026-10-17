@@ -397,7 +397,8 @@ def test_store_keeps_only_games_in_the_site_window():
     run = ModelRun("nfl", games, {game.id: sample_projection() for game in games}, Params(), None, NOW)
     assert service.store(run) == 1
     assert [row["game_id"] for row in client.ops("sport_model_projections", "upsert")[0][1][0]] == ["live"]
-    assert client.ops("sport_model_projections", "lt")[0][1] == ("start_at", (NOW - timedelta(days=7)).isoformat())
+    assert client.ops("sport_model_projections", "lt")[0][1] == ("generated_at", NOW.isoformat())
+    assert client.ops("sport_model_projections", "lt")[1][1] == ("start_at", (NOW - timedelta(days=7)).isoformat())
 
 
 def test_project_uses_stored_tuned_parameters_and_backtest_report():
@@ -434,6 +435,56 @@ def test_run_backtest_stores_only_successful_reports():
     client = Recorder()
     assert projection_service(season(count=50), client).run_backtest("basketball:12")["status"] == "insufficient"
     assert client.ops("sport_model_backtests", "upsert") == []
+
+class PullJobClient(Recorder):
+    def __init__(self, job=None, saved=True):
+        super().__init__()
+        self.job = job
+        self.saved = saved
+        self.rpc_calls = []
+
+    def rpc(self, name, args=None):
+        self.rpc_calls.append((name, args))
+        return SimpleNamespace(execute=lambda: SimpleNamespace(
+            data=self.job if name == "claim_capper_model_refresh" else self.saved))
+
+
+def test_pull_worker_recalculates_with_fresh_inputs_using_existing_engine_without_provider_calls():
+    games = season()
+    games.append(upcoming(games))
+    client = PullJobClient({"request_id": "pull-1", "claim_token": "token-1", "competition": "nfl"})
+    inputs = Mock()
+    inputs.context.return_value = Context(now=NOW)
+    service = projection_service(games, client, inputs)
+    before = service.project("nfl").projections["upcoming"]
+    inputs.context.return_value = Context(now=NOW, injuries={"0": [Injury("0", "Quarterback", "QB", "Out", "Knee")]})
+    service.clock = lambda: NOW + timedelta(minutes=1)
+    assert service.process_team_pull() is True
+    rows = client.ops("sport_model_projections", "upsert")[0][1][0]
+    updated = next(row for row in rows if row["game_id"] == "upcoming")
+    assert updated["home_score"] == pytest.approx(before.home_score - 3, abs=.0001)
+    assert updated["home_probability"] < before.home_probability
+    assert updated["generated_at"] == (NOW + timedelta(minutes=1)).isoformat()
+    assert client.rpc_calls[-1] == ("finish_capper_model_refresh", {
+        "p_request_id": "pull-1", "p_claim_token": "token-1", "p_projections": 1})
+    service.data.cached.assert_called_with("nfl")
+    inputs.refresh_odds.assert_not_called()
+    inputs.refresh_injuries.assert_not_called()
+    inputs.refresh_weather.assert_not_called()
+
+
+def test_pull_worker_empty_queue_failure_and_unpersisted_completion_are_explicit():
+    assert projection_service([], PullJobClient()).process_team_pull() is False
+    job = {"request_id": "pull-1", "claim_token": "token-1", "competition": "nfl"}
+    client = PullJobClient(job)
+    service = projection_service([], client)
+    service.data.cached.side_effect = RuntimeError("database down")
+    with pytest.raises(RuntimeError, match="database down"):
+        service.process_team_pull()
+    assert client.rpc_calls[-1][1]["p_projections"] is None
+    service = projection_service([], PullJobClient(job, saved=False))
+    with pytest.raises(RuntimeError, match="completion was not saved"):
+        service.process_team_pull()
 
 
 # ----- cog -----
@@ -508,4 +559,15 @@ def test_disabled_cog_does_not_start_jobs():
     instance = ModelProjections(Mock(), service=Mock(), enabled=False, staff_alert=AsyncMock())
     instance.start_jobs()
     assert not instance.refresh_projections.is_running()
+    assert not instance.team_pull_projections.is_running()
     assert math.isclose(instance.refresh_projections.minutes, 30)
+    assert instance.team_pull_projections.seconds == 2
+
+
+def test_pull_worker_loop_reports_failures_and_keeps_its_polling_lifecycle():
+    instance, service, alert, _ = cog()
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    service.process_team_pull.assert_called_once_with()
+    service.process_team_pull.side_effect = RuntimeError("worker failed")
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    assert alert.await_args.args[0] == "capper_model_refresh"

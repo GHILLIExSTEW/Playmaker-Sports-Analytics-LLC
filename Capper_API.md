@@ -12,7 +12,11 @@ is stored. Only summary outputs, model version, samples and timestamps are
 exposed, not model internals, backtests or capper performance data.
 Finished/started games and mismatched team/kickoff projections are excluded.
 These are model estimates, not sportsbook probabilities or guaranteed results.
-Team pulls do not recompute models; the page flags projections older than a pull.
+Successful team pulls queue recalculation with the existing ratings-v2 engine
+from the just-saved cache. The page waits for completion before reloading the
+model card. Older projections are flagged, not presented as newly calculated.
+Unchanged inputs may produce identical scores; insufficient inputs remain
+unavailable. Only the selected team is fetched, not both teams automatically.
 The AI may explain supplied estimates, but cannot invent missing predictions.
 
 NHL starting goalies remain explicitly unknown. API-Sports Hockey v1 documents
@@ -30,7 +34,14 @@ excluded from member game searches before counting and pagination.
 Inside a matchup,
 select **Team to refresh**, then tap **Pull latest team data**. This fetches that
 team's games for the selected matchup's season, plus the current NFL injury feed
-where supported. It saves the provider results and reloads the research report.
+where supported. It saves the provider results and atomically queues a model
+refresh. The Edge Function returns HTTP 202 with `model_refresh: "pending"` and
+the pull's `request_id`. The browser polls the user-scoped
+`capper_model_refresh_status(p_request_id)` RPC before reloading the report.
+Failed provider pulls do not enqueue models. A failed/unavailable model worker
+is shown explicitly, without retrying the provider pull or claiming a fresh
+prediction. Pending/running jobs expire after three minutes without automatic
+retry. Leaving the page stops browser polling but does not cancel the saved job.
 Weather, odds and player logs are not refreshed by this button; their original
 cache timestamps remain visible. No SportsDataIO trial data is used.
 
@@ -58,6 +69,32 @@ Apply [the capper projection migration](supabase/migrations/20261017110000_cappe
 and redeploy `capper-research` to include approved model summaries in AI analysis.
 Deploy all three function files (`index.ts`, `handler.ts`, `pull.ts`) and
 configure server-only `API_SPORTS_KEY` for data pulls.
+Apply [the pull/model queue migration](supabase/migrations/20261017120000_capper_pull_model_refresh.sql)
+before deploying the updated function/website and restarting the Python bot.
+The bot's existing enabled `ModelProjections` cog polls every two seconds,
+claims private service-only jobs, and calls the same locked
+`ModelProjectionService.refresh` engine as scheduled projections, without
+refreshing providers or rerunning backtests. Recalculation uses no extra
+API-Sports allowance or AI action. Model internals and worker claim tokens
+remain service-only. Jobs are completed only after projection writes finish;
+estimates no longer produced in the current model window are removed.
+The bot must have `API_SPORTS_KEY` configured (the existing model-cog enablement)
+and database service-role access.
+
+On the Proxmox bot VM/container, pull the latest repository and restart the bot.
+If using the supplied [systemd unit](scripts/discord-bot.service):
+
+```sh
+cd /opt/discord-bot
+git pull --ff-only
+sudo systemctl restart discord-bot
+sudo systemctl status discord-bot --no-pager
+sudo journalctl -u discord-bot -n 50 --no-pager
+```
+
+Afterward, pull a team on `/tools`. Expect **Recalculating model...**, then the
+completion message and a model generation timestamp after the pull. Check logs
+for `capper_model_refreshed`; a job can validly produce zero projections.
 
 AI extraction and analysis share 50 actions per user and 500 globally per UTC
 day, with a 15-second user cooldown. Failed provider actions count; no automatic

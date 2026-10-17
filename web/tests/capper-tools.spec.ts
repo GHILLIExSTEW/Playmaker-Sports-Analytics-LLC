@@ -5,6 +5,7 @@ const game = { competition: 'nfl', sport: 'nfl', game_id: '1', start_at: '2026-1
   home_score: null, away_score: null, status: 'NS', synced_at: '2026-10-17T02:00:00Z' }
 async function mock(page: Page, approved = true, projection: Record<string, unknown> | null = null, competition = 'nfl') {
   const calls: string[] = [], ai: Record<string, unknown>[] = []
+  let currentProjection = projection
   await page.addInitScript(() => {
     const userId = '11111111-1111-1111-1111-111111111111', expiresAt = Math.floor(Date.now() / 1000) + 3600
     const token = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({ sub: userId, exp: expiresAt, aud: 'authenticated', role: 'authenticated' }))}.test-signature`
@@ -19,10 +20,11 @@ async function mock(page: Page, approved = true, projection: Record<string, unkn
     if (name === 'website_member_access') return route.fulfill({ json: { state: 'active', kind: 'operator', expires_at: null } })
     if (name === 'capper_tools_access') return route.fulfill({ json: approved })
     if (name === 'member_stats_games') return route.fulfill({ json: { games: [game], total: 1 } })
+    if (name === 'capper_model_refresh_status') return route.fulfill({ json: { state: 'completed', projections: 1 } })
     if (name === 'capper_tools_game') return route.fulfill({ json: {
       game: { ...game, competition }, history: [{ ...game, game_id: '2', status: 'FT', start_at: '2026-10-10T17:00:00Z', home_score: 27, away_score: 24 }],
       players: [], injuries: [], weather: { temperature_f: 62, wind_mph: 8, precipitation_mm: 0, source: 'forecast', fetched_at: '2026-10-17T01:00:00Z' },
-      odds: null, projection, generated_at: '2026-10-17T03:00:00Z',
+      odds: null, projection: currentProjection, generated_at: '2026-10-17T03:00:00Z',
     } })
     return route.fulfill({ json: [] })
   })
@@ -33,12 +35,12 @@ async function mock(page: Page, approved = true, projection: Record<string, unkn
     const data = route.request().postDataJSON()
     ai.push(data)
     return route.fulfill({ headers: { 'access-control-allow-origin': '*' }, json: {
-      ...(data.action === 'pull' ? { message: 'Saved 16 team games. Weather, odds and player logs were not refreshed.' } : {}),
+      ...(data.action === 'pull' ? { message: 'Saved 16 team games. Weather, odds and player logs were not refreshed.', model_refresh: 'pending' } : {}),
       text: data.action === 'extract' ? 'User screenshot: Chiefs -3.5, report date not visible.' : 'Matchup snapshot\nCached evidence only. Injury coverage unavailable.',
       generated_at: '2026-10-17T03:00:00Z', request_id: 'ai-1', action: data.action,
     } })
   })
-  return { calls, ai }
+  return { calls, ai, setProjection: (value: Record<string, unknown> | null) => { currentProjection = value } }
 }
 test('unapproved members cannot open private research data', async ({ page }) => {
   const h = await mock(page, false)
@@ -110,6 +112,8 @@ test('selected team pull reloads cached report and uses a separate allowance wit
   await expect(page.getByRole('status')).toContainText('One data pull used; no AI action used.')
   expect(h.ai).toEqual([{ action: 'pull', competition: 'nfl', game_id: '1', team_id: '1' }])
   expect(h.calls.filter(name => name === 'capper_tools_game')).toHaveLength(2)
+  expect(h.calls).toContain('capper_model_refresh_status')
+  await expect(page.getByRole('status').filter({ hasText: 'Playmaker model recalculated' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Your breakdown' })).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
@@ -162,4 +166,53 @@ test('NHL research does not invent projections or confirmed goalies when coverag
   await expect(page.getByRole('heading', { name: 'NHL starting goalies' })).toBeVisible()
   await expect(page.getByText('Unknown · Confirmed goalie feed is not connected.', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Projected score')).toHaveCount(0)
+})
+test('team pull waits for the model worker before reloading fresh scores and enabling analysis', async ({ page }) => {
+  const old = { home_score: 27.4, away_score: 21.2, home_probability: .64,
+    home_sample: 10, away_sample: 9, league_sample: 200, model_version: 'ratings-v2',
+    generated_at: '2026-10-17T01:00:00Z', data_updated_at: '2026-10-17T00:00:00Z' }
+  const h = await mock(page, true, old)
+  let checks = 0
+  await page.route('**/rest/v1/rpc/capper_model_refresh_status', route => {
+    checks++
+    expect(route.request().postDataJSON()).toEqual({ p_request_id: 'ai-1' })
+    if (checks === 1) return route.fulfill({ json: { state: 'running' } })
+    h.setProjection({ ...old, home_score: 24.4, home_probability: .57,
+      generated_at: '2026-10-17T03:01:00Z', data_updated_at: '2026-10-17T03:00:00Z' })
+    return route.fulfill({ json: { state: 'completed', projections: 1 } })
+  })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Pull latest team data', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Recalculating model…', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Analyze matchup', exact: true })).toBeDisabled()
+  expect(h.calls.filter(name => name === 'capper_tools_game')).toHaveLength(1)
+  await expect(page.getByRole('status').filter({ hasText: 'Playmaker model recalculated' })).toBeVisible()
+  await expect(page.getByLabel('Projected score')).toContainText('24.4')
+  await expect(page.getByText('Kansas City Chiefs win estimate: 57.0%', { exact: true })).toBeVisible()
+  await expect(page.getByText(/model has not been recalculated from that pull/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Analyze matchup', exact: true })).toBeEnabled()
+  expect(h.ai).toHaveLength(1)
+})
+test('failed model worker reloads saved data but never claims a successful prediction refresh or retries the pull', async ({ page }) => {
+  const h = await mock(page)
+  await page.route('**/rest/v1/rpc/capper_model_refresh_status', route =>
+    route.fulfill({ json: { state: 'failed' } }))
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Pull latest team data', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('model recalculation failed or the model worker was unavailable')
+  await expect(page.getByRole('status')).toHaveCount(0)
+  expect(h.calls.filter(name => name === 'capper_tools_game')).toHaveLength(2)
+  expect(h.ai).toHaveLength(1)
+})
+test('unavailable model status is explicit and does not repeat a provider pull', async ({ page }) => {
+  const h = await mock(page)
+  await page.route('**/rest/v1/rpc/capper_model_refresh_status', route =>
+    route.fulfill({ status: 503, json: { message: 'Status service unavailable' } }))
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await page.getByRole('button', { name: 'Pull latest team data', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('model refresh status could not be checked')
+  expect(h.ai).toHaveLength(1)
 })

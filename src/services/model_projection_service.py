@@ -120,6 +120,12 @@ class ModelProjectionService:
             chunk = rows[start:start + 500]
             supabase_service._execute(lambda: self._db().table("sport_model_projections")
                                       .upsert(chunk, on_conflict="competition,game_id").execute())
+        # Remove estimates that this run can no longer produce, rather than leaving old predictions visible.
+        supabase_service._execute(lambda: self._db().table("sport_model_projections").delete()
+                                  .eq("competition", run.competition)
+                                  .gt("start_at", (now - STORE_PAST).isoformat())
+                                  .lte("start_at", (now + STORE_AHEAD).isoformat())
+                                  .lt("generated_at", now.isoformat()).execute())
         supabase_service._execute(lambda: self._db().table("sport_model_projections").delete()
                                   .eq("competition", run.competition)
                                   .lt("start_at", (now - KEEP_HISTORY).isoformat()).execute())
@@ -147,6 +153,31 @@ class ModelProjectionService:
             run = self.project(competition, games)
             summary["projections"] = self.store(run)
             return summary
+
+    def process_team_pull(self) -> bool:
+        """Recalculate one saved pull using the same engine, without additional provider calls."""
+        # A claim is not idempotent: a transport retry could claim a second job.
+        job = self._db().rpc("claim_capper_model_refresh").execute().data
+        if job is None:
+            return False
+        if not isinstance(job, dict) or job.get("competition") not in COMPETITIONS:
+            raise ValueError("Invalid capper model refresh job")
+        args = {"p_request_id": job["request_id"], "p_claim_token": job["claim_token"]}
+        try:
+            summary = self.refresh(job["competition"])
+        except Exception:
+            saved = supabase_service._execute(
+                lambda: self._db().rpc("finish_capper_model_refresh", {**args, "p_projections": None}).execute()).data
+            if saved is not True:
+                logger.error("capper_model_refresh_failure_not_saved request_id=%s", job["request_id"])
+            raise
+        saved = supabase_service._execute(lambda: self._db().rpc(
+            "finish_capper_model_refresh", {**args, "p_projections": summary["projections"]}).execute()).data
+        if saved is not True:
+            raise RuntimeError("Capper model refresh completion was not saved")
+        logger.info("capper_model_refreshed request_id=%s competition=%s projections=%s",
+                    job["request_id"], job["competition"], summary["projections"])
+        return True
 
     def run_backtest(self, competition: str) -> dict:
         with self._locks[competition]:

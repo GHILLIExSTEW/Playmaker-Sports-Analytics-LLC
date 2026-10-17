@@ -100,6 +100,6 @@ test('AI receives only permitted model estimates and never raw model internals o
   assert.ok(!source.includes('0.569'))
   assert.ok(!source.includes('secret_model_parameter'))
   assert.ok(!source.includes('market_edge'))
-  assert.ok(request.instructions.includes('do not recompute projections'))
+  assert.ok(request.instructions.includes('queue recalculation using the updated cache'))
   assert.ok(request.instructions.includes('NHL starting goalies are unknown'))
 })

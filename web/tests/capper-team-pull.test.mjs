@@ -25,7 +25,9 @@ function harness({ denied = false, invalid = false, saveFails = false, paging = 
 }
 test('team pull uses server-scoped team/season, saves both feeds, and does not use AI', async () => {
   const h = harness(), result = await h.run()
-  assert.equal(result.status, 200)
+  assert.equal(result.status, 202)
+  assert.equal(result.body.model_refresh, 'pending')
+  assert.equal(result.body.request_id, reservation.request_id)
   assert.equal(h.calls.length, 2)
   const gamesUrl = new URL(h.calls[0].url)
   assert.equal(gamesUrl.searchParams.get('team'), '2')

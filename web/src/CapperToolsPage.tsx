@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Search, Sparkles, CloudSun, Activity, Upload, ArrowLeft, Copy, Check } from 'lucide-react'
 import { supabase } from './supabaseClient'
@@ -50,6 +50,8 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
   const [action, setAction] = useState(''), [reviewed, setReviewed] = useState(true), [extracted, setExtracted] = useState(false)
   const [pullTeam, setPullTeam] = useState(report.game.away_id ?? report.game.home_id ?? '')
   const [pullMessage, setPullMessage] = useState('')
+  const pullController = useRef<AbortController | null>(null)
+  useEffect(() => () => pullController.current?.abort(), [])
   const { game, weather, odds, projection } = report
   const logs = report.players.filter(row => row.playerId === player && Date.parse(row.date) < Date.parse(game.start_at))
   const players = [...new Map(report.players.map(row => [row.playerId, row])).values()]
@@ -57,6 +59,8 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
   const values = logs.flatMap(row => row.stats[stat] === undefined ? [] : [row.stats[stat]])
   const line = threshold.trim() ? Number(threshold) : NaN
   const pull = async () => {
+    const controller = new AbortController()
+    pullController.current = controller
     setBusy(true); setAction('pull'); setError(''); setPullMessage(''); setAnalysis(''); setGeneratedAt('')
     try {
       const { data: session, error: sessionError } = await supabase.auth.getSession()
@@ -65,16 +69,38 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL || 'https://lhsevzucmmzetpshpffv.supabase.co'}/functions/v1/capper-research`, {
         method: 'POST', headers: { Authorization: `Bearer ${session.session.access_token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'pull', competition: game.competition, game_id: game.game_id, team_id: pullTeam }),
-        signal: AbortSignal.timeout(75_000),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(75_000)]),
       })
       const result: unknown = await response.json()
       if (!response.ok) throw new Error(object(result) && typeof result.error === 'string' ? result.error : 'Data pull failed.')
-      if (!object(result) || typeof result.message !== 'string') throw new Error('Invalid data pull response.')
-      setPullMessage(`${result.message} One data pull used; no AI action used.`)
+      if (!object(result) || typeof result.message !== 'string' || typeof result.request_id !== 'string'
+        || result.model_refresh !== 'pending') throw new Error('Invalid data pull response. Model recalculation was not confirmed.')
+      setAction('pull-model')
+      setPullMessage('Team data saved. Recalculating the Playmaker model using the updated cache…')
+      let modelError: unknown
+      try {
+        let completed = false
+        for (let attempt = 0; attempt < 90; attempt++) {
+          controller.signal.throwIfAborted()
+          const status = await supabase.rpc('capper_model_refresh_status', { p_request_id: result.request_id })
+            .abortSignal(AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
+          if (status.error) throw new Error(`Data saved, but model refresh status could not be checked: ${status.error.message}`)
+          if (!object(status.data) || !['pending','running','completed','failed'].includes(String(status.data.state))) {
+            throw new Error('Data saved, but model refresh status was invalid.')
+          }
+          if (status.data.state === 'failed') throw new Error('Team data was saved, but model recalculation failed or the model worker was unavailable. No fresh prediction is being claimed.')
+          if (status.data.state === 'completed') { completed = true; break }
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+        if (!completed) throw new Error('Team data was saved, but model recalculation has not finished. Reopen the matchup to check the model timestamp. Do not repeat the data pull just to check.')
+      } catch (reason) { modelError = reason }
+      controller.signal.throwIfAborted()
       const refreshed = await supabase.rpc('capper_tools_game', { p_competition: game.competition, p_game_id: game.game_id })
       if (refreshed.error) throw new Error(`Pull saved, but reloading the report failed: ${refreshed.error.message}`)
       onReport(parseReport(refreshed.data))
-    } catch (reason) { setError(`${errorText(reason)} No automatic retry was made.`) }
+      if (modelError) throw modelError
+      setPullMessage(`${result.message} Playmaker model recalculated from the updated cache; matchups without eligible inputs remain unavailable. One data pull used; no AI action used.`)
+    } catch (reason) { setPullMessage(''); setError(`${errorText(reason)} No automatic retry was made.`) }
     finally { setBusy(false); setAction('') }
   }
   const ai = async (mode: 'analyze' | 'extract') => {
@@ -121,9 +147,9 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
           <option key={team.id} value={team.id ?? ''}>{team.name}</option>)}
       </select></label>
       <button className="tools-primary" disabled={busy || !pullTeam} onClick={() => void pull()}>
-        {action === 'pull' ? 'Pulling latest team data…' : 'Pull latest team data'}
+        {action === 'pull-model' ? 'Recalculating model…' : action === 'pull' ? 'Pulling latest team data…' : 'Pull latest team data'}
       </button>
-      <p className="tools-muted">50 data pulls per capper / 500 shared per UTC day, separate from AI. Wait 15 seconds between pulls. Pulls fetch this team’s games for the selected matchup’s season and available NFL injuries. Weather, odds and player logs keep their existing cache timestamps. Failed attempts count; no automatic retries.</p>
+      <p className="tools-muted">50 data pulls per capper / 500 shared per UTC day, separate from AI. Wait 15 seconds between pulls. Pulls fetch this team’s games for the selected matchup’s season and available NFL injuries, then recalculate the Playmaker model using the updated cache. Weather, odds and player logs keep their existing cache timestamps. The other team is not pulled automatically. Failed attempts count; no automatic retries.</p>
       {pullMessage && <p role="status">{pullMessage}</p>}
     </section>
     <p className="tools-disclosure">Cached research, not a live feed. Missing information is not a clean injury report. Current reports are not historical pregame evidence.</p>
@@ -143,7 +169,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
           <p>Model: {projection.model_version} · Generated {when(projection.generated_at)}</p>
           <Freshness at={projection.data_updated_at} hours={6} />
           {Date.parse(game.synced_at) > Date.parse(projection.generated_at) && <p className="tools-freshness is-stale">Team data was pulled after this projection. The model has not been recalculated from that pull.</p>}
-          <p className="tools-muted">Cached Playmaker projection, not an AI-generated prediction. Team pulls do not rerun the model. Small or incomplete samples reduce reliability. No outcome is guaranteed.</p>
+          <p className="tools-muted">Stored Playmaker projection, not an AI-generated prediction. A successful team pull queues a model recalculation before this report reloads. Unchanged inputs can produce the same scores. Small or incomplete samples reduce reliability. No outcome is guaranteed.</p>
         </> : <p>No eligible pregame projection is available for this matchup. It may be outside model coverage, already started, or awaiting a model run. AI will not invent a score or probability.</p>}
       </section>
       {game.competition === 'hockey:57' && <section className="tools-card"><h3>NHL starting goalies</h3>

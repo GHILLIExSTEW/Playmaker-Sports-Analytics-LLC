@@ -133,6 +133,6 @@ export async function pullTeamData(body: Record<string, unknown>, rpc: Rpc, deps
     return fail(503, 'Provider pull attempted but cache/audit could not be saved. Allowance consumed; do not retry automatically.')
   }
   if (failed) return fail(502, 'Provider pull failed or returned incomplete/invalid data. Cache unchanged; allowance consumed. No automatic retry was made.')
-  return { status: 200, body: { request_id: requestId, games: games.length, generated_at: new Date().toISOString(),
+  return { status: 202, body: { request_id: requestId, model_refresh: 'pending', games: games.length, generated_at: new Date().toISOString(),
     message: `Saved ${games.length} team games for season ${reservation.season}.${injuries ? ` Refreshed NFL injury feed (${injuries.length} entries; coverage may be incomplete).` : ' Injury refresh is unavailable for this league.'} Weather, odds and player logs were not refreshed.` } }
 }

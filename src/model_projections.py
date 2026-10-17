@@ -45,11 +45,12 @@ class ModelProjections(commands.Cog):
     def cog_unload(self) -> None:
         self.refresh_projections.cancel()
         self.daily_backtests.cancel()
+        self.team_pull_projections.cancel()
 
     def start_jobs(self) -> None:
         if not self.enabled:
             return
-        for loop in (self.refresh_projections, self.daily_backtests):
+        for loop in (self.refresh_projections, self.daily_backtests, self.team_pull_projections):
             if not loop.is_running():
                 loop.start()
 
@@ -109,7 +110,15 @@ class ModelProjections(commands.Cog):
             except Exception:
                 await self.report_failure(f"model_backtest:{competition}")
 
+    @tasks.loop(seconds=2)
+    async def team_pull_projections(self) -> None:
+        try:
+            await asyncio.to_thread(self.service.process_team_pull)
+        except Exception:
+            await self.report_failure("capper_model_refresh")
+
     @refresh_projections.before_loop
     @daily_backtests.before_loop
+    @team_pull_projections.before_loop
     async def before_jobs(self) -> None:
         await self.bot.wait_until_ready()
