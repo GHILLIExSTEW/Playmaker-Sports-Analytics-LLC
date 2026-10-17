@@ -109,12 +109,16 @@ test('team form computes 26-3 as a 23-point loss with correct team orientation a
   const h = harness({ history: [result, { ...result, game_id: 'unscored', away_score: null },
     { ...result, game_id: 'future', start_at: '2026-10-19T12:00Z' }, { ...result, game_id: 'unfinished', status: 'NS' },
     { ...result, game_id: 'tie', home_id: '1', away_id: '2', home_score: '0', away_score: 0 }] })
-  assert.equal((await h.handle(req())).status, 200)
-  const sent = JSON.parse(JSON.parse(h.provider[0].options.body).input[0].content[0].text).cached.server_computed_results
-  assert.deepEqual(sent[0], { game_id: 'past', start_at: result.start_at, team_id: '1', team: 'Texans',
-    opponent: 'Titans', team_score: 3, opponent_score: 26, result: 'loss', signed_margin: -23 })
-  assert.equal(sent.length, 3)
-  assert.ok(sent.slice(1).every(row => row.result === 'tie' && row.signed_margin === 0))
+  const response = await h.handle(req())
+  assert.equal(response.status, 200)
+  const text = (await response.json()).text
+  assert.ok(text.includes('Texans vs Titans (2026-10-10T12:00Z): 3-26, loss by 23.'))
+  assert.equal(text.match(/tie \(margin 0\)/g).length, 2)
+  assert.equal(text.match(/loss by 23/g).length, 1)
+  const sent = JSON.parse(JSON.parse(h.provider[0].options.body).input[0].content[0].text).cached
+  assert.deepEqual(sent.history, [])
+  assert.equal(sent.server_computed_results, undefined)
+  assert.match(sent.team_form_coverage, /rendered separately by the server/)
 })
 test('unsupported margin descriptions are blocked explicitly without retries; numeric margins remain valid', async () => {
   for (const output of ['Texans form is mixed, with recent close loss to Titans (26-3)',
