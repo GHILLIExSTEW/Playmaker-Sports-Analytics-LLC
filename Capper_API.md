@@ -9,7 +9,10 @@ Website-only approval does not issue an API key or grant staff models.
 
 The page provides cached game search, recent form, supported player logs and
 threshold comparisons, available NFL injuries, venue weather, and market
-snapshots with timestamps and missing/stale coverage warnings. Inside a matchup,
+snapshots with timestamps and missing/stale coverage warnings.
+Provider schedule placeholders with missing names or invalid team IDs are
+excluded from member game searches before counting and pagination.
+Inside a matchup,
 select **Team to refresh**, then tap **Pull latest team data**. This fetches that
 team's games for the selected matchup's season, plus the current NFL injury feed
 where supported. It saves the provider results and reloads the research report.
@@ -34,6 +37,8 @@ cannot write provider data or complete a pull.
 Apply [the tools migration](supabase/migrations/20261017070000_capper_research_tools.sql),
 then [the AI limits migration](supabase/migrations/20261017080000_capper_research_ai_limits.sql)
 and [the team-pull migration](supabase/migrations/20261017090000_capper_team_pulls.sql).
+Apply [the named-matchups migration](supabase/migrations/20261017100000_research_named_matchups.sql)
+to omit provider placeholders from member searches and their totals.
 Deploy all three function files (`index.ts`, `handler.ts`, `pull.ts`) and
 configure server-only `API_SPORTS_KEY` for data pulls.
 

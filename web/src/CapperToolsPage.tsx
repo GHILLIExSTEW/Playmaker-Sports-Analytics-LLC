@@ -207,7 +207,8 @@ function Tools() {
       </form>
       {!results && !error && <p role="status">Finding matchups…</p>}
       {results && <section><div className="tools-results-heading"><h2>Pick your matchup</h2><span>{results.total} games</span></div>
-        {!results.games.length && <div className="tools-card"><p>No cached matchups found. Try another date or search all cached dates.</p></div>}
+        <p className="tools-muted">Only matchups with both teams identified are shown. Unannounced-team schedule placeholders are excluded.</p>
+        {!results.games.length && <div className="tools-card"><p>No named matchups found in the cache. Try another date or search all cached dates.</p></div>}
         <div className="tools-game-list">{results.games.map(game => <button className="tools-game" key={game.game_id} onClick={() => openGame(game.game_id)}>
           <span><strong>{game.away_name}</strong><span className="tools-muted"> at </span><strong>{game.home_name}</strong></span>
           <span className="tools-muted">{when(game.start_at)} · {game.status}</span><span className="tools-game-open">Research matchup →</span>

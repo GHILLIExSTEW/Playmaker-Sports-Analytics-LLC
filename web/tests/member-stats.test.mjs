@@ -240,5 +240,35 @@ test('member stats: cached search, pregame workspace, member access and isolated
     assert.equal((await save('nfl', 'team', '1')).length, 2)
     await db.exec(`delete from auth.users where id='${other}'`)
     assert.equal((await db.query('select count(*)::int as count from public.member_stats_watchlist where user_id=$1', [other])).rows[0].count, 0)
+    await uid(user)
+    await db.exec(`insert into public.api_sports_events
+      (sport_slug,event_id,league_id,season,event_name,start_at,home_id,home_name,away_id,away_name,status_code)
+      select 'ncaa','placeholder-'||id,'2','2026','Placeholder','2026-10-17 04:00Z','0',null,'0',null,'NS'
+      from generate_series(1,25) id;
+      insert into public.api_sports_events
+      (sport_slug,event_id,league_id,season,event_name,start_at,home_id,home_name,away_id,away_name,status_code)
+      select 'ncaa','named-'||id,'2','2026','Real matchup','2026-10-17 18:00Z',id::text,'College '||id,'100','Opponent','NS'
+      from generate_series(1,25) id;
+      insert into public.api_sports_events
+      (sport_slug,event_id,league_id,season,event_name,start_at,home_id,home_name,away_id,away_name,status_code)
+      values
+        ('ncaa','one-missing','2','2026','Partial','2026-10-17 04:00Z','0',null,'367','Davenport','NS'),
+        ('ncaa','blank-name','2','2026','Blank','2026-10-17 04:00Z','1','  ','2','Opponent','NS'),
+        ('ncaa','tbd-name','2','2026','TBD','2026-10-17 04:00Z','1','TBD','2','Opponent','NS'),
+        ('ncaa','null-id','2','2026','Missing ID','2026-10-17 04:00Z',null,'Named','2','Opponent','NS');`)
+    assert.equal((await call("member_stats_games('ncaa:2','','2026-10-17 00:00Z','2026-10-18 00:00Z')")).total, 54)
+    await load('20261017100000_research_named_matchups.sql')
+    const named = await call("member_stats_games('ncaa:2','','2026-10-17 00:00Z','2026-10-18 00:00Z')")
+    assert.equal(named.total, 25)
+    assert.equal(named.games.length, 20, 'placeholders do not crowd out a page of real matchups')
+    assert.ok(named.games.every(game => game.game_id.startsWith('named-')))
+    const nextNamed = await call("member_stats_games('ncaa:2','','2026-10-17 00:00Z','2026-10-18 00:00Z',20)")
+    assert.equal(nextNamed.games.length, 5)
+    assert.equal(nextNamed.total, 25)
+    assert.equal(new Set([...named.games, ...nextNamed.games].map(game => game.game_id)).size, 25)
+    assert.equal((await call("member_stats_games('ncaa:2','Davenport','2026-10-17 00:00Z','2026-10-18 00:00Z')")).total, 0)
+    await assert.rejects(call("member_stats_games('ncaa:2')", [], 'anon'), /permission denied/)
+    await access({ state: 'inactive' })
+    await assert.rejects(call("member_stats_games('ncaa:2')"), /Active member access required/)
   } finally { await db.close() }
 })
