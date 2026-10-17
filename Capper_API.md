@@ -5,7 +5,22 @@
 Approved cappers can use `/tools` on the website without an API key or terminal.
 Owners approve or block Discord IDs in `/integrations`. An active integration
 key also qualifies unless the Owner explicitly blocks website research access.
-Website-only approval does not issue an API key or grant staff models.
+Website-only approval does not issue an API key or grant staff administration.
+Approved cappers can see the selected matchup's existing Playmaker projected
+scores, total and two-sided win estimates when an eligible pregame projection
+is stored. Only summary outputs, model version, samples and timestamps are
+exposed, not model internals, backtests or capper performance data.
+Finished/started games and mismatched team/kickoff projections are excluded.
+These are model estimates, not sportsbook probabilities or guaranteed results.
+Team pulls do not recompute models; the page flags projections older than a pull.
+The AI may explain supplied estimates, but cannot invent missing predictions.
+
+NHL starting goalies remain explicitly unknown. API-Sports Hockey v1 documents
+no lineup/goalie-confirmation endpoint. The page and AI must not infer confirmation
+from rosters, prior appearances or a model estimate. SportsDataIO's
+[official NHL workflow guide](https://sportsdata.io/developers/workflow-guide/nhl)
+describes projected and confirmed goaltenders, but licensed real-data access is
+still required; the scrambled trial remains excluded.
 
 The page provides cached game search, recent form, supported player logs and
 threshold comparisons, available NFL injuries, venue weather, and market
@@ -39,6 +54,8 @@ then [the AI limits migration](supabase/migrations/20261017080000_capper_researc
 and [the team-pull migration](supabase/migrations/20261017090000_capper_team_pulls.sql).
 Apply [the named-matchups migration](supabase/migrations/20261017100000_research_named_matchups.sql)
 to omit provider placeholders from member searches and their totals.
+Apply [the capper projection migration](supabase/migrations/20261017110000_capper_model_projections.sql)
+and redeploy `capper-research` to include approved model summaries in AI analysis.
 Deploy all three function files (`index.ts`, `handler.ts`, `pull.ts`) and
 configure server-only `API_SPORTS_KEY` for data pulls.
 

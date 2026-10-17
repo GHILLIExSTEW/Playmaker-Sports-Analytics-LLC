@@ -36,6 +36,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await load('20261003050000_api_request_budget.sql')
     await load('20261011193500_shared_api_daily_budget.sql')
     await load('20261017090000_capper_team_pulls.sql')
+    await load('20261017110000_capper_model_projections.sql')
     await db.exec(`insert into api_sports_nfl_games(game_id,league_id,season,kickoff_at,status_short,status_long,home_team_id,home_team_name,away_team_id,away_team_name)
       values(1,1,2026,'2026-10-20','NS','Not started',1,'Home',2,'Away');
       insert into sport_model_weather values('nfl','1',65,7,0,'forecast',now());
@@ -56,7 +57,34 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     assert.equal(game.weather.temperature_f, 65)
     assert.equal(game.injuries.length, 1)
     assert.equal(game.injuries[0].player_name, 'Visible player')
-    assert.ok(!('projection' in game))
+    assert.equal(game.projection, null)
+    await db.exec(`update api_sports_nfl_games set kickoff_at=now()+interval '3 days' where game_id=1;
+      insert into sport_model_projections
+      (competition,game_id,start_at,status_code,home_id,home_name,away_id,away_name,home_score,away_score,home_probability,
+        distribution,margin_sd,total_sd,home_sample,away_sample,league_sample,model_version,data_updated_at,generated_at,details)
+      values('nfl','1',now()+interval '3 days','NS','1','Home','2','Away',27.4,21.2,.64,
+        'normal',14,14,10,9,200,'ratings-v2',now()-interval '2 hours',now()-interval '1 hour','{"private_parameter":99}');`)
+    const model = (await rpc('capper_tools_game', ['nfl','1'])).projection
+    assert.equal(model.home_score, 27.4)
+    assert.equal(model.home_probability, .64)
+    assert.equal(model.model_version, 'ratings-v2')
+    assert.ok(!('details' in model))
+    assert.ok(!('market_edge' in model))
+    for (const change of [
+      "home_id='999'", "start_at=now()+interval '4 days'", "generated_at=now()+interval '4 days'",
+      "data_updated_at=now()+interval '4 days'",
+    ]) {
+      await db.exec(`update sport_model_projections set ${change}`)
+      assert.equal((await rpc('capper_tools_game', ['nfl','1'])).projection, null, change)
+      await db.exec(`update sport_model_projections set home_id='1',start_at=(select kickoff_at from api_sports_nfl_games where game_id=1),
+        generated_at=now()-interval '1 hour',data_updated_at=now()-interval '2 hours'`)
+    }
+    await db.exec("update api_sports_nfl_games set status_short='FT' where game_id=1")
+    assert.equal((await rpc('capper_tools_game', ['nfl','1'])).projection, null, 'no pregame estimate for finished game')
+    await db.exec("update api_sports_nfl_games set status_short='NS' where game_id=1")
+    await db.exec("update api_sports_nfl_games set kickoff_at=now()-interval '1 hour' where game_id=1; update sport_model_projections set start_at=now()-interval '1 hour'")
+    assert.equal((await rpc('capper_tools_game', ['nfl','1'])).projection, null, 'past matchups cannot leak postgame projections')
+    await db.exec("update api_sports_nfl_games set kickoff_at=now()+interval '3 days' where game_id=1; update sport_model_projections set start_at=now()+interval '3 days'")
     await assert.rejects(rpc('reserve_capper_team_pull', ['nfl', '1', '999']), /Select a team/)
     const pull = await rpc('reserve_capper_team_pull', ['nfl', '1', '1'])
     assert.equal(pull.season, '2026')
@@ -109,6 +137,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await uid(owner); await rpc('manage_capper_tools', ['222', false]); await uid(capper)
     await db.exec("insert into capper_api_keys values('222',null)")
     assert.equal(await rpc('capper_tools_access'), false, 'explicit block overrides API credentials')
+    await assert.rejects(rpc('capper_tools_game', ['nfl','1']), /Approved capper/)
     await db.exec("delete from capper_tools_grants where discord_user_id='222'")
     assert.equal(await rpc('capper_tools_access'), true, 'active integration key qualifies')
     await db.exec("select set_config('test.roster','stale',false)")
@@ -120,6 +149,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
       await assert.rejects(db.query('select * from capper_tools_ai_usage'), /permission denied/)
       await assert.rejects(db.query('select * from capper_tools_grants'), /permission denied/)
       await assert.rejects(db.query('select * from capper_team_pulls'), /permission denied/)
+      await assert.rejects(db.query('select * from sport_model_projections'), /permission denied/)
       await assert.rejects(rpc('finish_capper_team_pull', [finalPull.request_id, [], [], false]), /permission denied/)
       if (role === 'anon') await assert.rejects(rpc('capper_tools_access'), /permission denied/)
       await db.exec('reset role')

@@ -9,15 +9,32 @@ import { cachedGames, object, playerLogs, score } from './researchWorkspace'
 import { modelCompetitions } from './sportModels'
 import './CapperTools.css'
 
-type Report = GameStats & { injuries: Record<string, unknown>[]; weather: Record<string, unknown> | null; odds: Record<string, unknown> | null }
+type Projection = {
+  home_score: number; away_score: number; home_probability: number
+  home_sample: number; away_sample: number; league_sample: number
+  model_version: string; generated_at: string; data_updated_at: string
+}
+type Report = GameStats & { injuries: Record<string, unknown>[]; weather: Record<string, unknown> | null; odds: Record<string, unknown> | null; projection: Projection | null }
 const text = (value: unknown) => value === null || value === undefined ? 'Unavailable' : String(value)
 const when = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : 'Unknown date'
 const errorText = (error: unknown) => error instanceof Error ? error.message : object(error) && typeof error.message === 'string' ? error.message : 'Research request failed.'
 function parseReport(value: unknown): Report {
   if (!object(value) || typeof value.generated_at !== 'string' || !Array.isArray(value.injuries) || !value.injuries.every(object)
     || !(value.weather === null || object(value.weather)) || !(value.odds === null || object(value.odds))) throw new Error('Invalid research report.')
+  const projection = value.projection ?? null
+  if (projection !== null && (!object(projection)
+    || !['home_score','away_score','home_probability','home_sample','away_sample','league_sample'].every(key =>
+      typeof projection[key] === 'number' && Number.isFinite(projection[key]) && projection[key] >= 0)
+    || typeof projection.home_probability !== 'number' || projection.home_probability > 1
+    || !['generated_at','data_updated_at'].every(key => typeof projection[key] === 'string' && Number.isFinite(Date.parse(projection[key])))
+    || typeof projection.model_version !== 'string')) throw new Error('Invalid model projection.')
   return { game: cachedGames([value.game])[0], history: cachedGames(value.history), players: playerLogs(value.players),
-    generated_at: value.generated_at, injuries: value.injuries, weather: value.weather, odds: value.odds }
+    generated_at: value.generated_at, injuries: value.injuries, weather: value.weather, odds: value.odds,
+    projection: projection === null ? null : {
+      home_score: Number(projection.home_score), away_score: Number(projection.away_score), home_probability: Number(projection.home_probability),
+      home_sample: Number(projection.home_sample), away_sample: Number(projection.away_sample), league_sample: Number(projection.league_sample),
+      model_version: String(projection.model_version), generated_at: String(projection.generated_at), data_updated_at: String(projection.data_updated_at),
+    } }
 }
 function Freshness({ at, hours }: { at: unknown; hours: number }) {
   const [now, setNow] = useState(Date.now)
@@ -33,7 +50,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
   const [action, setAction] = useState(''), [reviewed, setReviewed] = useState(true), [extracted, setExtracted] = useState(false)
   const [pullTeam, setPullTeam] = useState(report.game.away_id ?? report.game.home_id ?? '')
   const [pullMessage, setPullMessage] = useState('')
-  const { game, weather, odds } = report
+  const { game, weather, odds, projection } = report
   const logs = report.players.filter(row => row.playerId === player && Date.parse(row.date) < Date.parse(game.start_at))
   const players = [...new Map(report.players.map(row => [row.playerId, row])).values()]
   const stats = [...new Set(logs.flatMap(row => Object.keys(row.stats)))].sort()
@@ -111,6 +128,30 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
     </section>
     <p className="tools-disclosure">Cached research, not a live feed. Missing information is not a clean injury report. Current reports are not historical pregame evidence.</p>
     <div className="tools-grid">
+      <section className="tools-card tools-projection"><h3><Sparkles size={18} /> Playmaker model</h3>
+        {projection ? <>
+          <p className="tools-muted">Projected score · model estimate, not a final score</p>
+          <div className="tools-projected-score" aria-label="Projected score">
+            <div><strong>{game.away_name}</strong><span>{projection.away_score.toFixed(1)}</span></div>
+            <div><strong>{game.home_name}</strong><span>{projection.home_score.toFixed(1)}</span></div>
+          </div>
+          <p>Projected total: {(projection.home_score + projection.away_score).toFixed(1)}</p>
+          <p>{game.away_name} win estimate: {((1 - projection.home_probability) * 100).toFixed(1)}%</p>
+          <p>{game.home_name} win estimate: {(projection.home_probability * 100).toFixed(1)}%</p>
+          <p className="tools-muted">Two-sided model probabilities, not regulation-only three-way odds or sportsbook prices.</p>
+          <p>Samples: {game.away_name} {projection.away_sample} · {game.home_name} {projection.home_sample} · League {projection.league_sample}</p>
+          <p>Model: {projection.model_version} · Generated {when(projection.generated_at)}</p>
+          <Freshness at={projection.data_updated_at} hours={6} />
+          {Date.parse(game.synced_at) > Date.parse(projection.generated_at) && <p className="tools-freshness is-stale">Team data was pulled after this projection. The model has not been recalculated from that pull.</p>}
+          <p className="tools-muted">Cached Playmaker projection, not an AI-generated prediction. Team pulls do not rerun the model. Small or incomplete samples reduce reliability. No outcome is guaranteed.</p>
+        </> : <p>No eligible pregame projection is available for this matchup. It may be outside model coverage, already started, or awaiting a model run. AI will not invent a score or probability.</p>}
+      </section>
+      {game.competition === 'hockey:57' && <section className="tools-card"><h3>NHL starting goalies</h3>
+        <p>Unknown · Confirmed goalie feed is not connected.</p>
+        <p className="tools-muted">API-Sports Hockey v1 does not document a starting-lineup or goalie-confirmation feed. Rosters and previous appearances are not proof of tonight’s starter.</p>
+        <p>Expected and confirmed starters must have a verifiable source and timestamp. No goalie assumption is applied by this page.</p>
+        <a href="https://api-sports.io/documentation/hockey/v1" target="_blank" rel="noreferrer">API-Sports hockey coverage</a>
+      </section>}
       <section className="tools-card"><h3><Activity size={18} /> Recent form</h3>
         <p className="tools-muted">Last 5 cached completed, scored games before this matchup. Samples may be incomplete.</p>
         {[{ id: game.away_id, name: game.away_name }, { id: game.home_id, name: game.home_name }].map(team => {

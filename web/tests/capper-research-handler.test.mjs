@@ -15,7 +15,7 @@ test('team pulls require a verified session and dispatch independently from AI a
   assert.equal((await createResearchHandler({ ...deps, authorize: async () => null })(req({ action: 'pull' }))).status, 401)
   assert.equal(pulls, 1)
 })
-function harness({ auth = true, rejectContext = false, rejectBudget = false, providerStatus = 200, incomplete = false, apiKey = 'private-ai-key' } = {}) {
+function harness({ auth = true, rejectContext = false, rejectBudget = false, providerStatus = 200, incomplete = false, apiKey = 'private-ai-key', projection = null } = {}) {
   const calls = [], provider = [], logs = []
   const handle = createResearchHandler({
     apiKey, model: 'gpt-4.1-mini', log: event => logs.push(event),
@@ -25,7 +25,7 @@ function harness({ auth = true, rejectContext = false, rejectBudget = false, pro
         if (rejectContext) throw { code: '42501' }
         return { game: { start_at: '2026-10-18T12:00Z', home_name: 'Verified team' }, history: [],
           players: [{ start_at: '2026-10-19T12:00Z', secret_future_stat: 999 }, { start_at: '2026-10-17T12:00Z', payload: [] }],
-          injuries: [], weather: null, odds: { home_probability: 0.569, home_spread: -2.5, total: 42.5, books: 2, fetched_at: '2026-10-17T12:00Z' } }
+          injuries: [], weather: null, projection, odds: { home_probability: 0.569, home_spread: -2.5, total: 42.5, books: 2, fetched_at: '2026-10-17T12:00Z' } }
       }
       if (rejectBudget) throw { code: 'P0001', message: 'Daily AI allowance reached' }
       return 'request-1'
@@ -88,4 +88,18 @@ test('AI errors and incomplete responses stay explicit and never retry', async (
     assert.ok(value.error)
     assert.ok(!JSON.stringify(value).includes('private-ai-key'))
   }
+})
+test('AI receives only permitted model estimates and never raw model internals or market win probabilities', async () => {
+  const h = harness({ projection: { home_score: 27.4, away_score: 21.2, home_probability: .64,
+    model_version: 'ratings-v2', generated_at: '2026-10-17T12:00Z', data_updated_at: '2026-10-17T11:00Z',
+    details: { secret_model_parameter: 99 }, market_edge: .1 } })
+  assert.equal((await h.handle(req())).status, 200)
+  const request = JSON.parse(h.provider[0].options.body)
+  const source = request.input[0].content[0].text
+  assert.ok(source.includes('"home_probability":0.64'))
+  assert.ok(!source.includes('0.569'))
+  assert.ok(!source.includes('secret_model_parameter'))
+  assert.ok(!source.includes('market_edge'))
+  assert.ok(request.instructions.includes('do not recompute projections'))
+  assert.ok(request.instructions.includes('NHL starting goalies are unknown'))
 })

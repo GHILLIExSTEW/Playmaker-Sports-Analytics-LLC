@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 const game = { competition: 'nfl', sport: 'nfl', game_id: '1', start_at: '2026-10-18T17:00:00Z',
   home_id: '1', home_name: 'Kansas City Chiefs', away_id: '2', away_name: 'Buffalo Bills',
   home_score: null, away_score: null, status: 'NS', synced_at: '2026-10-17T02:00:00Z' }
-async function mock(page: Page, approved = true) {
+async function mock(page: Page, approved = true, projection: Record<string, unknown> | null = null, competition = 'nfl') {
   const calls: string[] = [], ai: Record<string, unknown>[] = []
   await page.addInitScript(() => {
     const userId = '11111111-1111-1111-1111-111111111111', expiresAt = Math.floor(Date.now() / 1000) + 3600
@@ -20,9 +20,9 @@ async function mock(page: Page, approved = true) {
     if (name === 'capper_tools_access') return route.fulfill({ json: approved })
     if (name === 'member_stats_games') return route.fulfill({ json: { games: [game], total: 1 } })
     if (name === 'capper_tools_game') return route.fulfill({ json: {
-      game, history: [{ ...game, game_id: '2', status: 'FT', start_at: '2026-10-10T17:00:00Z', home_score: 27, away_score: 24 }],
+      game: { ...game, competition }, history: [{ ...game, game_id: '2', status: 'FT', start_at: '2026-10-10T17:00:00Z', home_score: 27, away_score: 24 }],
       players: [], injuries: [], weather: { temperature_f: 62, wind_mph: 8, precipitation_mm: 0, source: 'forecast', fetched_at: '2026-10-17T01:00:00Z' },
-      odds: null, generated_at: '2026-10-17T03:00:00Z',
+      odds: null, projection, generated_at: '2026-10-17T03:00:00Z',
     } })
     return route.fulfill({ json: [] })
   })
@@ -118,6 +118,7 @@ test('research dropdowns use readable dark control and option colors', async ({ 
   await page.goto('/tools')
   await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
   const selects = page.locator('.capper-tools select')
+  await expect(page.getByLabel('Team to refresh')).toBeVisible()
   expect(await selects.count()).toBeGreaterThan(0)
   for (const select of await selects.all()) {
     await expect(select).toHaveCSS('color-scheme', 'dark')
@@ -137,4 +138,28 @@ test('research dropdowns use readable dark control and option colors', async ({ 
       expect(contrast).toBeGreaterThanOrEqual(4.5)
     }
   }
+})
+test('approved phone research shows stored model scores, probabilities and stale-after-pull warning', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mock(page, true, { home_score: 27.4, away_score: 21.2, home_probability: .64,
+    home_sample: 10, away_sample: 9, league_sample: 200, model_version: 'ratings-v2',
+    generated_at: '2026-10-17T01:00:00Z', data_updated_at: '2026-10-17T00:00:00Z' })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await expect(page.getByLabel('Projected score')).toContainText('27.4')
+  await expect(page.getByLabel('Projected score')).toContainText('21.2')
+  await expect(page.getByText('Kansas City Chiefs win estimate: 64.0%', { exact: true })).toBeVisible()
+  await expect(page.getByText('Buffalo Bills win estimate: 36.0%', { exact: true })).toBeVisible()
+  await expect(page.getByText('Projected total: 48.6', { exact: true })).toBeVisible()
+  await expect(page.getByText(/model has not been recalculated from that pull/)).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+test('NHL research does not invent projections or confirmed goalies when coverage is missing', async ({ page }) => {
+  await mock(page, true, null, 'hockey:57')
+  await page.goto('/tools')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await expect(page.getByText(/No eligible pregame projection/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'NHL starting goalies' })).toBeVisible()
+  await expect(page.getByText('Unknown · Confirmed goalie feed is not connected.', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Projected score')).toHaveCount(0)
 })
