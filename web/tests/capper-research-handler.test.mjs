@@ -125,6 +125,6 @@ test('unsupported margin descriptions are blocked explicitly without retries; nu
     assert.deepEqual(h.logs, ['research_unsupported_margin_label'])
     assert.equal(h.provider.length, 1)
   }
-  const h = harness({ output: 'Texans lost 3-26 to the Titans, a loss by 23 points.' })
+  const h = harness({ output: 'Texans lost 3-26 to the Titans, a loss by 23 points. The supplied line is close to the stored model total.' })
   assert.equal((await h.handle(req())).status, 200)
 })

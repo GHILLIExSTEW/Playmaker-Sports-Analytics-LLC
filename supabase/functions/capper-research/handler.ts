@@ -55,7 +55,7 @@ function teamResults(game: Record<string, unknown>, history: unknown[]) {
     })
   })
 }
-const marginLabel = /\b(?:close(?:ly)?|narrow(?:ly)?|tight(?:ly)?|nail[-\s]?biter|one[-\s]score|blowout|rout(?:ed)?|comfortable|comfortably)\b/i
+const marginLabel = /\b(?:(?:close|narrow|tight|comfortable|one[-\s]score)\s+(?:(?:road|home|overtime|recent)\s+)*(?:loss|losses|win|wins|game|games|contest|contests|defeat|defeats|victory|victories|finish|finishes)|closely[-\s]+contested|(?:lost|won)\s+(?:narrowly|comfortably)|nail[-\s]?biter|blowout|rout(?:ed)?)\b/i
 
 export function createResearchHandler(deps: Dependencies) {
   return async (request: Request): Promise<Response> => {
