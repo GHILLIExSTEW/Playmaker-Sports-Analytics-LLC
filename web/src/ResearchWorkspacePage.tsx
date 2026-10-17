@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { modelCompetitions } from './sportModels'
-import { fetchPerformance, fetchWorkspace, requestRefresh, score, type PerformanceRow, type ResearchGame, type Workspace } from './researchWorkspace'
+import { fetchPerformance, fetchWorkspace, requestRefresh, searchGames, score, type PerformanceRow, type ResearchGame, type Workspace } from './researchWorkspace'
 import './ResearchWorkspace.css'
 
 const date = (value: string) => new Date(value).toLocaleString()
@@ -9,6 +9,11 @@ const errorMessage = (error: unknown) => error instanceof Error ? error.message
   : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : 'Research request failed.'
 const tabs = ['Matchup', 'Players', 'Odds', 'Performance'] as const
 type Tab = typeof tabs[number]
+const initialDay = (offset: number) => {
+  const day = new Date()
+  day.setDate(day.getDate() + offset)
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+}
 
 function TeamForm({ team, name, history }: { team: string | null; name: string; history: ResearchGame[] }) {
   const games = history.filter(row => team !== null && (row.home_id === team || row.away_id === team)).slice(0, 10)
@@ -70,12 +75,24 @@ export default function ResearchWorkspacePage() {
   const [loading, setLoading] = useState(true), [requesting, setRequesting] = useState(false), [notice, setNotice] = useState('')
   const [player, setPlayer] = useState(''), [stat, setStat] = useState(''), [threshold, setThreshold] = useState('')
   const [split, setSplit] = useState('all'), [oddsMarket, setOddsMarket] = useState('')
+  const [query, setQuery] = useState(''), [from, setFrom] = useState(() => initialDay(-7)), [through, setThrough] = useState(() => initialDay(14))
+  const [filters, setFilters] = useState(() => ({ query: '', from: initialDay(-7), through: initialDay(14) }))
+  const [offset, setOffset] = useState(0), [results, setResults] = useState<{ games: ResearchGame[]; total: number } | null>(null)
+  const [searchLoading, setSearchLoading] = useState(true), [searchError, setSearchError] = useState('')
+  const [gameChoice, setGameChoice] = useState<ResearchGame | null>(null)
+  useEffect(() => {
+    let active = true
+    searchGames(competition, filters.query, filters.from, filters.through, offset)
+      .then(value => { if (active) { setResults(value); setSearchLoading(false) } })
+      .catch(reason => { if (active) { setSearchError(errorMessage(reason)); setSearchLoading(false) } })
+    return () => { active = false }
+  }, [competition, filters, offset, revision])
   useEffect(() => {
     let active = true
     fetchWorkspace(competition, gameId || null).then(value => { if (active) { setData(value); setLoading(false) } })
       .catch(reason => { if (active) { setError(errorMessage(reason)); setLoading(false) } })
     return () => { active = false }
-  }, [competition, gameId, revision])
+  }, [competition, gameId, revision, filters])
   useEffect(() => {
     if (tab !== 'Performance') return
     let active = true
@@ -88,8 +105,18 @@ export default function ResearchWorkspacePage() {
     const timer = window.setTimeout(() => setRevision(value => value + 1), 5000)
     return () => window.clearTimeout(timer)
   }, [data])
-  const selected = data?.games.find(row => row.game_id === gameId)
-  const reload = () => { setLoading(true); setError(''); setRevision(value => value + 1) }
+  const selected = results?.games.find(row => row.game_id === gameId) ?? data?.games.find(row => row.game_id === gameId) ?? gameChoice
+  const reload = () => { setLoading(true); setError(''); setSearchLoading(true); setSearchError(''); setRevision(value => value + 1) }
+  const resetSelection = () => {
+    setGameId(''); setGameChoice(null); setData(null); setLoading(true); setError(''); setPlayer(''); setStat(''); setOddsMarket(''); setNotice('')
+  }
+  const applySearch = () => {
+    setOffset(0); setResults(null); setSearchLoading(true); setSearchError('')
+    setFilters({ query, from, through }); resetSelection()
+  }
+  const changePage = (next: number) => {
+    setOffset(next); setSearchLoading(true); setSearchError('')
+  }
   const refresh = async (kind: string) => {
     setRequesting(true); setNotice(''); setError('')
     try { await requestRefresh(competition, gameId, kind); setNotice('Refresh queued. The bot worker must be running; status appears below.'); setRevision(value => value + 1) }
@@ -110,22 +137,39 @@ export default function ResearchWorkspacePage() {
   const h2h = selected ? data?.history.filter(row => [row.home_id, row.away_id].includes(selected.home_id) && [row.home_id, row.away_id].includes(selected.away_id)).slice(0, 10) ?? [] : []
   return <section className="research-workspace">
     <header><p className="eyebrow">Team research</p><h1>Capper research workspace</h1>
-      <p>Cached research across six leagues. Provider coverage and model estimates are not guarantees. The game selector shows up to 200 games from the past seven days through the next 14 days.</p></header>
+      <p>Cached research across six leagues. Search by team, matchup, game ID or status, and local date range. Clear either date to remove that boundary. Results are paginated, 20 games at a time. No live API credits are used for searches. Provider coverage and model estimates are not guarantees.</p></header>
     <div className="research-tabs" role="tablist" aria-label="Research sections">{tabs.map(value =>
       <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{value}</button>)}</div>
-    {tab !== 'Performance' && <div className="research-controls">
+    {tab !== 'Performance' && <>
+    <form className="research-controls" onSubmit={event => { event.preventDefault(); applySearch() }}>
       <label>League<select aria-label="League" value={competition} onChange={event => {
-        setCompetition(event.target.value); setGameId(''); setData(null); setLoading(true); setError(''); setPlayer(''); setStat(''); setOddsMarket(''); setNotice('')
+        setCompetition(event.target.value); setOffset(0); setResults(null); setSearchLoading(true); setSearchError(''); resetSelection()
       }}>{modelCompetitions.map(item => <option key={item.engineKey} value={item.engineKey}>{item.name}</option>)}</select></label>
-      <label>Game<select aria-label="Game" value={gameId} disabled={loading} onChange={event => {
-        setGameId(event.target.value); setData(null); setLoading(true); setError(''); setPlayer(''); setStat(''); setOddsMarket(''); setNotice('')
-      }}><option value="">Select a matchup</option>{data?.games.map(row => <option key={row.game_id} value={row.game_id}>{date(row.start_at)} - {row.away_name} at {row.home_name}</option>)}</select></label>
-      <button onClick={reload} disabled={loading}>Reload cache</button>
-    </div>}
+      <label>Team, matchup or game ID<input type="search" maxLength={100} value={query} onChange={event => setQuery(event.target.value)} /></label>
+      <label>From date<input type="date" value={from} max={through || undefined} onChange={event => setFrom(event.target.value)} /></label>
+      <label>Through date<input type="date" value={through} min={from || undefined} onChange={event => setThrough(event.target.value)} /></label>
+      <button type="submit">Search games</button>
+      <button type="button" onClick={reload} disabled={loading || searchLoading}>Reload cache</button>
+    </form>
+    {searchError && <p role="alert">{searchError} <button onClick={reload}>Retry game search</button></p>}
+    {searchLoading ? <p role="status">Searching cached games...</p> : !searchError && results && <>
+      <p role="status">{results.total ? `${offset + 1}–${Math.min(offset + 20, results.total)} of ${results.total} cached games` : 'No cached games match these filters. Try another name or date range. No live API calls were made.'}</p>
+      {!!results.games.length && <fieldset className="research-games"><legend>Game</legend>
+        <div className="research-game-list">{results.games.map(row => <label className="research-game-option" key={row.game_id}>
+          <input type="radio" name="research-game" value={row.game_id} checked={gameId === row.game_id} disabled={loading}
+            onChange={() => { resetSelection(); setGameId(row.game_id); setGameChoice(row) }} />
+          <span>{row.away_name} at {row.home_name}<small>{date(row.start_at)} / {row.status} / ID {row.game_id}</small></span>
+        </label>)}</div>
+      </fieldset>}
+      <nav className="research-controls" aria-label="Game search pages">
+        <button disabled={offset === 0} onClick={() => changePage(Math.max(0, offset - 20))}>Previous games</button>
+        <button disabled={offset + 20 >= results.total} onClick={() => changePage(offset + 20)}>Next games</button>
+      </nav>
+    </>}
+    </>}
     {error && <p role="alert">{error} <button onClick={reload}>Retry cached lookup</button></p>}
     {notice && <p role="status">{notice}</p>}
     {loading && tab !== 'Performance' && <p role="status">Loading cached research...</p>}
-    {!loading && !error && tab !== 'Performance' && !data?.games.length && <p>No cached games in this league's recent/upcoming window. No live API calls were made.</p>}
     {tab === 'Performance' ? performanceError ? <p role="alert">{performanceError} <button onClick={reload}>Retry</button></p>
       : performance ? <Performance rows={performance} /> : <p role="status">Loading capper results...</p>
       : selected && data && <>

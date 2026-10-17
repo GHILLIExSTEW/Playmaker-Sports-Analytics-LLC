@@ -120,6 +120,25 @@ export async function fetchWorkspace(competition: string, gameId: string | null)
     players: playerLogs(value.players), lines: bookLines(value.odds?.bookmakers),
     oddsUpdated: value.odds ? text(value.odds.fetched_at) : null, refreshes: value.refreshes, generated_at: value.generated_at }
 }
+export async function searchGames(competition: string, query: string, from: string, through: string, offset: number): Promise<{ games: ResearchGame[]; total: number }> {
+  const boundary = (day: string, nextDay = false) => {
+    if (!day) return null
+    const value = new Date(`${day}T00:00:00`)
+    if (nextDay) value.setDate(value.getDate() + 1)
+    return value.toISOString()
+  }
+  const { data, error } = await supabase.rpc('search_research_games', {
+    p_competition: competition, p_query: query.trim(), p_start: boundary(from),
+    p_end: boundary(through, true), p_offset: offset,
+  })
+  if (error) throw error
+  const value: unknown = data
+  if (!object(value) || !Array.isArray(value.games) || !value.games.every(game)
+    || typeof value.total !== 'number' || !Number.isSafeInteger(value.total) || value.total < 0) {
+    throw new Error('Game search returned invalid data.')
+  }
+  return { games: value.games.map(displayGame), total: value.total }
+}
 export async function requestRefresh(competition: string, gameId: string, kind: string): Promise<string> {
   const { data, error } = await supabase.rpc('request_research_refresh', { p_competition: competition, p_game_id: gameId, p_kind: kind })
   if (error) throw error

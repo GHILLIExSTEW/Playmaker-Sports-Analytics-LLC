@@ -65,11 +65,13 @@ test('research workspace authorization, caches, cooldowns, claims and performanc
       alter default privileges grant execute on functions to anon, authenticated;
     `)
     await load('20261017020000_capper_research_workspace.sql')
+    await load('20261017030000_research_game_search.sql')
     for (const state of [{ state: 'signed-out' }, { state: 'age-required' }, { state: 'active', kind: 'paid' }, { state: 'active', kind: 'trial' }]) {
       await db.query("select set_config('test.access',$1,false)", [JSON.stringify(state)])
       for (const sql of [
         "select operator_research_workspace('nfl','1')", 'select operator_capper_performance()',
         "select request_research_refresh('nfl','1','game')",
+        "select search_research_games('nfl')",
       ]) await assert.rejects(rpc(sql), /Research access required/)
     }
     await db.exec(`select set_config('test.access','{"state":"active","kind":"research"}',false)`)
@@ -79,6 +81,30 @@ test('research workspace authorization, caches, cooldowns, claims and performanc
     assert.equal(data.games.find(g => g.game_id === '1').home_score, null)
     assert.deepEqual(data.players, [])
     assert.equal(data.odds, null)
+    const search = async args => (await rpc(`select search_research_games(${args}) as data`))[0].data
+    assert.equal((await search("'nfl','home away'")).total, 2)
+    assert.equal((await search("'nfl','HOME'")).games.length, 2)
+    assert.equal((await search("'nfl','1'")).games[0].game_id, '1')
+    assert.equal((await search("'nfl','FT'")).games[0].game_id, '2')
+    assert.equal((await search("'nfl','%'")).total, 0)
+    assert.equal((await search("'nfl','missing'")).total, 0)
+    assert.equal((await search("'nfl','',now(),now()+interval '2 days'")).total, 1)
+    await assert.rejects(search("'nfl','',now(),now()-interval '1 day'"), /Start date/)
+    await assert.rejects(search("'nfl','',null,null,-1"), /Invalid search offset/)
+    await assert.rejects(search("'bad'"), /Unsupported/)
+    await assert.rejects(rpc("select search_research_games('nfl')", 'anon'), /permission denied/)
+    await db.exec(`insert into public.api_sports_nfl_games
+      (game_id,league_id,season,kickoff_at,status_short,status_long,home_team_id,home_team_name,away_team_id,away_team_name)
+      select id,1,2025,'2025-01-01'::timestamptz + id * interval '1 minute','FT','Finished',1,'Historical',2,'Opponent'
+      from generate_series(100,324) id`)
+    const first = await search("'nfl','historical'")
+    const second = await search("'nfl','historical',null,null,20")
+    assert.equal(first.total, 225)
+    assert.equal(first.games.length, 20)
+    assert.equal(second.games.length, 20)
+    assert.equal(first.games.some(g => second.games.some(other => other.game_id === g.game_id)), false)
+    assert.equal((await search("'nfl','324'")).games[0].game_id, '324')
+    await db.exec('delete from public.api_sports_nfl_games where game_id >= 100')
     const college = (await rpc("select operator_research_workspace('basketball:116','11') as data"))[0].data
     assert.equal(college.games.length, 1)
     await assert.rejects(rpc("select operator_research_workspace('basketball:8',null)"), /Unsupported/)

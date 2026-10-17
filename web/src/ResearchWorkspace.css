@@ -13,3 +13,11 @@
 .research-workspace table { width: 100%; border-collapse: collapse; text-align: left; }
 .research-workspace th, .research-workspace td { padding: .7rem; border-bottom: 1px solid #586774; }
 .research-workspace [role="alert"] { border-left: 4px solid #efb167; padding: .8rem; }
+.research-controls > label { flex: 1 1 180px; }
+.research-games { min-width: 0; border: 1px solid #586774; border-radius: 8px; }
+.research-game-list { max-height: 22rem; overflow-y: auto; }
+.research-workspace .research-game-option { display: flex; flex-direction: row; align-items: center; gap: .8rem; padding: .75rem; border-bottom: 1px solid #586774; cursor: pointer; }
+.research-game-option input { flex: 0 0 auto; }
+.research-game-option span { min-width: 0; overflow-wrap: anywhere; }
+.research-game-option small { display: block; margin-top: .3rem; }
+.research-game-option:has(input:checked) { background: #243b49; }
