@@ -114,6 +114,13 @@ class PlayPresentation(commands.Cog):
             hook = await self.capper_webhook(message.channel)
             if message.webhook_id != hook.id:
                 raise ValueError("Refusing to edit a message from an unrelated webhook.")
+            if kwargs.get("embed") is not None:
+                kwargs["embed"].remove_author()
+                if "attachments" not in kwargs:
+                    image_url = kwargs["embed"].image.url
+                    attachment = next((item for item in message.attachments if item.url == image_url), None)
+                    if attachment is not None:
+                        kwargs["embed"].set_image(url=f"attachment://{attachment.filename}")
             await hook.edit_message(message.id, **kwargs)
         else:
             await message.edit(**kwargs)
@@ -160,6 +167,7 @@ class PlayPresentation(commands.Cog):
                 embed.description = None
                 embed.set_image(url=f"attachment://{file.filename}")
                 if payload["tracking_scope"] == "capper":
+                    embed.remove_author()
                     hook = await self.capper_webhook(channel)
                     return await hook.send(
                         username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
@@ -272,6 +280,7 @@ class PlayPresentation(commands.Cog):
                 embed.set_image(url=f"attachment://{file.filename}")
                 kwargs["file"] = file
             if payload.get("tracking_scope") == "capper":
+                embed.remove_author()
                 hook = await self.capper_webhook(channel)
                 repost = await hook.send(
                     username=author.display_name, avatar_url=author.display_avatar.url, wait=True,

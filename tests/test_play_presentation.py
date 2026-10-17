@@ -161,7 +161,7 @@ def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play
     assert sent["content"] == "<@&456>"
     assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
-    assert sent["embed"].author.name == "Ace"
+    assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
     assert sent["avatar_url"] == request.user.display_avatar.url
     assert sent["wait"] is True
@@ -255,7 +255,8 @@ def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.repost_official_play(channel, 500, data, author))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
-    assert sent["embed"].author.name == "Ace"
+    assert sent["embed"].author.name is None
+    assert sent["username"] == "Ace"
     assert sent["embed"].fields == []
     assert sent["file"]
     assert mock_play_cards.call_args.kwargs["slip"] == b"original"
@@ -271,9 +272,11 @@ def test_webhook_capper_cards_edit_through_owned_webhook(operation):
         "id": 7, "message_id": "500", "tracking_scope": "capper", "status": "win", "units": 2, "odds": 100,
     }
     presentation.official.get_play_legs.return_value = []
+    original = discord.Embed()
+    original.set_author(name="Ace", icon_url="https://example.com/avatar.png")
     message = SimpleNamespace(
         id=500, webhook_id=777, channel=SimpleNamespace(id=303), guild=SimpleNamespace(id=123),
-        author=SimpleNamespace(id=777), embeds=[discord.Embed()], attachments=[], edit=AsyncMock(),
+        author=SimpleNamespace(id=777), embeds=[original], attachments=[], edit=AsyncMock(),
     )
     presentation.fetch_guild_message = AsyncMock(return_value=message)
     if operation == "settle":
@@ -281,6 +284,7 @@ def test_webhook_capper_cards_edit_through_owned_webhook(operation):
     else:
         asyncio.run(presentation.refresh_play_card(message.guild, 7))
     presentation.capper_webhook.return_value.edit_message.assert_awaited_once()
+    assert presentation.capper_webhook.return_value.edit_message.call_args.kwargs["embed"].author.name is None
     message.edit.assert_not_awaited()
     presentation.staff_alert.assert_not_awaited()
 
@@ -291,6 +295,21 @@ def test_unrelated_webhook_cannot_be_edited():
     with pytest.raises(ValueError, match="unrelated webhook"):
         asyncio.run(presentation.edit_play_message(message, embed=discord.Embed()))
     presentation.capper_webhook.return_value.edit_message.assert_not_awaited()
+
+
+def test_webhook_embed_only_edit_keeps_image_bound_to_attachment():
+    presentation = cog()
+    embed = discord.Embed()
+    embed.set_author(name="Ace")
+    embed.set_image(url="https://cdn.discordapp.com/card.png")
+    message = SimpleNamespace(
+        id=500, webhook_id=777, channel=SimpleNamespace(id=303),
+        attachments=[SimpleNamespace(url=embed.image.url, filename="card.png")],
+    )
+    asyncio.run(presentation.edit_play_message(message, embed=embed))
+    edited = presentation.capper_webhook.return_value.edit_message.call_args.kwargs["embed"]
+    assert edited.author.name is None
+    assert edited.image.url == "attachment://card.png"
 
 
 def test_capper_webhook_reuses_only_bot_owned_named_hook():
