@@ -120,17 +120,12 @@ class PlayPresentation(commands.Cog):
                     embed.set_field_at(index, name=field.name, value=value, inline=field.inline)
         if payload.get("image_url"):
             embed.set_image(url=payload["image_url"])
-        if payload.get("tracking_scope") == "capper":
-            return await channel.send(
-                content=f"<@&{ROOKIE_ROLE_ID}>",
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
-                ),
-                embed=embed,
-            )
-        if payload.get("tracking_scope") == "official":
+        if payload.get("tracking_scope") in {"official", "capper"}:
+            card_play = {**payload, "id": payload["play_id"], "status": "open"}
+            if payload["tracking_scope"] == "capper" and card_play.get("play_text"):
+                card_play["play_text"] = card_play["play_text"].replace(f"<@&{HIGHROLLER_ROLE_ID}>", "").strip()
             file = await play_card_service.file(
-                {**payload, "id": payload["play_id"], "status": "open"}, interaction.guild,
+                card_play, interaction.guild,
                 slip=await asyncio.to_thread(download_artwork, payload["image_url"]) if payload.get("image_url") else None,
                 legs=payload.get("leg_records"),
             )
@@ -138,6 +133,14 @@ class PlayPresentation(commands.Cog):
                 embed.clear_fields()
                 embed.description = None
                 embed.set_image(url=f"attachment://{file.filename}")
+                if payload["tracking_scope"] == "capper":
+                    return await channel.send(
+                        content=f"<@&{ROOKIE_ROLE_ID}>",
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
+                        ),
+                        embed=embed, file=file,
+                    )
                 return await channel.send(embed=embed, file=file)
             finally:
                 file.close()
@@ -149,8 +152,11 @@ class PlayPresentation(commands.Cog):
         try:
             play = await asyncio.to_thread(self.official._fetch_play, play_id)
             embed = build_settled_play_embed(message, play_id, result)
-            if play.get("tracking_scope") == "official":
-                file = await play_card_service.file(play, message.guild, source=message)
+            if play.get("tracking_scope") in {"official", "capper"}:
+                file = await play_card_service.file(
+                    play, message.guild, source=message,
+                    legs=await asyncio.to_thread(self.official.get_play_legs, play_id),
+                )
                 try:
                     embed.clear_fields()
                     embed.description = None
@@ -183,8 +189,11 @@ class PlayPresentation(commands.Cog):
             if message is None or self.bot.user is None or message.author.id != self.bot.user.id:
                 return
             embed = build_play_card_embed(message, play)
-            if play.get("tracking_scope") == "official":
-                file = await play_card_service.file(play, message.guild, source=message)
+            if play.get("tracking_scope") in {"official", "capper"}:
+                file = await play_card_service.file(
+                    play, message.guild, source=message,
+                    legs=await asyncio.to_thread(self.official.get_play_legs, play_id),
+                )
                 try:
                     embed.clear_fields()
                     embed.description = None
@@ -214,10 +223,10 @@ class PlayPresentation(commands.Cog):
                 icon_url=author.display_avatar.url,
             )
             kwargs = {}
-            if payload.get("tracking_scope") == "official":
+            if payload.get("tracking_scope") in {"official", "capper"}:
                 file = await play_card_service.file(
                     {**payload, "id": payload["play_id"], "status": "open"}, channel.guild,
-                    slip=await image.read() if image is not None else None, legs=payload.get("leg_records"),
+                    slip=await image.read() if image is not None else None, legs=payload.get("leg_records"), source=source,
                 )
                 embed.clear_fields()
                 embed.description = None

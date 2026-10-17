@@ -64,6 +64,20 @@ def test_stylized_server_name_renders_like_supported_plain_letters():
     assert normalized.getvalue() == plain.getvalue()
 
 
+def test_capper_card_branding_never_claims_official_team_tracking(monkeypatch):
+    original = ImageDraw.ImageDraw.text
+    drawn = []
+
+    def capture(self, xy, text, *args, **kwargs):
+        drawn.append(text)
+        return original(self, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", capture)
+    render_play_card(play(tracking_scope="capper", stars=None), png(), png(), "Server")
+    assert "CAPPER PLAYS  |  CAPPER TRACKING" in drawn
+    assert not any("OFFICIAL TEAM" in text or "Team rating" in text for text in drawn)
+
+
 @pytest.mark.parametrize("stars", [3, 4, 5])
 def test_rating_is_rendered_as_gold_stars(monkeypatch, stars):
     original = ImageDraw.ImageDraw.polygon

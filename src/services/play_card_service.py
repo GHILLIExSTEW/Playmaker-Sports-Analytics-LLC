@@ -158,7 +158,8 @@ def render_play_card(play: dict, slip: bytes | None, badge: bytes | None, badge_
         canvas.paste(logo, (920 + (240 - logo.width) // 2, slip_height + padding), logo)
     for index, line in enumerate(badge_lines):
         draw.text((920, slip_height + 290 + index * 30), line, font=small_font, fill=muted)
-    draw.text((padding, canvas.height - 46), "PLAYMAKER PICKS  |  OFFICIAL TEAM TRACKING", font=small_font, fill=muted)
+    branding = "CAPPER PLAYS  |  CAPPER TRACKING" if play.get("tracking_scope") == "capper" else "PLAYMAKER PICKS  |  OFFICIAL TEAM TRACKING"
+    draw.text((padding, canvas.height - 46), branding, font=small_font, fill=muted)
     result = BytesIO()
     canvas.save(result, format="PNG", optimize=True)
     result.seek(0)

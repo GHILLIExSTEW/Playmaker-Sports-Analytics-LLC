@@ -140,7 +140,7 @@ def test_tail_database_failure_reports_after_defer():
 
 def test_publishing_preserves_author_image_and_explicit_target():
     presentation = cog()
-    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "image_url": "https://example.com/slip.png"}
     asyncio.run(presentation.publish_play_message(request, data, ("OFFICIAL_CHANNEL_ID", 303)))
     presentation.resolve_channel.assert_awaited_once_with(303, "OFFICIAL_CHANNEL_ID", required=True)
@@ -149,22 +149,28 @@ def test_publishing_preserves_author_image_and_explicit_target():
     assert embed.image.url == data["image_url"]
 
 
-def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch):
+def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
     presentation = cog()
-    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
     sent = presentation.resolve_channel.return_value.send.call_args.kwargs
     assert sent["content"] == "<@&456>"
     assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
+    assert sent["embed"].author.name == "Ace"
+    assert sent["embed"].image.url.startswith("attachment://playmaker-card-")
+    assert sent["embed"].fields == []
+    assert sent["embed"].description is None
+    assert "file" in sent
+    assert mock_play_cards.call_args.args[0]["tracking_scope"] == "capper"
 
 
-def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypatch):
+def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     presentation = cog()
-    request = SimpleNamespace(user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
+    request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {
         **payload(),
         "tracking_scope": "capper",
@@ -174,9 +180,9 @@ def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypat
     }
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
     embed = presentation.resolve_channel.return_value.send.call_args.kwargs["embed"]
-    assert embed.description == "1u \u2022 1-leg \u2022 +150"
-    assert "<@&789>" not in embed.description
-    assert "<@&789>" not in embed.fields[-1].value
+    assert embed.description is None
+    assert embed.fields == []
+    assert mock_play_cards.call_args.args[0]["play_text"] == "Pick"
 
 
 def test_publishing_official_play_does_not_add_rookie_mention(monkeypatch):
@@ -198,6 +204,59 @@ def test_publish_missing_channel_raises_without_claiming_success():
     presentation.resolve_channel.return_value = None
     with pytest.raises(RuntimeError, match="unavailable"):
         asyncio.run(presentation.publish_play_message(Mock(), payload()))
+
+
+@pytest.mark.parametrize("operation", ["settle", "refresh"])
+def test_capper_card_regenerates_on_settlement_and_refresh(operation, mock_play_cards):
+    presentation = cog()
+    play = {
+        "id": 7, "message_id": "500", "tracking_scope": "capper",
+        "status": "win", "units": 2, "odds": -110,
+    }
+    presentation.official._fetch_play.return_value = play
+    presentation.official.get_play_legs.return_value = [{"selection": "Purdue -2.5"}]
+    original = discord.Embed()
+    original.set_author(name="Ace")
+    message = SimpleNamespace(
+        id=500, guild=SimpleNamespace(id=123), author=SimpleNamespace(id=999),
+        embeds=[original], attachments=[], edit=AsyncMock(),
+    )
+    presentation.fetch_guild_message = AsyncMock(return_value=message)
+    if operation == "settle":
+        asyncio.run(presentation.update_play_message(message, 7, "win"))
+    else:
+        asyncio.run(presentation.refresh_play_card(message.guild, 7))
+    mock_play_cards.assert_awaited_once_with(
+        play, message.guild, source=message, legs=presentation.official.get_play_legs.return_value,
+    )
+    edited = message.edit.call_args.kwargs
+    assert edited["embed"].author.name == "Ace"
+    assert edited["embed"].image.url.startswith("attachment://playmaker-card-")
+    assert edited["attachments"]
+    assert "view" not in edited and "content" not in edited
+    presentation.staff_alert.assert_not_awaited()
+
+
+def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_play_cards):
+    presentation = cog()
+    source = SimpleNamespace(
+        content="", embeds=[], attachments=[SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"original"))],
+        delete=AsyncMock(),
+    )
+    channel = SimpleNamespace(
+        guild=SimpleNamespace(id=123), fetch_message=AsyncMock(return_value=source), send=AsyncMock(),
+    )
+    author = SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
+    data = {**payload(), "tracking_scope": "capper"}
+    asyncio.run(presentation.repost_official_play(channel, 500, data, author))
+    sent = channel.send.call_args.kwargs
+    assert sent["embed"].author.name == "Ace"
+    assert sent["embed"].fields == []
+    assert sent["file"]
+    assert mock_play_cards.call_args.kwargs["slip"] == b"original"
+    assert mock_play_cards.call_args.kwargs["source"] is source
+    assert mock_play_cards.call_args.args[0]["tracking_scope"] == "capper"
+    source.delete.assert_awaited_once()
 
 
 def test_settled_card_http_failure_alerts_without_undoing_result():
