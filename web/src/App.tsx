@@ -42,6 +42,7 @@ const NflPage = lazy(() => import('./NflPage'))
 const NflMatchupLab = lazy(() => import('./NflMatchupLab'))
 const DataModelsPage = lazy(() => import('./DataModelsPage'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspacePage'))
+const MemberStatsPage = lazy(() => import('./MemberStatsPage'))
 const UserGuidePage = lazy(() => import('./UserGuidePage'))
 const SportsHomePreview = lazy(() => import('./SportsHomePreview'))
 const MemberAccountPage = lazy(() => import('./MemberAccountPage'))
@@ -311,6 +312,8 @@ function Website() {
           ? 'Expert Picks | Playmaker Picks'
         : routePath === '/account'
           ? 'Member Account | Playmaker Picks'
+        : routePath === '/stats'
+          ? 'Member Stats | Playmaker Picks'
         : routePath === '/guide'
           ? 'User Guide | Playmaker Picks'
             : routePath === '/membership'
@@ -397,6 +400,8 @@ function Website() {
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading NFL research...</p>}><NflMatchupLab /></Suspense></OperatorResearchAccess>
         ) : routePath === '/models' ? (
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading sports models...</p>}><DataModelsPage /></Suspense></OperatorResearchAccess>
+        ) : routePath === '/stats' ? (
+          <Suspense fallback={<p className="account-state">Loading member stats...</p>}><MemberStatsPage /></Suspense>
         ) : routePath === '/research' ? (
           <OperatorResearchAccess><Suspense fallback={<p className="account-state">Loading capper research...</p>}><ResearchWorkspace /></Suspense></OperatorResearchAccess>
         ) : routePath === '/guide' ? (

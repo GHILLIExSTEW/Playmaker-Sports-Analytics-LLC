@@ -36,6 +36,10 @@ function game(value: unknown): value is CachedResearchGame {
 const displayGame = (row: CachedResearchGame): ResearchGame => ({ ...row,
   home_name: row.home_name ?? 'Team not announced', away_name: row.away_name ?? 'Team not announced', status: row.status ?? 'Unknown',
 })
+export function cachedGames(value: unknown): ResearchGame[] {
+  if (!Array.isArray(value) || !value.every(game)) throw new Error('Invalid cached game list.')
+  return value.map(displayGame)
+}
 function numericStats(value: unknown, prefix = ''): Record<string, number> {
   if (object(value)) return Object.assign({}, ...Object.entries(value).map(([key, child]) => numericStats(child, `${prefix} ${key}`.trim())))
   if (Array.isArray(value)) return Object.assign({}, ...value.map(child => {
