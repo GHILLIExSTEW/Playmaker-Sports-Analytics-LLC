@@ -32,6 +32,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await load('20261017020000_capper_research_workspace.sql')
     await load('20261017050000_member_stats_workspace.sql')
     await load('20261017070000_capper_research_tools.sql')
+    await load('20261017080000_capper_research_ai_limits.sql')
     await db.exec(`insert into api_sports_nfl_games(game_id,league_id,season,kickoff_at,status_short,status_long,home_team_id,home_team_name,away_team_id,away_team_name)
       values(1,1,2026,'2026-10-20','NS','Not started',1,'Home',2,'Away');
       insert into sport_model_weather values('nfl','1',65,7,0,'forecast',now());
@@ -56,11 +57,23 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await rpc('reserve_capper_tools_ai')
     await assert.rejects(rpc('reserve_capper_tools_ai'), /Wait 15 seconds/)
     await db.exec(`update capper_tools_ai_usage set requested_at=now()-interval '1 minute';
+      insert into capper_tools_ai_usage(user_id,requested_at) select '${capper}',now()-interval '1 minute' from generate_series(1,23);`)
+    assert.ok(await rpc('reserve_capper_tools_ai'), '25th action is no longer blocked')
+    await db.exec(`update capper_tools_ai_usage set requested_at=now()-interval '1 minute';
       insert into capper_tools_ai_usage(user_id,requested_at) select '${capper}',now()-interval '1 minute' from generate_series(1,24);`)
-    await assert.rejects(rpc('reserve_capper_tools_ai'), /Daily AI allowance/)
+    assert.ok(await rpc('reserve_capper_tools_ai'), '50th capper action is allowed')
+    await db.exec("update capper_tools_ai_usage set requested_at=now()-interval '1 minute'")
+    await assert.rejects(rpc('reserve_capper_tools_ai'), /50 per capper, 500 shared, UTC/)
+    assert.equal((await db.query('select count(*)::int as count from capper_tools_ai_usage')).rows[0].count, 50)
     await db.exec(`delete from capper_tools_ai_usage; insert into capper_tools_ai_usage(user_id,requested_at)
-      select '${owner}',now()-interval '1 minute' from generate_series(1,250);`)
-    await assert.rejects(rpc('reserve_capper_tools_ai'), /Daily AI allowance/)
+      select '${owner}',now()-interval '1 minute' from generate_series(1,249);`)
+    assert.ok(await rpc('reserve_capper_tools_ai'), '250th shared action is no longer blocked')
+    await db.exec(`update capper_tools_ai_usage set requested_at=now()-interval '1 minute';
+      insert into capper_tools_ai_usage(user_id,requested_at) select '${owner}',now()-interval '1 minute' from generate_series(1,249);`)
+    assert.ok(await rpc('reserve_capper_tools_ai'), '500th shared action is allowed')
+    await db.exec("update capper_tools_ai_usage set requested_at=now()-interval '1 minute'")
+    await assert.rejects(rpc('reserve_capper_tools_ai'), /50 per capper, 500 shared, UTC/)
+    assert.equal((await db.query('select count(*)::int as count from capper_tools_ai_usage')).rows[0].count, 500)
     await uid(owner); await rpc('manage_capper_tools', ['222', false]); await uid(capper)
     await db.exec("insert into capper_api_keys values('222',null)")
     assert.equal(await rpc('capper_tools_access'), false, 'explicit block overrides API credentials')

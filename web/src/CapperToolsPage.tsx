@@ -132,7 +132,7 @@ function Matchup({ report }: { report: Report }) {
       </details>
       {extracted && <label className="tools-review"><input type="checkbox" disabled={busy} checked={reviewed} onChange={event => setReviewed(event.target.checked)} /> I reviewed and corrected the extracted notes.</label>}
       <button className="tools-primary" disabled={busy || !reviewed} onClick={() => void ai('analyze')}><Sparkles size={18} /> {busy && action === 'analyze' ? 'Building your breakdown…' : 'Analyze matchup'}</button>
-      <p className="tools-muted">25 AI actions per capper / 250 shared per UTC day; wait 15 seconds between actions. Extraction and analysis each count. No automatic retries. Cached browsing uses no AI calls.</p>
+      <p className="tools-muted">50 AI actions per capper / 500 shared per UTC day; wait 15 seconds between actions. Extraction and analysis each count. No automatic retries. Cached browsing uses no AI calls.</p>
       {busy && <p role="status">Working on your request. Keep this page open.</p>}
       {error && <p role="alert" className="tools-error">{error}</p>}
       {analysis && <section className="tools-analysis"><h3>Your breakdown</h3><p className="tools-muted">AI-generated · {when(generatedAt)} · Verify facts before acting. Not a guaranteed pick.</p><div className="tools-analysis-text">{analysis}</div>

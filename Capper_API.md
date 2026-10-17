@@ -18,9 +18,10 @@ server-only `OPENAI_API_KEY`; optionally set `OPENAI_RESEARCH_MODEL` (default
 `gpt-4.1-mini`). Deploy with gateway JWT verification disabled as in
 [config.toml](supabase/config.toml); the handler verifies the session through
 Supabase Auth and uses the user's JWT for all data and allowance RPCs.
-Apply [the tools migration](supabase/migrations/20261017070000_capper_research_tools.sql).
+Apply [the tools migration](supabase/migrations/20261017070000_capper_research_tools.sql),
+then [the AI limits migration](supabase/migrations/20261017080000_capper_research_ai_limits.sql).
 
-AI extraction and analysis share 25 actions per user and 250 globally per UTC
+AI extraction and analysis share 50 actions per user and 500 globally per UTC
 day, with a 15-second user cooldown. Failed provider actions count; no automatic
 retries or refunds. Cached browsing does not consume these actions or API-Sports
 requests. Screenshot extraction accepts one PNG/JPEG/WebP up to 4 MiB, sends it
