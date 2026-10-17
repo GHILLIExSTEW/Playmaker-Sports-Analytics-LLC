@@ -12,6 +12,10 @@ const origins = new Set(['https://playmakersportsanalytics.com', 'https://www.pl
 const competitions = ['nfl', 'basketball:12', 'basketball:116', 'baseball:1', 'hockey:57', 'ncaa:2']
 const instructions = `You are Playmaker's sports research assistant. Use only the supplied cached data and user-supplied material.
 No browsing or invented injuries, live lines, weather, statistics, or model outputs.
+For Team form, use server_computed_results as the authority for each team's scored results and signed margins.
+State the team, opponent, team score, opponent score, result and numeric margin explicitly. A 3-26 loss is a loss by 23, not a close loss.
+Do not use qualitative game-margin labels: close, closely contested, narrow, tight, nail-biter, one-score, blowout, rout or comfortable.
+Use numeric margins instead for every sport; do not invent sport-specific closeness thresholds. Missing/unscored/non-final games are not results.
 If the server supplies a projection, quote its score and two-sided win probabilities only as cached Playmaker model estimates,
 with model version, generation time, input-data time and sample limitations. Never present model estimates as facts, market odds or guaranteed outcomes.
 If projection is absent, explicitly say a model prediction is unavailable; do not invent one or derive a probability from recent form.
@@ -26,6 +30,32 @@ The home designation does NOT verify the game venue. Weather is a cached home-ve
 Never infer a venue, week number, player importance, starting role, return date, or win probability that is not explicitly supported.
 Quote report dates and cache timestamps next to injury, weather and market claims. Injury narratives are provider claims, not independently verified facts.
 Do not call a team healthier based on the number of cached injury entries; coverage can be incomplete. Market spreads are cached consensus, not live offers.`
+
+function numericScore(value: unknown): number | null {
+  if (object(value)) return numericScore(value.total)
+  if (typeof value !== 'number' && typeof value !== 'string' || typeof value === 'string' && !value.trim()) return null
+  const score = Number(value)
+  return Number.isFinite(score) && score >= 0 ? score : null
+}
+function teamResults(game: Record<string, unknown>, history: unknown[]) {
+  return history.flatMap(value => {
+    if (!object(value) || !['FT','AOT','AP','COMPLETED','FINISHED'].includes(String(value.status).toUpperCase())
+      || !Number.isFinite(Date.parse(String(value.start_at))) || Date.parse(String(value.start_at)) >= Date.parse(String(game.start_at))) return []
+    const home = numericScore(value.home_score), away = numericScore(value.away_score)
+    if (home === null || away === null) return []
+    return ['home','away'].flatMap(side => {
+      const teamId = game[`${side}_id`]
+      if (typeof teamId !== 'string' || !teamId) return []
+      const isHome = teamId === value.home_id
+      if (!isHome && teamId !== value.away_id) return []
+      const scored = isHome ? home : away, conceded = isHome ? away : home, margin = scored - conceded
+      return [{ game_id: value.game_id, start_at: value.start_at, team_id: teamId, team: game[`${side}_name`],
+        opponent: value[isHome ? 'away_name' : 'home_name'], team_score: scored, opponent_score: conceded,
+        result: margin > 0 ? 'win' : margin < 0 ? 'loss' : 'tie', signed_margin: margin }]
+    })
+  })
+}
+const marginLabel = /\b(?:close(?:ly)?|narrow(?:ly)?|tight(?:ly)?|nail[-\s]?biter|one[-\s]score|blowout|rout(?:ed)?|comfortable|comfortably)\b/i
 
 export function createResearchHandler(deps: Dependencies) {
   return async (request: Request): Promise<Response> => {
@@ -118,7 +148,8 @@ export function createResearchHandler(deps: Dependencies) {
       home_sample: context.projection.home_sample, away_sample: context.projection.away_sample, league_sample: context.projection.league_sample,
       model_version: context.projection.model_version, generated_at: context.projection.generated_at, data_updated_at: context.projection.data_updated_at,
     } : null
-    const bounded = { ...context, projection, odds, history: context.history.slice(0, 20),
+    const history = context.history.slice(0, 20)
+    const bounded = { ...context, projection, odds, history, server_computed_results: teamResults(context.game, history),
       players: context.players.filter(row => object(row) && String(row.start_at) < kickoff).slice(0, 6) }
     const source = JSON.stringify(bounded)
     // Bound prompt cost without silently truncating JSON or omitting missing-coverage warnings.
@@ -141,6 +172,11 @@ export function createResearchHandler(deps: Dependencies) {
       const text = result.output.flatMap(item => object(item) && Array.isArray(item.content) ? item.content : [])
         .flatMap(item => object(item) && item.type === 'output_text' && typeof item.text === 'string' ? [item.text] : []).join('\n')
       if (!text.trim()) throw new Error('Empty AI response')
+      if (body.action === 'analyze' && marginLabel.test(text)) {
+        deps.log('research_unsupported_margin_label')
+        return json(502, { request_id: requestId,
+          error: 'AI analysis used an unsupported qualitative margin description and was not shown. Use the numeric scores in Recent form. The AI action was counted; no automatic retry was made.' })
+      }
       return json(200, { request_id: requestId, text, generated_at: new Date().toISOString(), action: body.action })
     } catch {
       deps.log('research_openai_failed')

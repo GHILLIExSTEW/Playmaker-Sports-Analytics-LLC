@@ -104,6 +104,11 @@ to OpenAI with `store: false`, and does not persist it in the website database.
 Provider retention policies still apply. Users must review extracted notes
 before analysis; notes and report dates are labeled user-supplied, unverified.
 Analysis receives server-loaded cache data, not client-authored evidence.
+Team-form evidence includes server-computed team scores, opponents, results and
+signed margins from final scored games before the selected matchup. Analysis
+must use numeric margins rather than qualitative labels such as "close" or
+"narrow". Responses containing those unsupported labels are rejected explicitly,
+not silently rewritten or automatically retried; the AI action still counts.
 
 Selected cappers can integrate API-Sports reads into their own **server-side**
 systems. This is an authenticated HTTP endpoint, not a Discord webhook or a

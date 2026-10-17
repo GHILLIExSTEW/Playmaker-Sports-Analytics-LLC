@@ -15,7 +15,7 @@ test('team pulls require a verified session and dispatch independently from AI a
   assert.equal((await createResearchHandler({ ...deps, authorize: async () => null })(req({ action: 'pull' }))).status, 401)
   assert.equal(pulls, 1)
 })
-function harness({ auth = true, rejectContext = false, rejectBudget = false, providerStatus = 200, incomplete = false, apiKey = 'private-ai-key', projection = null } = {}) {
+function harness({ auth = true, rejectContext = false, rejectBudget = false, providerStatus = 200, incomplete = false, apiKey = 'private-ai-key', projection = null, history = [], output = 'Grounded breakdown.' } = {}) {
   const calls = [], provider = [], logs = []
   const handle = createResearchHandler({
     apiKey, model: 'gpt-4.1-mini', log: event => logs.push(event),
@@ -23,7 +23,7 @@ function harness({ auth = true, rejectContext = false, rejectBudget = false, pro
       calls.push({ name, args })
       if (name === 'capper_tools_game') {
         if (rejectContext) throw { code: '42501' }
-        return { game: { start_at: '2026-10-18T12:00Z', home_name: 'Verified team' }, history: [],
+        return { game: { start_at: '2026-10-18T12:00Z', home_id: '1', away_id: '2', home_name: 'Texans', away_name: 'Jaguars' }, history,
           players: [{ start_at: '2026-10-19T12:00Z', secret_future_stat: 999 }, { start_at: '2026-10-17T12:00Z', payload: [] }],
           injuries: [], weather: null, projection, odds: { home_probability: 0.569, home_spread: -2.5, total: 42.5, books: 2, fetched_at: '2026-10-17T12:00Z' } }
       }
@@ -32,7 +32,7 @@ function harness({ auth = true, rejectContext = false, rejectBudget = false, pro
     } : null,
     fetch: async (url, options) => {
       provider.push({ url, options })
-      return Response.json({ status: incomplete ? 'incomplete' : 'completed', output: [{ content: [{ type: 'output_text', text: 'Grounded breakdown.' }] }] }, { status: providerStatus })
+      return Response.json({ status: incomplete ? 'incomplete' : 'completed', output: [{ content: [{ type: 'output_text', text: output }] }] }, { status: providerStatus })
     },
   })
   return { handle, calls, provider, logs }
@@ -46,7 +46,7 @@ test('research verifies session, approval, server evidence and allowance before 
   const request = JSON.parse(h.provider[0].options.body)
   assert.equal(request.store, false)
   assert.equal(request.max_output_tokens, 1800)
-  assert.ok(request.input[0].content[0].text.includes('Verified team'))
+  assert.ok(request.input[0].content[0].text.includes('Texans'))
   assert.ok(!request.input[0].content[0].text.includes('secret_future_stat'))
   assert.ok(request.input[0].content[0].text.includes('user_supplied_unverified'))
   assert.ok(!request.input[0].content[0].text.includes('home_probability'))
@@ -102,4 +102,29 @@ test('AI receives only permitted model estimates and never raw model internals o
   assert.ok(!source.includes('market_edge'))
   assert.ok(request.instructions.includes('queue recalculation using the updated cache'))
   assert.ok(request.instructions.includes('NHL starting goalies are unknown'))
+})
+test('team form computes 26-3 as a 23-point loss with correct team orientation and excludes invalid results', async () => {
+  const result = { game_id: 'past', start_at: '2026-10-10T12:00Z', home_id: '3', home_name: 'Titans',
+    away_id: '1', away_name: 'Texans', home_score: 26, away_score: { total: 3 }, status: 'FT' }
+  const h = harness({ history: [result, { ...result, game_id: 'unscored', away_score: null },
+    { ...result, game_id: 'future', start_at: '2026-10-19T12:00Z' }, { ...result, game_id: 'unfinished', status: 'NS' },
+    { ...result, game_id: 'tie', home_id: '1', away_id: '2', home_score: '0', away_score: 0 }] })
+  assert.equal((await h.handle(req())).status, 200)
+  const sent = JSON.parse(JSON.parse(h.provider[0].options.body).input[0].content[0].text).cached.server_computed_results
+  assert.deepEqual(sent[0], { game_id: 'past', start_at: result.start_at, team_id: '1', team: 'Texans',
+    opponent: 'Titans', team_score: 3, opponent_score: 26, result: 'loss', signed_margin: -23 })
+  assert.equal(sent.length, 3)
+  assert.ok(sent.slice(1).every(row => row.result === 'tie' && row.signed_margin === 0))
+})
+test('unsupported margin descriptions are blocked explicitly without retries; numeric margins remain valid', async () => {
+  for (const output of ['Texans form is mixed, with recent close loss to Titans (26-3)',
+    'Houston lost narrowly.', 'A tight game.', 'A one-score loss.', 'A comfortable win.']) {
+    const h = harness({ output }), response = await h.handle(req())
+    assert.equal(response.status, 502)
+    assert.match((await response.json()).error, /unsupported qualitative margin/)
+    assert.deepEqual(h.logs, ['research_unsupported_margin_label'])
+    assert.equal(h.provider.length, 1)
+  }
+  const h = harness({ output: 'Texans lost 3-26 to the Titans, a loss by 23 points.' })
+  assert.equal((await h.handle(req())).status, 200)
 })
