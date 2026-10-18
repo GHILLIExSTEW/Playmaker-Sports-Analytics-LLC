@@ -8,7 +8,9 @@ from PIL import Image, ImageDraw
 import pytest
 import requests
 
-from src.services.play_card_service import PlayCardService, download_artwork, player_artwork, render_play_card, wrap_card_text
+from src.services.play_card_service import (
+    PlayCardService, download_artwork, player_artwork, render_matchup_badge, render_play_card, wrap_card_text,
+)
 from src.services.tracker_image_service import _font
 
 
@@ -233,16 +235,78 @@ def test_team_artwork_uses_matched_event_and_selected_side(sport, flipped):
     assert db.select.call_args.args[1] == ("home_team_logo" if sport == "nfl" else "away_logo" if flipped else "home_logo")
 
 
-def test_api_player_without_photo_uses_server_icon_instead_of_unrelated_team_logo():
+def test_api_player_without_photo_uses_matchup_logos_instead_of_one_team_logo():
     db = Mock()
     service = PlayCardService(db)
-    service.features.find_event = Mock(return_value=({"id": "15"}, False))
-    db.select.return_value = SimpleNamespace(data=[{"payload": [{"player": {"name": "Jane Smith", "photo": None}}]}])
+    service.features.find_event = Mock(return_value=({"id": "15", "home_name": "A", "away_name": "B"}, False))
+    db.select.side_effect = lambda table, columns, filters: SimpleNamespace(data=(
+        [{"payload": [{"player": {"name": "Jane Smith", "photo": None}}]}] if table == "api_sports_player_game_stats"
+        else [{"away_logo": "https://media.api-sports.io/b.png", "home_logo": "https://media.api-sports.io/a.png"}]
+    ))
     leg = {"selection": "Jane Smith over 20.5 points", "details": {
         "sport": "basketball", "home_name": "A", "away_name": "B", "event_date": "2026-10-16",
     }}
-    assert service.artwork(play(), [leg]) == (None, "Server icon")
-    db.select.assert_called_once()
+    assert service.artwork(play(), [leg]) == (
+        ("https://media.api-sports.io/b.png", "https://media.api-sports.io/a.png"), "B @ A",
+    )
+
+
+@pytest.mark.parametrize("market,side", [("total", "under"), ("other", "over")])
+def test_totals_and_props_use_both_team_logos_from_matched_nfl_game(market, side):
+    db = Mock()
+    service = PlayCardService(db)
+    service.features.find_event = Mock(return_value=({"id": "21602", "home_name": "Kansas City Chiefs", "away_name": "Los Angeles Chargers"}, False))
+    db.select.side_effect = lambda table, columns, filters: SimpleNamespace(data=(
+        [] if table == "api_sports_player_game_stats"
+        else [{"away_team_logo": "https://media.api-sports.io/lac.png", "home_team_logo": "https://media.api-sports.io/kc.png"}]
+    ))
+    leg = {"selection": "Under 41.5", "details": {
+        "sport": "nfl", "home_name": "Kansas City Chiefs", "away_name": "Los Angeles Chargers",
+        "market": market, "side": side, "event_date": "2026-10-18",
+    }}
+    assert service.artwork(play(), [leg]) == (
+        ("https://media.api-sports.io/lac.png", "https://media.api-sports.io/kc.png"),
+        "Los Angeles Chargers @ Kansas City Chiefs",
+    )
+
+
+def test_unmatched_total_uses_cached_logos_for_both_teams():
+    db = Mock()
+    service = PlayCardService(db)
+    service.features.find_event = Mock(return_value=None)
+    db.select.side_effect = lambda table, columns, filters: SimpleNamespace(data=[{
+        columns: f"https://media.api-sports.io/{filters[next(iter(filters))].split()[0].lower()}.png",
+    }] if "name" in next(iter(filters)) else [])
+    leg = {"selection": "Over 8.5", "details": {
+        "sport": "baseball", "market": "total", "side": "over",
+        "home_name": "Cleveland Guardians", "away_name": "Tampa Bay Rays",
+    }}
+    assert service.artwork(play(), [leg]) == (
+        ("https://media.api-sports.io/tampa.png", "https://media.api-sports.io/cleveland.png"),
+        "Tampa Bay Rays @ Cleveland Guardians",
+    )
+
+
+def test_matchup_badge_places_away_top_left_home_bottom_right_and_fades_at_slash():
+    output = render_matchup_badge(png((200, 200), "#ff0000"), png((200, 200), "#0000ff"))
+    with Image.open(BytesIO(output)) as image:
+        image = image.convert("RGBA")
+        assert image.size == (480, 480)
+        assert image.getpixel((110, 110))[:3] == (255, 0, 0) and image.getpixel((110, 110))[3] == 255
+        assert image.getpixel((370, 370))[:3] == (0, 0, 255) and image.getpixel((370, 370))[3] == 255
+        # Logos fade out as they approach the slash instead of ending abruptly.
+        assert 0 < image.getpixel((200, 200))[3] < 255
+        assert image.getpixel((5, 470))[3] == 0
+
+
+def test_matchup_artwork_is_composited_into_one_badge(cards, monkeypatch):
+    cards.service.artwork.return_value = (("https://media.api-sports.io/a.png", "https://media.api-sports.io/b.png"), "B @ A")
+    download = Mock(return_value=png((100, 100)))
+    monkeypatch.setattr("src.services.play_card_service.download_artwork", download)
+    badge, label = asyncio.run(cards.service.badge(play(), [{"selection": "Over 41.5"}]))
+    assert label == "B @ A"
+    assert download.call_count == 2
+    assert Image.open(BytesIO(badge)).size == (480, 480)
 
 
 def test_team_logo_can_resolve_without_a_current_matching_game():

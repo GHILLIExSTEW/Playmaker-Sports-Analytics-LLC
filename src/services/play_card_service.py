@@ -9,7 +9,7 @@ import unicodedata
 from urllib.parse import urlparse
 
 import discord
-from PIL import Image, ImageDraw, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, UnidentifiedImageError
 import requests
 
 from src.services.play_features_service import GRADABLE_SPORTS, PlayFeaturesService, clean_leg_details
@@ -89,6 +89,45 @@ def player_artwork(payload, selection: str) -> dict[str, str]:
 
     visit(payload)
     return candidates
+
+
+def render_matchup_badge(away: bytes, home: bytes, size: int = 480) -> bytes:
+    """Away logo top-left, home logo bottom-right, split by a slash they fade into."""
+    scale = 2
+    side = size * scale
+    gradient = Image.linear_gradient("L").resize((side, side), Image.Resampling.BILINEAR)
+    # 0 at the top-left corner, ~128 on the slash, 255 at the bottom-right corner.
+    diagonal = ImageChops.add(gradient, gradient.transpose(Image.Transpose.TRANSPOSE), scale=2)
+    gap, fade = 4, 48
+
+    def mask(distance):
+        return max(0, min(255, round((distance - gap) * 255 / fade)))
+
+    masks = (
+        Image.eval(diagonal, lambda value: mask(127.5 - value)),
+        Image.eval(diagonal, lambda value: mask(value - 127.5)),
+    )
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    box = round(side * 0.66)
+    for data, center, fade_mask in ((away, 0.34, masks[0]), (home, 0.66, masks[1])):
+        with Image.open(BytesIO(data)) as image:
+            logo = ImageOps.contain(ImageOps.exif_transpose(image).convert("RGBA"), (box, box), Image.Resampling.LANCZOS)
+        layer = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        layer.paste(logo, (round(side * center - logo.width / 2), round(side * center - logo.height / 2)))
+        layer.putalpha(ImageChops.multiply(layer.getchannel("A"), fade_mask))
+        canvas.alpha_composite(layer)
+    start, end = (round(side * 0.1), round(side * 0.9)), (round(side * 0.9), round(side * 0.1))
+    glow = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).line((start, end), fill=(85, 184, 237, 200), width=round(side * 0.06))
+    canvas.alpha_composite(glow.filter(ImageFilter.GaussianBlur(side * 0.02)))
+    slash = ImageDraw.Draw(canvas)
+    slash.line((start, end), fill=(245, 247, 251, 255), width=round(side * 0.03))
+    for point in (start, end):
+        radius = side * 0.015
+        slash.ellipse((point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius), fill=(245, 247, 251, 255))
+    output = BytesIO()
+    canvas.resize((size, size), Image.Resampling.LANCZOS).save(output, format="PNG")
+    return output.getvalue()
 
 
 def render_play_card(play: dict, slip: bytes | None, badge: bytes | None, badge_label: str) -> BytesIO:
@@ -198,22 +237,24 @@ class PlayCardService:
             # Artwork may use a unique cached team logo without a matching game;
             # settlement must still require its stricter event/date match.
             if details.get("market") in {"moneyline", "spread"} and details.get("side") in {"home", "away"}:
-                return self.cached_team_artwork(details["sport"], details.get(f"{details['side']}_name"))
-            return None, "Playmaker Picks"
+                url, label = self.cached_team_artwork(details["sport"], details.get(f"{details['side']}_name"))
+                if url:
+                    return url, label
+            matchup = self.matchup_artwork(details)
+            return matchup if matchup[0] else (None, "Playmaker Picks")
         event, flipped = found
         sport = details["sport"]
         players = self.db.select("api_sports_player_game_stats", "payload", {
             "sport_slug": sport, "game_id": int(event["id"]),
         }).data or []
         candidates = player_artwork([row["payload"] for row in players], leg["selection"])
-        if candidates:
-            if len(candidates) == 1:
-                name, photo = next(iter(candidates.items()))
-                return photo or None, name.title() if photo else "Server icon"
-            return None, "Server icon"
+        if len(candidates) == 1:
+            name, photo = next(iter(candidates.items()))
+            if photo:
+                return photo, name.title()
         side = details.get("side")
-        if details.get("market") not in {"moneyline", "spread"} or side not in {"home", "away"}:
-            return None, "Server icon"
+        if candidates or details.get("market") not in {"moneyline", "spread"} or side not in {"home", "away"}:
+            return self.matchup_artwork(details, event)
         if flipped:
             side = "away" if side == "home" else "home"
         if sport == "nfl":
@@ -223,6 +264,28 @@ class PlayCardService:
             rows = self.db.select("api_sports_events", f"{side}_logo", {"sport_slug": sport, "event_id": event["id"]}).data or []
             url = rows[0].get(f"{side}_logo") if rows else None
         return url, event[f"{side}_name"] if url else "Server icon"
+
+    def matchup_artwork(self, details: dict, event: dict | None = None) -> tuple[tuple[str, str] | None, str]:
+        """Both team logos for bets that are not about one side (totals, props)."""
+        sport = details["sport"]
+        away_name = (event or {}).get("away_name") or details.get("away_name")
+        home_name = (event or {}).get("home_name") or details.get("home_name")
+        away = home = None
+        if event is not None:
+            if sport == "nfl":
+                rows = self.db.select("api_sports_nfl_games", "away_team_logo,home_team_logo", {"game_id": int(event["id"])}).data or []
+                fields = "away_team_logo", "home_team_logo"
+            else:
+                rows = self.db.select("api_sports_events", "away_logo,home_logo", {"sport_slug": sport, "event_id": event["id"]}).data or []
+                fields = "away_logo", "home_logo"
+            if rows:
+                away, home = rows[0].get(fields[0]), rows[0].get(fields[1])
+        if not (away and home):
+            away = away or self.cached_team_artwork(sport, away_name)[0]
+            home = home or self.cached_team_artwork(sport, home_name)[0]
+        if away and home and away != home and away_name and home_name:
+            return (away, home), f"{away_name} @ {home_name}"
+        return None, "Server icon"
 
     def cached_team_artwork(self, sport: str, name: str | None) -> tuple[str | None, str]:
         if not name or sport not in {"nfl", "ncaa", "basketball", "baseball", "hockey", "football", "other"}:
@@ -247,7 +310,11 @@ class PlayCardService:
                 continue
             seen.add(url)
             try:
-                data = await asyncio.to_thread(download_artwork, url)
+                if isinstance(url, tuple):
+                    away, home = [await asyncio.to_thread(download_artwork, item) for item in url]
+                    data = await asyncio.to_thread(render_matchup_badge, away, home)
+                else:
+                    data = await asyncio.to_thread(download_artwork, url)
                 images.append((data, label))
             except (requests.RequestException, ValueError, UnidentifiedImageError, OSError):
                 logger.warning("play_card_api_artwork_unavailable play=%s label=%s", play["id"], label, exc_info=True)
