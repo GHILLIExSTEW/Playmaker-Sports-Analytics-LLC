@@ -151,15 +151,16 @@ def test_publishing_preserves_author_image_and_explicit_target():
     assert embed.image.url == data["image_url"]
 
 
-def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play_cards):
+def test_publishing_capper_play_mentions_highroller_and_rookie_roles_only(monkeypatch, mock_play_cards):
+    monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
     presentation = cog()
     request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
-    assert sent["content"] == "<@&456>"
-    assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
+    assert sent["content"] == "<@&789> <@&456>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [789, 456], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
     assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
@@ -242,7 +243,9 @@ def test_capper_card_regenerates_on_settlement_and_refresh(operation, mock_play_
     presentation.staff_alert.assert_not_awaited()
 
 
-def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_play_cards):
+def test_capper_repost_renders_original_slip_and_preserves_capper_identity(monkeypatch, mock_play_cards):
+    monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
+    monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
     presentation = cog()
     source = SimpleNamespace(
         content="", embeds=[], attachments=[SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"original"))],
@@ -255,6 +258,8 @@ def test_capper_repost_renders_original_slip_and_preserves_capper_identity(mock_
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.repost_official_play(channel, 500, data, author))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
+    assert sent["content"] == "<@&789> <@&456>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [789, 456], "parse": []}
     assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
     assert sent["embed"].fields == []

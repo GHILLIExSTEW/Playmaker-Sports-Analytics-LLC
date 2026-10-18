@@ -82,6 +82,17 @@ def build_engagement_view(play_id: int, tails: int) -> discord.ui.View:
     return view
 
 
+def capper_play_mentions() -> dict:
+    """Ping text and mention allowlist for capper plays; only these roles can be notified."""
+    role_ids = list(dict.fromkeys(role_id for role_id in (HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID) if role_id))
+    return {
+        "content": " ".join(f"<@&{role_id}>" for role_id in role_ids),
+        "allowed_mentions": discord.AllowedMentions(
+            everyone=False, users=False, roles=[discord.Object(id=role_id) for role_id in role_ids], replied_user=False,
+        ),
+    }
+
+
 class PlayPresentation(commands.Cog):
     def __init__(
         self, bot: commands.Bot, *, official: OfficialPlayService, features: PlayFeaturesService,
@@ -171,11 +182,7 @@ class PlayPresentation(commands.Cog):
                     hook = await self.capper_webhook(channel)
                     return await hook.send(
                         username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
-                        content=f"<@&{ROOKIE_ROLE_ID}>",
-                        allowed_mentions=discord.AllowedMentions(
-                            everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
-                        ),
-                        embed=embed, file=file,
+                        **capper_play_mentions(), embed=embed, file=file,
                     )
                 return await channel.send(embed=embed, file=file)
             finally:
@@ -284,7 +291,7 @@ class PlayPresentation(commands.Cog):
                 hook = await self.capper_webhook(channel)
                 repost = await hook.send(
                     username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
+                    **capper_play_mentions(),
                     embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs,
                 )
             else:
