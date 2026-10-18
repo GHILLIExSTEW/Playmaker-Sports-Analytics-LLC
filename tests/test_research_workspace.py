@@ -14,6 +14,7 @@ def service(monkeypatch):
     monkeypatch.setattr(workspace, "API_SPORTS_BUDGET_ENABLED", True)
     db = Mock()
     db._execute_once.side_effect = lambda operation: operation()
+    db._execute.side_effect = lambda operation: operation()
     db._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
     db.select.return_value.data = [{"game_id": "1"}]
     return workspace.ResearchRefreshService(database=db, api=Mock(), multi=Mock(), players=Mock())
@@ -92,21 +93,58 @@ def test_paginated_odds_reserve_a_bounded_batch(service, monkeypatch):
 
 def test_queue_reports_failure_and_never_retries_provider(service):
     client = service.db._ensure_client.return_value
-    client.rpc.return_value.execute.return_value = SimpleNamespace(data=[request()])
+    rpc_calls = []
+
+    def rpc(name, args):
+        rpc_calls.append((name, args))
+        data = [request()] if name == "claim_research_refresh" else True
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=data))
+    client.rpc.side_effect = rpc
     service.run = Mock(side_effect=TimeoutError("Provider timeout"))
-    client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{"id": "request"}]
     assert service.process_next() is True
     assert service.run.call_count == 1
-    update = client.table.return_value.update.call_args.args[0]
-    assert update["state"] == "failed"
-    assert update["result"] == "Provider timeout"
+    (_, claim), (finish_name, finish) = rpc_calls
+    assert finish_name == "finish_research_refresh"
+    assert finish == {"p_id": "request", "p_claim_token": claim["p_claim_token"],
+                      "p_state": "failed", "p_result": "Provider timeout"}
 
 
-def test_uncertain_claim_is_not_retried(service):
-    service.db._ensure_client.return_value.rpc.return_value.execute.side_effect = TimeoutError()
-    with pytest.raises(TimeoutError):
+def test_dropped_claim_and_finish_are_replayed_with_the_same_token(service):
+    client = service.db._ensure_client.return_value
+    rpc_calls, drops = [], {"claim_research_refresh": 1, "finish_research_refresh": 1}
+
+    def execute_with_retry(operation):
+        try:
+            return operation()
+        except httpx.TransportError:
+            return operation()
+    service.db._execute.side_effect = execute_with_retry
+
+    def rpc(name, args):
+        rpc_calls.append((name, args))
+
+        def execute():
+            if drops[name]:
+                drops[name] -= 1
+                raise httpx.RemoteProtocolError("Server disconnected")
+            return SimpleNamespace(data=[request()] if name == "claim_research_refresh" else True)
+        return SimpleNamespace(execute=execute)
+    client.rpc.side_effect = rpc
+    service.run = Mock(return_value="Refreshed")
+    assert service.process_next() is True
+    assert service.run.call_count == 1
+    tokens = {args["p_claim_token"] for _, args in rpc_calls}
+    assert [name for name, _ in rpc_calls] == ["claim_research_refresh"] * 2 + ["finish_research_refresh"] * 2
+    assert len(tokens) == 1
+
+
+def test_unsaved_finish_is_explicit(service):
+    client = service.db._ensure_client.return_value
+    client.rpc.side_effect = lambda name, args: SimpleNamespace(execute=lambda: SimpleNamespace(
+        data=[request()] if name == "claim_research_refresh" else False))
+    service.run = Mock(return_value="Refreshed")
+    with pytest.raises(RuntimeError, match="tracking changed"):
         service.process_next()
-    assert service.db._ensure_client.return_value.rpc.return_value.execute.call_count == 1
 
 
 def test_transport_failure_is_reported_then_successful_poll_reports_recovery():

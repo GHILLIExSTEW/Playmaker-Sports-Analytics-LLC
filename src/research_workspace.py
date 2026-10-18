@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import httpx
 from discord.ext import commands, tasks
@@ -97,9 +98,11 @@ class ResearchRefreshService:
             member_request_user.reset(token)
 
     def process_next(self) -> bool:
-        # Claim is intentionally not automatically retried after an uncertain commit.
-        rows = self.db._execute_once(
-            lambda: self.db._ensure_client().rpc("claim_research_refresh", {}).execute()).data
+        # The worker-chosen token makes a replayed claim/finish idempotent, so transport drops can retry.
+        # Provider work in run() is still never retried.
+        token = str(uuid4())
+        rows = self.db._execute(lambda: self.db._ensure_client().rpc(
+            "claim_research_refresh", {"p_claim_token": token}).execute()).data
         if not rows:
             return False
         request = rows[0]
@@ -110,10 +113,10 @@ class ResearchRefreshService:
             logger.exception("research_refresh_failed request=%s", request["id"])
             result = str(exc)[:1000]
             state = "failed"
-        updated = self.db._execute_once(lambda: self.db._ensure_client().table("research_refresh_requests").update({
-            "state": state, "result": result, "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", request["id"]).eq("state", "running").execute()).data
-        if not updated:
+        saved = self.db._execute(lambda: self.db._ensure_client().rpc("finish_research_refresh", {
+            "p_id": request["id"], "p_claim_token": token, "p_state": state, "p_result": result,
+        }).execute()).data
+        if saved is not True:
             raise RuntimeError("Research refresh tracking changed; inspect the request before retrying.")
         return True
 
@@ -146,8 +149,8 @@ class ResearchWorkspace(commands.Cog):
             logger.exception("research_refresh_transport_failed")
             await self.staff_alert(
                 "research_refresh_transport",
-                "Website research worker lost its Supabase connection. Connection reset; polling resumes in 15 seconds. "
-                "The uncertain operation was not retried. Check logs for any job needing reconciliation.")
+                "Website research worker could not reach Supabase after 3 connection attempts; polling resumes in 15 seconds. "
+                "Queue claims are replay-safe and no provider request was retried. Check logs if this repeats.")
         except Exception:
             logger.exception("research_refresh_worker_failed")
             await self.staff_alert("research_refresh_worker", "Website research refresh worker failed. Check bot logs and the migration.")

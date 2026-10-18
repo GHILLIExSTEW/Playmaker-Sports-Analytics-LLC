@@ -38,6 +38,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await load('20261017090000_capper_team_pulls.sql')
     await load('20261017110000_capper_model_projections.sql')
     await load('20261017120000_capper_pull_model_refresh.sql')
+    await load('20261017130000_idempotent_worker_claims.sql')
     await db.exec(`insert into api_sports_nfl_games(game_id,league_id,season,kickoff_at,status_short,status_long,home_team_id,home_team_name,away_team_id,away_team_name)
       values(1,1,2026,'2026-10-20','NS','Not started',1,'Home',2,'Away');
       insert into sport_model_weather values('nfl','1',65,7,0,'forecast',now());
@@ -136,6 +137,30 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     assert.equal((await rpc('capper_model_refresh_status', [finalPull.request_id])).state, 'failed', 'offline worker times out explicitly')
     assert.equal(await rpc('claim_capper_model_refresh'), null, 'expired jobs are not retried')
     assert.equal((await db.query('select state from capper_model_refreshes')).rows[0].state, 'failed')
+    await db.exec(`update capper_model_refreshes set state='pending',requested_at=now(),started_at=null,completed_at=null,claim_token=null,projections=null
+      where request_id='${finalPull.request_id}'`)
+    const token = '00000000-0000-0000-0000-0000000000aa', otherToken = '00000000-0000-0000-0000-0000000000bb'
+    const claimed = await rpc('claim_capper_model_refresh', [token])
+    assert.equal(claimed.request_id, finalPull.request_id)
+    assert.equal(claimed.claim_token, token)
+    assert.deepEqual(await rpc('claim_capper_model_refresh', [token]), claimed, 'replayed claim returns the same job')
+    assert.equal(await rpc('claim_capper_model_refresh', [otherToken]), null, 'replay does not claim a second job')
+    assert.equal(await rpc('finish_capper_model_refresh', [finalPull.request_id, token, 3]), true)
+    assert.equal(await rpc('finish_capper_model_refresh', [finalPull.request_id, token, 3]), true, 'replayed completion reports the saved result')
+    assert.equal(await rpc('finish_capper_model_refresh', [finalPull.request_id, token, 4]), false, 'a different result is still rejected')
+    assert.equal(await rpc('finish_capper_model_refresh', [finalPull.request_id, otherToken, 3]), false)
+    assert.equal(await rpc('claim_capper_model_refresh', [token]), null, 'a finished token is not reclaimed')
+    const researchId = (await db.query(`insert into research_refresh_requests(user_id,discord_user_id,competition,game_id,kind)
+      values($1,'222','nfl','1','odds') returning id`, [capper])).rows[0].id
+    const claimResearch = async value => (await db.query('select * from claim_research_refresh($1)', [value])).rows
+    assert.equal((await claimResearch(token))[0].id, researchId)
+    assert.equal((await claimResearch(token))[0].id, researchId, 'replayed research claim returns the same request')
+    assert.equal((await claimResearch(otherToken)).length, 0, 'replay does not claim a second request')
+    assert.equal(await rpc('finish_research_refresh', [researchId, otherToken, 'completed', 'ok']), false)
+    assert.equal(await rpc('finish_research_refresh', [researchId, token, 'completed', 'ok']), true)
+    assert.equal(await rpc('finish_research_refresh', [researchId, token, 'completed', 'ok']), true, 'replayed finish reports the saved result')
+    assert.equal(await rpc('finish_research_refresh', [researchId, token, 'failed', 'ok']), false)
+    assert.equal((await claimResearch(token)).length, 0)
     await db.exec('delete from capper_team_pulls')
     const failedPull = await rpc('reserve_capper_team_pull', ['nfl','1','1'])
     await rpc('finish_capper_team_pull', [failedPull.request_id, [], null, true])
@@ -182,6 +207,9 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
       await assert.rejects(db.query('select * from capper_team_pulls'), /permission denied/)
       await assert.rejects(db.query('select * from capper_model_refreshes'), /permission denied/)
       await assert.rejects(rpc('claim_capper_model_refresh'), /permission denied/)
+      await assert.rejects(rpc('claim_capper_model_refresh', [owner]), /permission denied/)
+      await assert.rejects(rpc('claim_research_refresh', [owner]), /permission denied/)
+      await assert.rejects(rpc('finish_research_refresh', [owner, owner, 'failed', 'x']), /permission denied/)
       await assert.rejects(rpc('finish_capper_model_refresh', [finalPull.request_id, owner, 1]), /permission denied/)
       await assert.rejects(rpc('save_capper_team_pull', [finalPull.request_id, [], [], false]), /permission denied/)
       await assert.rejects(db.query('select * from sport_model_projections'), /permission denied/)

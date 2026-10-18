@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from src import model_projections as cog_module
@@ -437,16 +438,24 @@ def test_run_backtest_stores_only_successful_reports():
     assert client.ops("sport_model_backtests", "upsert") == []
 
 class PullJobClient(Recorder):
-    def __init__(self, job=None, saved=True):
+    def __init__(self, job=None, saved=True, claim_failures=0):
         super().__init__()
         self.job = job
         self.saved = saved
+        self.claim_failures = claim_failures
         self.rpc_calls = []
 
     def rpc(self, name, args=None):
         self.rpc_calls.append((name, args))
-        return SimpleNamespace(execute=lambda: SimpleNamespace(
-            data=self.job if name == "claim_capper_model_refresh" else self.saved))
+
+        def execute():
+            if name != "claim_capper_model_refresh":
+                return SimpleNamespace(data=self.saved)
+            if self.claim_failures:
+                self.claim_failures -= 1
+                raise httpx.RemoteProtocolError("Server disconnected")
+            return SimpleNamespace(data=self.job and {**self.job, "claim_token": args["p_claim_token"]})
+        return SimpleNamespace(execute=execute)
 
 
 def test_pull_worker_recalculates_with_fresh_inputs_using_existing_engine_without_provider_calls():
@@ -466,7 +475,7 @@ def test_pull_worker_recalculates_with_fresh_inputs_using_existing_engine_withou
     assert updated["home_probability"] < before.home_probability
     assert updated["generated_at"] == (NOW + timedelta(minutes=1)).isoformat()
     assert client.rpc_calls[-1] == ("finish_capper_model_refresh", {
-        "p_request_id": "pull-1", "p_claim_token": "token-1", "p_projections": 1})
+        "p_request_id": "pull-1", "p_claim_token": client.rpc_calls[0][1]["p_claim_token"], "p_projections": 1})
     service.data.cached.assert_called_with("nfl")
     inputs.refresh_odds.assert_not_called()
     inputs.refresh_injuries.assert_not_called()
@@ -485,6 +494,17 @@ def test_pull_worker_empty_queue_failure_and_unpersisted_completion_are_explicit
     service = projection_service([], PullJobClient(job, saved=False))
     with pytest.raises(RuntimeError, match="completion was not saved"):
         service.process_team_pull()
+
+
+def test_pull_worker_replays_a_dropped_claim_with_the_same_token(monkeypatch):
+    from src.services import supabase_service as supabase_module
+    monkeypatch.setattr(supabase_module, "create_client", lambda *args: Mock())
+    monkeypatch.setattr(supabase_module.supabase_service, "client", Mock())
+    client = PullJobClient({"request_id": "pull-1", "competition": "nfl"}, claim_failures=1)
+    assert projection_service([], client).process_team_pull() is True
+    claims = [args for name, args in client.rpc_calls if name == "claim_capper_model_refresh"]
+    assert len(claims) == 2 and claims[0] == claims[1]
+    assert client.rpc_calls[-1][1]["p_claim_token"] == claims[0]["p_claim_token"]
 
 
 # ----- cog -----
@@ -569,5 +589,21 @@ def test_pull_worker_loop_reports_failures_and_keeps_its_polling_lifecycle():
     asyncio.run(instance.team_pull_projections.coro(instance))
     service.process_team_pull.assert_called_once_with()
     service.process_team_pull.side_effect = RuntimeError("worker failed")
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    assert alert.await_args.args[0] == "capper_model_refresh"
+
+
+def test_pull_worker_reports_connection_loss_and_recovery_separately_from_model_failures():
+    instance, service, alert, _ = cog()
+    service.process_team_pull.side_effect = httpx.RemoteProtocolError("Server disconnected")
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    assert alert.await_args.args[0] == "capper_model_refresh_transport"
+    assert "capper_model_refresh" not in instance.alerted
+    service.process_team_pull.side_effect = None
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    assert alert.await_args.args[0] == "capper_model_refresh_recovered"
+    asyncio.run(instance.team_pull_projections.coro(instance))
+    assert alert.await_count == 2
+    service.process_team_pull.side_effect = RuntimeError("model failed")
     asyncio.run(instance.team_pull_projections.coro(instance))
     assert alert.await_args.args[0] == "capper_model_refresh"

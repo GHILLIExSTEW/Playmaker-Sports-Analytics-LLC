@@ -80,10 +80,19 @@ remain service-only. Jobs are completed only after projection writes finish;
 estimates no longer produced in the current model window are removed.
 The bot must have `API_SPORTS_KEY` configured (the existing model-cog enablement)
 and database service-role access.
-Queue claim transport failures discard the Supabase client without replaying
-the uncertain claim. The next scheduled poll uses a new connection. The older
-website research worker distinguishes transport errors from schema/application
-errors and reports connection recovery after a successful poll. A successful
+Worker queue claims and completions carry a worker-generated claim token
+([idempotent claims migration](supabase/migrations/20261017130000_idempotent_worker_claims.sql)).
+When Supabase drops a connection mid-request, the bot reconnects and replays
+the same call up to three times: a replayed claim returns the job already
+claimed with that token instead of claiming another, and a replayed completion
+reports the result already saved. Provider requests are never replayed. Apply
+this migration before restarting the bot; the older no-argument claim
+functions remain so a bot that has not restarted yet keeps working. Both the
+capper model worker and the website research worker distinguish
+transport errors from schema/application errors: a connection that still
+fails after three attempts sends a "could not reach Supabase" alert (not
+"Model job failed"), followed by a recovery alert after the next successful
+poll. A successful
 poll does not prove an uncertain claimed job completed; inspect its tracking
 state before retrying provider work. Full tracebacks remain in the bot journal.
 

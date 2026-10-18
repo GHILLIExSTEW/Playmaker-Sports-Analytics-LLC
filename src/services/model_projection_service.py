@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from uuid import uuid4
 
 from src.services.data_model_service import COMPETITIONS, DataModelService, ModelGame
 from src.services.model_engine import (
@@ -156,11 +157,13 @@ class ModelProjectionService:
 
     def process_team_pull(self) -> bool:
         """Recalculate one saved pull using the same engine, without additional provider calls."""
-        # A claim is not idempotent: a transport retry could claim a second job.
-        job = supabase_service._execute_once(lambda: self._db().rpc("claim_capper_model_refresh").execute()).data
+        # The worker-chosen token makes a replayed claim return the same job, so transport drops can retry.
+        token = str(uuid4())
+        job = supabase_service._execute(lambda: self._db().rpc(
+            "claim_capper_model_refresh", {"p_claim_token": token}).execute()).data
         if job is None:
             return False
-        if not isinstance(job, dict) or job.get("competition") not in COMPETITIONS:
+        if not isinstance(job, dict) or job.get("competition") not in COMPETITIONS or job.get("claim_token") != token:
             raise ValueError("Invalid capper model refresh job")
         args = {"p_request_id": job["request_id"], "p_claim_token": job["claim_token"]}
         try:

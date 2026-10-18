@@ -5,6 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 
+import httpx
 from discord.ext import commands, tasks
 
 from src.reporting import TRACKER_TIMEZONE
@@ -37,6 +38,7 @@ class ModelProjections(commands.Cog):
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.last: dict[tuple[str, str], datetime] = {}
         self.alerted: dict[str, datetime] = {}
+        self.pull_transport_failed = False
 
     async def cog_load(self) -> None:
         if self.bot.is_ready():
@@ -110,12 +112,32 @@ class ModelProjections(commands.Cog):
             except Exception:
                 await self.report_failure(f"model_backtest:{competition}")
 
+    async def _send_alert(self, key: str, text: str) -> None:
+        try:
+            await self.staff_alert(key, text)
+        except Exception:
+            logger.exception("model_projection_staff_alert_failed job=%s", key)
+
     @tasks.loop(seconds=2)
     async def team_pull_projections(self) -> None:
         try:
             await asyncio.to_thread(self.service.process_team_pull)
+        except httpx.TransportError:
+            self.pull_transport_failed = True
+            logger.exception("capper_model_refresh_transport_failed")
+            await self._send_alert(
+                "capper_model_refresh_transport",
+                "Capper model worker could not reach Supabase after 3 connection attempts; polling resumes in 2 seconds. "
+                "Queue claims are replay-safe; any unfinished job expires as failed after three minutes.")
         except Exception:
             await self.report_failure("capper_model_refresh")
+        else:
+            if self.pull_transport_failed:
+                self.pull_transport_failed = False
+                logger.info("capper_model_refresh_connection_recovered")
+                await self._send_alert(
+                    "capper_model_refresh_recovered",
+                    "Capper model worker Supabase connection recovered; polling is working again.")
 
     @refresh_projections.before_loop
     @daily_backtests.before_loop
