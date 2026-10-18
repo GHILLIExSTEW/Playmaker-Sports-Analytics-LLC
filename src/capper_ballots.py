@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 
 from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, OFFICIAL_CHANNEL_ID
 from src.play_presentation import build_engagement_view, build_play_embed
-from src.services.image_play_service import ImagePlayService, image_play_service
+from src.services.image_play_service import BallotUnreadable, ImagePlayService, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
 from src.services.play_card_service import play_card_service
@@ -213,13 +213,18 @@ class CapperBallots(commands.Cog):
             await asyncio.to_thread(self.store.finish, message.id, "published", official_message_id=str(published.id))
         except Exception as exc:
             logger.exception("capper_ballot_failed message=%s", message.id)
+            next_step = (
+                "Ask the capper to post the slip or the odds for every leg in this channel, set "
+                "`capper_ballots.source_message_id` to that message ID, then reset the ballot to pending."
+                if isinstance(exc, BallotUnreadable) else
+                "Check for an existing official post before retrying; it will not be republished automatically."
+            )
             try:
                 await asyncio.to_thread(self.store.finish, message.id, "failed", error=str(exc)[:1500])
             finally:
                 await self.staff_alert(
                     f"ballot:{message.id}",
-                    f"Ballot {message.jump_url} needs staff review: `{str(exc)[:1500]}`. "
-                    "Check for an existing official post before retrying; it will not be republished automatically.",
+                    f"Ballot {message.jump_url} needs staff review: `{str(exc)[:1500]}`. {next_step}",
                 )
 
     @tasks.loop(minutes=1)

@@ -149,6 +149,18 @@ def test_failures_are_durable_and_alert_staff_without_retrying(monkeypatch, fail
     assert "not be republished automatically" in cog.staff_alert.call_args.args[1]
 
 
+def test_unreadable_bet_alert_names_the_reason_and_recovery_steps(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.images.extract_play.side_effect = module.BallotUnreadable(
+        "The ballot bet text could not be read unambiguously. No odds are given.")
+    asyncio.run(cog.evaluate(message()))
+    assert cog.store.finish.call_args.args[1] == "failed"
+    text = cog.staff_alert.call_args.args[1]
+    assert "No odds are given." in text
+    assert "source_message_id" in text and "vision providers" not in text
+
+
 def test_followup_image_must_be_immediate_and_same_author():
     cog = make_cog()
     source = message()

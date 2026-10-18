@@ -15,6 +15,10 @@ from src.config import (
 from src.services.play_service import PlayService
 
 
+class BallotUnreadable(ValueError):
+    """The model answered, but the bet did not state every selection and its odds clearly."""
+
+
 class ImagePlayService:
     PROMPT = (
         "Read this betting slip. Return JSON only with keys: units (number), "
@@ -30,6 +34,7 @@ class ImagePlayService:
 
     def extract_play(self, image_url: str, message_text: str = "", *, require_readable: bool = False) -> dict[str, Any]:
         errors = []
+        unreadable: list[BallotUnreadable] = []
         providers = []
         if OPENAI_API_KEY:
             providers.append(("openai", "https://api.openai.com/v1/chat/completions", OPENAI_API_KEY, OPENAI_VISION_MODEL))
@@ -51,9 +56,14 @@ class ImagePlayService:
                     return parsed
                 except Exception as exc:
                     errors.append(f"{name} attempt {attempt + 1}: {exc}")
+                    if isinstance(exc, BallotUnreadable):
+                        unreadable.append(exc)
                     if attempt == 0:
                         time.sleep(1)
 
+        if unreadable and len(unreadable) == len(errors):
+            # Every model read the bet and declined it; this is a content problem, not a provider outage.
+            raise BallotUnreadable(f"{unreadable[-1]} ({len(unreadable)} of {len(errors)} reads agreed.)")
         raise RuntimeError("All vision providers failed or blocked the image. " + " | ".join(errors))
 
     def extract_text_play(self, message_text: str) -> dict[str, Any]:
@@ -79,7 +89,9 @@ class ImagePlayService:
         if require_readable:
             prompt += (
                 " Also return readable (boolean): true only when every selection and its odds are fully readable "
-                "and unambiguous. Otherwise return readable:false; do not guess or substitute uncertainty text."
+                "and unambiguous. Otherwise return readable:false; do not guess or substitute uncertainty text. "
+                "When readable is false, also return reason: one short sentence naming what is missing or unclear "
+                "(for example, no odds are given for a selection)."
             )
         response = requests.post(
             url,
@@ -112,7 +124,10 @@ class ImagePlayService:
             content = content.removeprefix("```").removeprefix("json").removesuffix("```").strip()
         parsed = json.loads(content)
         if require_readable and parsed.get("readable") is not True:
-            raise ValueError("The ballot bet image could not be read unambiguously.")
+            source = "image" if image_url else "text"
+            reason = parsed.get("reason")
+            detail = f" {str(reason).strip()[:200]}" if isinstance(reason, str) and reason.strip() else ""
+            raise BallotUnreadable(f"The ballot bet {source} could not be read unambiguously.{detail}")
         self._validate(parsed)
         return parsed
 
