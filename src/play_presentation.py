@@ -83,12 +83,11 @@ def build_engagement_view(play_id: int, tails: int) -> discord.ui.View:
 
 
 def capper_play_mentions() -> dict:
-    """Ping text and mention allowlist for capper plays; only these roles can be notified."""
-    role_ids = list(dict.fromkeys(role_id for role_id in (HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID) if role_id))
+    """Ping text and mention allowlist for capper plays; only ROOKIE can be notified."""
     return {
-        "content": " ".join(f"<@&{role_id}>" for role_id in role_ids),
+        "content": f"<@&{ROOKIE_ROLE_ID}>",
         "allowed_mentions": discord.AllowedMentions(
-            everyone=False, users=False, roles=[discord.Object(id=role_id) for role_id in role_ids], replied_user=False,
+            everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
         ),
     }
 

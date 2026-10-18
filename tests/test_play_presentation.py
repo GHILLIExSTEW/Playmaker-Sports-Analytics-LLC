@@ -151,7 +151,7 @@ def test_publishing_preserves_author_image_and_explicit_target():
     assert embed.image.url == data["image_url"]
 
 
-def test_publishing_capper_play_mentions_highroller_and_rookie_roles_only(monkeypatch, mock_play_cards):
+def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
     presentation = cog()
@@ -159,8 +159,8 @@ def test_publishing_capper_play_mentions_highroller_and_rookie_roles_only(monkey
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.publish_play_message(request, data, ("CAPPER_CHANNEL_ID", 303)))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
-    assert sent["content"] == "<@&789> <@&456>"
-    assert sent["allowed_mentions"].to_dict() == {"roles": [789, 456], "parse": []}
+    assert sent["content"] == "<@&456>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
     assert sent["allowed_mentions"].replied_user is False
     assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
@@ -258,8 +258,8 @@ def test_capper_repost_renders_original_slip_and_preserves_capper_identity(monke
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.repost_official_play(channel, 500, data, author))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
-    assert sent["content"] == "<@&789> <@&456>"
-    assert sent["allowed_mentions"].to_dict() == {"roles": [789, 456], "parse": []}
+    assert sent["content"] == "<@&456>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
     assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
     assert sent["embed"].fields == []
