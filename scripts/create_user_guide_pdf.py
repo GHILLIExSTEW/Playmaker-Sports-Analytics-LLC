@@ -181,11 +181,15 @@ def build_pdf() -> None:
     ]
     for block in main.elements("section"):
         heading = block.elements("h2")[0]
-        icon = heading.elements("span")[0]
-        title = heading.text().removeprefix(icon.text()).strip()
-        heading_table = section(icon.text(), escape(title), "")[0]
-        heading_table.keepWithNext = True
-        story.append(heading_table)
+        icons = heading.elements("span")
+        if icons:
+            icon = icons[0]
+            title = heading.text().removeprefix(icon.text()).strip()
+            heading_block = section(icon.text(), escape(title), "")[0]
+        else:
+            heading_block = p(escape(heading.text()), "Section")
+        heading_block.keepWithNext = True
+        story.append(heading_block)
         for node in block.children:
             if isinstance(node, str) or node.tag == "h2":
                 continue

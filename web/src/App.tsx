@@ -501,7 +501,7 @@ function Website() {
         <section className="hero-section hero-logo-hero">
           <div className="hero-logo-stage reveal">
             <h1 className="visually-hidden">Playmaker Picks</h1>
-            <p className="hero-logo-kicker"><span className="live-dot" /> Independent sports analysis</p>
+            <p className="hero-logo-kicker"><span className="live-dot" /> Now live | Independent sports analysis</p>
             <HeroArtwork />
             <p className="hero-logo-tagline">Official plays. Every result stays on the board.</p>
           </div>
@@ -566,7 +566,7 @@ function Website() {
         {capperDirectory}
 
         <section className="membership-promo" id="membership">
-          <div><p className="eyebrow">Membership</p><h2>One membership. Your seat.</h2><p>Join the free ROOKIE community or try seven days of full HIGHROLLER access. Continue for $19.99 per 30-day pass. No automatic charges. Enrollment remains closed pending launch review.</p></div>
+          <div><p className="eyebrow">Membership is live</p><h2>One membership. Your seat.</h2><p>Join the free ROOKIE community or try HIGHROLLER free for seven days if eligible. Choose $19.99/month, $49.99 every 3 months, or $199.99 every 12 months. The full selected price bills after the trial and automatically renews at that interval until canceled. Cancel before the trial ends to avoid the first charge.</p></div>
           <Link className="button membership-promo-link" to="/membership">See membership &amp; trial <ArrowRight size={17} /></Link>
         </section>
 

@@ -1,5 +1,56 @@
 # React + TypeScript + Vite
 
+## Live membership offer
+
+Public enrollment is open for one HIGHROLLER membership with three billing options:
+
+| Interval | Full recurring price (USD) | Checkout |
+| --- | --- | --- |
+| 1 month | $19.99 | https://whop.com/checkout/plan_0MxgyyucPbdQZ |
+| 3 months | $49.99 | https://whop.com/checkout/plan_sN89nOD7airIA |
+| 12 months | $199.99 | https://whop.com/checkout/plan_FAZPnnd4WxDOU |
+
+Each option includes one seven-day trial for eligible first-time subscribers.
+The full interval price bills after the trial unless canceled beforehand and
+renews at the selected interval until canceled in Whop. Switching billing options
+does not grant another trial. Three-month and annual prices are not installments.
+After checkout, members join https://discord.com/invite/mwxRsWUp5W and use the
+Discord account linked to Whop to sign into the website.
+
+Publishing launch copy does not bypass authentication, age verification,
+membership freshness, tool feature flags, or the server-side
+`website_membership_config.enabled` gate. If that gate remains disabled, the
+website reports premium access unavailable and offers retry/support rather than
+claiming checkout is closed. Verify the deployed Whop plan IDs and paid/trial
+sync before enabling the gate; do not guess IDs from a checkout slug.
+
+### Deploying recurring subscription trials
+
+Apply migrations in order, including
+`supabase/migrations/20261021040000_recurring_subscription_trials.sql`, before
+restarting the updated bot. That migration installs the atomic dual-ledger RPC,
+allows overlapping subscription IDs, enables the website membership gate, and
+sets both database allowlists to the three IDs above for seller
+`biz_rCNwfXRlnl0bFU`. No historical plan IDs are retained because there are no
+existing customers.
+
+Set **both** bot environment lists to:
+
+```dotenv
+WHOP_PAID_PLAN_IDS=plan_0MxgyyucPbdQZ,plan_sN89nOD7airIA,plan_FAZPnnd4WxDOU
+WHOP_TRIAL_PLAN_IDS=plan_0MxgyyucPbdQZ,plan_sN89nOD7airIA,plan_FAZPnnd4WxDOU
+```
+
+Use the existing Whop API credential, confirm `WHOP_ACCOUNT_ID` matches the seller,
+and enable `WHOP_MEMBERSHIP_SYNC_ENABLED=1` on the deployment when ready.
+Do not use these overlapping lists with the old bot, which rejects them.
+Deploy the website and confirm a real eligible checkout produces `trialing`,
+a seven-day current-period window, and the buyer's verified Discord identity;
+the local tests use provider fixtures, not live purchases. Paid conversion
+requires a matching current-period charge. The five-minute sync must remain
+healthy because entitlements expire after 15 minutes without verification.
+Local environment edits do not update server variables or apply migrations.
+
 ## User Guide
 
 The current Discord, website, research and API guide is
@@ -344,14 +395,15 @@ result. The public directory exposes only author names and approved avatars;
 performance metrics and the public ledger still use settled results only.
 The homepage and primary navigation link to the board.
 
-Website premium access is **disabled by default**. The database-owner/service
+Website premium access was **disabled by default** in the initial schema. The database-owner/service
 configuration is `public.website_membership_config`; clients cannot read or
 change it. Copy the seller and the **complete** bot `WHOP_PAID_PLAN_IDS` and
 `WHOP_TRIAL_PLAN_IDS` allowlists into this configuration before enabling it.
-The seeded paid list includes only the new 30-day plan; add all approved
-historical paid IDs so existing purchases keep access. Never put a trial ID
-in the paid list. Follow the staging/production checklist in `DEPLOYMENT.md`;
-do not enable production access or checkout before the launch gates pass.
+The recurring-subscription migration above replaces the original seed with
+the three confirmed plans and enables access. Built-in trial subscriptions
+intentionally appear in both lists: `trialing` needs verified trial evidence,
+while paid access requires a current-period charge. Arbitrary free plans must
+not be added to the paid list. See the deployment steps above.
 
 `website_member_access()` resolves the signed-in user's provider-managed
 `auth.identities.provider_id` for Discord, not editable user metadata or

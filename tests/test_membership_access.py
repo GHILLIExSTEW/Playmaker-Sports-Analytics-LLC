@@ -299,12 +299,11 @@ def test_trial_requires_verified_identity_and_never_accepts_paid_evidence():
     assert not whop.snapshot(trial_membership(), user(), [])["trial_verified"]
 
 
-def test_paid_and_trial_plan_overlap_is_configuration_error():
+def test_paid_and_trial_plan_overlap_supports_subscription_periods():
     whop = service(trial_plan_ids={"plan_paid"})
-    with pytest.raises(RuntimeError, match="must not overlap"):
-        whop.ready()
-    with pytest.raises(RuntimeError, match="must not overlap"):
-        whop.snapshot(membership(), user(), [payment()])
+    whop.ready()
+    snapshot = whop.snapshot(membership(), user(), [payment()])
+    assert snapshot["paid"] and not snapshot["trial_verified"]
 
 
 def test_trial_sync_fetches_plan_without_payment_and_uses_separate_ledger():
@@ -419,3 +418,95 @@ def test_trial_confirmation_does_not_require_a_payment():
         vault.publish.assert_awaited_once()
         assert "Ticket confirmed" in target.followup.send.call_args.args[0]
     asyncio.run(run())
+
+
+def recurring_plan():
+    return {
+        "id": "plan_paid", "account": {"id": "biz_test"}, "plan_type": "renewal",
+        "trial_period_days": 7, "expiration_days": None, "billing_period": 30,
+    }
+
+
+def recurring_trial():
+    return {**membership(), "status": "trialing", "current_period_end": "2026-10-08T12:00:00Z"}
+
+
+@pytest.mark.parametrize("days", [30, 90, 365])
+def test_subscription_trials_are_verified_without_fabricating_payment(days):
+    whop = service(trial_plan_ids={"plan_paid"})
+    snapshot = whop.snapshot(recurring_trial(), user(), [payment()], {**recurring_plan(), "billing_period": days})
+    assert snapshot["trial_verified"] and not snapshot["paid"]
+    assert snapshot["payment_id"] is None and snapshot["status"] == "trialing"
+
+
+@pytest.mark.parametrize("change", [
+    {"id": "plan_other"}, {"account": {"id": "biz_other"}}, {"plan_type": "one_time"},
+    {"trial_period_days": None}, {"trial_period_days": 14}, {"trial_period_days": True},
+])
+def test_subscription_trial_requires_matching_seller_plan_and_seven_day_setting(change):
+    whop = service(trial_plan_ids={"plan_paid"})
+    snapshot = whop.snapshot(recurring_trial(), user(), [], {**recurring_plan(), **change})
+    assert not snapshot["trial_verified"] and not snapshot["paid"]
+
+
+@pytest.mark.parametrize("status", ["active", "past_due", "canceled", "expired", "completed"])
+def test_subscription_trial_requires_trialing_status(status):
+    whop = service(trial_plan_ids={"plan_paid"})
+    snapshot = whop.snapshot({**recurring_trial(), "status": status}, user(), [], recurring_plan())
+    assert not snapshot["trial_verified"] and not snapshot["paid"]
+
+
+def test_subscription_trial_requires_identity_and_exact_original_window():
+    whop = service(trial_plan_ids={"plan_paid"})
+    assert not whop.snapshot(recurring_trial(), None, [], recurring_plan())["trial_verified"]
+    assert not whop.snapshot(
+        {**recurring_trial(), "current_period_end": "2026-10-09T12:00:00Z"}, user(), [], recurring_plan(),
+    )["trial_verified"]
+
+
+def test_subscription_trial_and_paid_conversion_use_atomic_dual_ledger_rpc():
+    whop = service(trial_plan_ids={"plan_paid"})
+    whop.db._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
+    trial = whop.snapshot(recurring_trial(), user(), [], recurring_plan())
+    whop.save(trial)
+    whop.db._ensure_client.return_value.rpc.assert_called_with(
+        "record_whop_subscription_membership", {"p_snapshot": trial},
+    )
+    paid = whop.snapshot(membership(), user(), [payment()], recurring_plan())
+    assert paid["paid"] and not paid["trial_verified"]
+    assert "payment" in paid["verification_reason"]
+    whop.save(paid)
+    whop.db._ensure_client.return_value.rpc.assert_called_with(
+        "record_whop_subscription_membership", {"p_snapshot": paid},
+    )
+
+
+def test_overlapping_subscription_sync_checks_plan_and_paid_renewal_evidence():
+    whop = service(trial_plan_ids={"plan_paid"})
+    whop.ready = Mock()
+    whop.pages = Mock(side_effect=[[membership()], [payment()]])
+    whop.request = Mock(side_effect=[user(), recurring_plan()])
+    whop.save = Mock()
+    assert whop.sync() == 1
+    assert whop.save.call_args.args[0]["paid"]
+    assert whop.request.call_args_list[1].args == ("variants/plan_paid",)
+
+
+def test_overlapping_subscription_trial_sync_does_not_fetch_payment():
+    whop = service(trial_plan_ids={"plan_paid"})
+    whop.ready = Mock()
+    whop.pages = Mock(return_value=[recurring_trial()])
+    whop.request = Mock(side_effect=[user(), recurring_plan()])
+    whop.save = Mock()
+    assert whop.sync() == 1
+    whop.pages.assert_called_once_with("memberships", {"account_id": "biz_test"})
+    assert whop.save.call_args.args[0]["trial_verified"]
+
+
+def test_overlapping_subscription_ids_are_allowed_for_trial_entitlement_lookup():
+    db = Mock()
+    db._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
+    with patch("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test"), patch(
+        "src.services.membership_service.WHOP_TRIAL_PLAN_IDS", {"plan_paid"},
+    ), patch("src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_paid"}):
+        assert MembershipService(db).has_trial_access(123)

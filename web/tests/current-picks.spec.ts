@@ -7,6 +7,77 @@ const picks = [
 const defaultAppearance = { name_color: null, link_color: null, text_color: null, heading_font: 'barlow',
   banner_url: null, section_order: ['stats', 'picks', 'charts', 'results'] }
 
+test('live membership offers three renewing intervals with trials and matching checkout links', async ({ page }) => {
+  await mockApi(page)
+  await page.goto('/membership')
+  await expect(page.getByText('Membership is live', { exact: true })).toBeVisible()
+  for (const [name, price, interval, id] of [
+    ['Monthly', '$19.99', '1 month', 'plan_0MxgyyucPbdQZ'],
+    ['Three months', '$49.99', '3 months', 'plan_sN89nOD7airIA'],
+    ['Annual', '$199.99', '12 months', 'plan_FAZPnnd4WxDOU'],
+  ]) {
+    const card = page.locator('.membership-plan').filter({ has: page.getByRole('heading', { name, exact: true }) })
+    await expect(card).toContainText(price)
+    await expect(card).toContainText(interval)
+    await expect(card).toContainText('seven days free')
+    await expect(card.getByRole('link')).toHaveAttribute('href', `https://whop.com/checkout/${id}`)
+    await expect(card).toContainText('Automatically renews until canceled')
+  }
+  await expect(page.getByRole('heading', { name: 'Seven days free. Choose your billing interval.' })).toBeVisible()
+  await expect(page.getByText(/Three-month and annual prices are charged in full/)).toBeVisible()
+  await expect(page.getByRole('link', { name: 'join our Discord server' })).toHaveAttribute('href', 'https://discord.com/invite/mwxRsWUp5W')
+  await expect(page.locator('main')).not.toContainText(/Get launch updates|checkout remains closed|30 days prepaid|no automatic renewal|no automatic paid conversion/i)
+})
+
+test('homepage announces all live membership intervals without obsolete prepaid terms', async ({ page }) => {
+  await mockApi(page)
+  await page.goto('/')
+  await expect(page.locator('.hero-logo-kicker')).toContainText('Now live')
+  await expect(page.locator('#membership')).toContainText('$19.99/month')
+  await expect(page.locator('#membership')).toContainText('$49.99 every 3 months')
+  await expect(page.locator('#membership')).toContainText('$199.99 every 12 months')
+  await expect(page.locator('#membership')).toContainText('automatically renews at that interval until canceled')
+  await expect(page.locator('#membership')).not.toContainText(/closed|prepaid|30-day pass|no automatic charges/i)
+})
+
+for (const route of ['terms', 'privacy', 'refunds']) {
+  test(`live ${route} policy removes closed-launch messaging and preserves disclosures`, async ({ page }) => {
+    await mockApi(page)
+    await page.goto(`/${route}`)
+    await expect(page.getByText(/Membership enrollment is live through Whop/)).toBeVisible()
+    await expect(page.locator('.policy-page')).not.toContainText(/Draft for launch|Checkout remains closed|trial expires without an automatic charge/i)
+    if (route !== 'privacy') {
+      await expect(page.locator('.policy-content')).toContainText('$19.99')
+      await expect(page.locator('.policy-content')).toContainText('$49.99')
+      await expect(page.locator('.policy-content')).toContainText('$199.99')
+      await expect(page.locator('.policy-content')).toContainText('Whop')
+      await expect(page.locator('.policy-content')).toContainText('before the trial ends')
+    }
+  })
+}
+
+test('official picks show the saved roster approval and matching official stake', async ({ page }) => {
+  const dataset = [
+    { ...picks[0], capper: 'Official Playmaker Picks', approval_yes: 2, eligible_cappers: 3 },
+    picks[1],
+  ]
+  await mockApi(page, { dataset })
+  await page.goto('/picks')
+  const official = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  await expect(official.getByText('Team approval: 2 of 3 cappers | Official stake: 2u')).toBeVisible()
+  await expect(official.getByText('Risk: 2u')).toBeVisible()
+  const personal = page.getByRole('article').filter({ hasText: 'First NFL selection' })
+  await expect(personal.getByText(/Team approval:/)).toHaveCount(0)
+})
+
+test('inconsistent approval and stake are rejected rather than displayed', async ({ page }) => {
+  const dataset = [{ ...picks[0], approval_yes: 2, eligible_cappers: 3, units: 1 }]
+  await mockApi(page, { dataset })
+  await page.goto('/picks')
+  await expect(page.getByRole('alert').filter({ hasText: 'Current picks could not be loaded' })).toBeVisible()
+  await expect(page.getByRole('article').filter({ hasText: 'New NHL selection' })).toHaveCount(0)
+})
+
 test('insight stays collapsed and missing insight has no reveal control', async ({ page }) => {
   await mockApi(page, { dataset: [{ ...picks[0], analysis: '' }, picks[1]] })
   await page.goto('/picks')
@@ -435,7 +506,7 @@ for (const [state, message] of [
   ['signed-out', 'Current picks are for HIGHROLLER members.'],
   ['age-required', 'Complete age verification'],
   ['discord-required', 'A verified Discord sign-in is required.'],
-  ['launch-pending', 'Website premium access is awaiting launch validation.'],
+  ['launch-pending', 'Membership is live, but website premium access is currently unavailable.'],
   ['membership-required', 'No current verified HIGHROLLER access was found.'],
 ]) {
   test(`${state} does not request or display premium picks`, async ({ page }) => {

@@ -1,0 +1,295 @@
+-- Generated from Playmaker_Picks_User_Guide.html by scripts/create_user_guide_pdf.py.
+begin;
+
+create table if not exists public.operator_user_guide_content (
+  id boolean primary key default true check (id),
+  html text not null check (length(html) > 0)
+);
+alter table public.operator_user_guide_content enable row level security;
+revoke all on table public.operator_user_guide_content from public, anon, authenticated;
+
+insert into public.operator_user_guide_content (id, html) values (true, $playmaker_guide$
+  <header>
+    <h1>Playmaker Picks</h1>
+    <p>Discord, website, research tools and API usage<br>Updated October 11, 2026</p>
+  </header>
+
+  <section><h2><span>🚀</span>Start here and check your access</h2>
+    <p>Run <code>/start</code> for private getting-started steps or <code>/membership_status</code> to check feature eligibility. Use the same Discord account linked to Whop. These commands do not buy, extend or grant access.</p>
+    <table><thead><tr><th>Access</th><th>Available features</th></tr></thead><tbody>
+      <tr><td>Public / ROOKIE</td><td>Website settled results, capper directory, public sports scores and schedules, plus the configured free Discord channels. No unsettled premium selections.</td></tr>
+      <tr><td>Verified HIGHROLLER paid / eligible trial</td><td>Published current picks, member stats and Member Bet Vault when enabled. An eligible first-time trial lasts seven days; the prepaid paid pass is $19.99 for 30 days. No automatic paid conversion or renewal. Checkout and access require enabled launch settings; do not assume deployment alone opens enrollment.</td></tr>
+      <tr><td>OPERATOR / Owner</td><td>Team research: website Data Models and NFL Matchup Lab, and Discord <code>/model</code> in Laboratory. Paid/trial membership alone does not unlock these tools. Owner-only <code>/api</code> is a separate cache-refresh tool.</td></tr>
+    </tbody></table>
+    <p>Features depend on current verification, configured channels and deployment. An approved Discord research exception can grant complimentary member picks and research/API tools without granting Owner or OPERATOR administration. It still requires provider-verified Discord login and age verification, and does not bypass account ownership or editing permissions. Adults must be 21+ or the higher local legal age. Playmaker provides analysis and tracking, not sportsbook wagering or guaranteed profits.</p>
+  </section>
+
+  <section><h2><span>📷</span>Recording a play from an image</h2>
+    <p>Cappers post personal betting-slip images in Capper_plays (1513186440278704178). Open the bot's review controls, check selections, odds and units, and use <b>Edit bet</b> or <b>Enter units</b> if needed. Press <b>Confirm and record</b> only after checking the extracted data. These plays credit the individual capper and feed that capper's website homepage, never the official team tracker. Their cards use the same generated-image layout as official picks: the original uncropped slip above, bet details below-left, and matching cached team/player artwork or the server icon below-right. The embed retains the capper's name and avatar, the image is labeled CAPPER TRACKING, and personal plays still do not create BANGs. Settlements and edits regenerate the image from privately stored originals; text-only plays show a no-slip panel. Existing posts are not bulk-reposted.</p>
+    <div class="callout">Confirmation creates one tracked card in Capper_plays, normally replacing the upload. React on that card, not the deleted upload or review prompt. If reposting fails, a new card is published without deleting the upload; the new card is tracked. There is no extra official or confirmation-channel copy.</div>
+  </section>
+
+  <section><h2><span>✍️</span>Recording a play manually</h2>
+    <p>Use <code>/play</code> in Capper_plays when you have no image. You need the capper role and any configured official-role permissions. Follow the input form for units, selections and American odds; multi-leg plays collect the remaining legs and calculate combined odds. The resulting personal card stays in Capper_plays. Official plays cannot bypass ballot approval through this command.</p>
+  </section>
+
+  <section><h2><span>⭐</span>Team ballots and official picks</h2>
+    <p>Post a native single-choice Discord poll in Cappers_Ballet (1559647368650166322), with three choices beginning with <b>Yes</b>, <b>No</b>, and <b>Pass</b>. Attach the bet image or post it immediately afterward from the same account. Without an image, include the complete selection and American odds in the poll text or your immediately following message. Missing or ambiguous selections/odds require staff review; the bot never invents them.</p>
+    <p>The bot checks ballots once per minute and publishes only after the native poll is finalized and all outstanding chat verification requests are resolved. Eligibility is frozen from the human members of the configured capper role when a ballot is first registered. Approval requires a strict majority of that entire roster, not merely the people who participated. No, Pass, missing votes and offline status do not reduce the roster.</p>
+    <p><b>3 cappers: 2 Yes = 2u; 3 Yes = 3u. 4 cappers: 3 Yes = 2u; 4 Yes = 3u. 5 cappers: 3 Yes = 1u; 4 Yes = 2u; 5 Yes = 3u.</b> Anything below the required majority is not posted officially. Rosters outside 3-5 require staff review. Ratings describe the stake tier, not the number of approvals: <b>1u = 3 stars; 2u = 4 stars; 3u = 5 stars.</b> These are team staking rules, not win probabilities.</p>
+    <p>In Cappers_Ballet, explicit discussion such as "Agreed", "I'm good with that", "I'm on the over 219.5", "No" or "I'll pass" can propose a Yes, No or Pass vote. The bot looks back 30 minutes before the poll and stops at its closing time. Reply to the ballot or include its Discord link to identify it; unlinked discussion is considered only when exactly one pending ballot fits that time window. Ambiguous, conditional or unsupported language is not guessed. Specific betting statements must match the ballot text. Missing a request does not imply approval.</p>
+    <p>The bot links and quotes the exact source statement and mentions its author with <b>Confirm linked statement</b> and <b>Not my vote (author only)</b> buttons. Only eligible voters without a native poll vote are considered. After <b>10 minutes without confirmation</b>, the bot mentions the configured capper role in Cappers_Ballet once. <b>Two other distinct eligible cappers MUST each approve that exact linked statement</b> before a teammate-verified vote counts. Before escalation, only the author can confirm. The author can still reject an inferred vote before publication. Silence never counts, and unresolved requests hold publication until resolved or the normal daily cleanup closes the ballot. A native Yes, No or Pass always overrides chat inference and is counted only once.</p>
+    <p>Deleted or edited source statements, including text edited back to its original wording, invalidate their inference. A later conflicting recognized statement also invalidates the earlier inference; cast a native poll vote to resolve it. Verification requests, individual approvals and roster snapshots survive restarts. Failed or uncertain sends require staff reconciliation, not automatic repeat pings. Conversation is processed locally using conservative phrase rules, not sent to an AI provider for vote inference.</p>
+    <p>Official posts and generated cards show <b>Team approval: 2 of 3 cappers | Official stake: 2u</b>, using the saved decision. The original sportsbook screenshot remains unchanged and is labeled as the capper's personal wager; its stake can differ from the official team stake. Saved official units drive website picks, tracking and settlement. Ballot-assigned units cannot be manually changed independently of their approval.</p>
+    <p>Approved picks are posted in Official_Playmaker_Plays (1560077460488458392) using only the bot's own name and avatar, never a capper's identity, and mention the HIGHROLLER role. The bot generates one fixed-width image inside the embed: the original uncropped slip spans the top, bet details occupy the lower-left panel, and a matching team logo or player portrait occupies the lower-right panel. Artwork is matched from cached API data only; ambiguous selections, parlays, and unavailable player images use the server icon. The server must have an icon configured. Text-only ballots receive a clearly labeled no-slip panel. Image descriptions retain the selection text. Official plays count toward the automatic team unit summary, not individual capper records.</p>
+    <p>When an Official Playmaker Picks play is settled as a win by reaction, <code>/settle</code>, or a confirmed settlement suggestion, the bot automatically posts a BANG in Winning Slips (1328168927812911165) and tags HIGHROLLER. It uses the same generated-card layout: original slip above, stake/odds/net profit in units and the team's gold-star rating below-left, artwork below-right, and a link to the original pick. Capper-tracked plays do not create BANGs.</p>
+    <p>Reopening or correcting a play updates its existing BANG with a prominent correction instead of deleting it. The image remains inside the embed; corrections and subsequent wins never send another role ping. A one-minute durable event scan catches saved result changes, including maintenance-script settlements or interrupted bot updates; it does not replay historical wins on deployment. Pending live events wait while testing mode is enabled. Test-mode corrections and messages stay isolated from live channels.</p>
+    <p>Staff recovery tools are private and restricted to server managers or configured operators in the configured server. Use <code>/bang_status play_id:</code> to inspect claimed, delivered, failed, or uncertain delivery. Inspect Winning Slips before recovery: <code>/bang_recover play_id: message_id:</code> links an existing bot-owned BANG without resending or pinging; <code>/bang_retry play_id: confirmed_no_message:true</code> is only for cases where staff has checked that no BANG exists. Active claims require a ten-minute wait. Failed or uncertain sends are never automatically resent. A missing/deleted tracked message requires staff review, not automatic replacement.</p>
+    <p>BANG deployment: stop the old bot, apply <code>20261017000000_bang_delivery_recovery.sql</code> after the existing BANG and capper/ballot migrations, then deploy and restart the updated bot so its staff commands sync. The migration adds private original-slip/artwork storage for regeneration and a durable result-event queue, and replaces the old BANG RPCs. Existing delivered messages and uncertain claims are retained. Old posts are not bulk-redrawn: available originals are captured when a card is next refreshed or settled. Startup checks validate the Official Picks and Winning Slips channels, HIGHROLLER role and mentionability, required posting/image/history permissions, and migration availability; failures alert staff. <code>WINNING_SLIPS_CHANNEL_ID</code> selects the destination; the legacy <code>DISCORD_PLATINUM_ROLE_ID</code> setting selects HIGHROLLER.</p>
+    <p>All posts in Cappers_Ballet are deleted daily at 3:00 AM Eastern. Save any ballot details you need before cleanup; open or interrupted ballots are not carried over for later processing.</p>
+    <p>Dynamic voting deployment: stop the old bot, reconcile pending/interrupted ballots, apply <code>20261021000000_dynamic_capper_votes.sql</code> and the generated <code>20261021010000_dynamic_capper_voting_guide.sql</code>, deploy the bot and website, then restart. The migration quarantines legacy pending ballots for staff review; previously unscanned polls older than the new policy are also held for review rather than assigned a guessed historical roster. Repost those selections in fresh ballots after reconciliation. Published and historical units are not recalculated. Ensure <code>TRACKER_ROLE_ID</code> identifies actual eligible cappers, not non-capper owners/technicians; it also selects the escalation mention. The bot needs member/message-content intents and read-history, send-message, embed, attachment and capper-role mention permissions in the configured ballot channel. Durable claims prevent duplicate publication. Failed/interrupted publication or verification sends alert staff and are not automatically retried: reconcile saved plays, decisions and Discord posts before resetting state. For an interrupted verification send, set its saved prompt/escalation message ID and corresponding timestamp to the actual delivered message, or clear the send marker only after verifying no message was delivered. Do not infer historical personal credit without reviewing original sources.</p>
+    <p>Also apply <code>20261021020000_current_pick_team_approval.sql</code> before deploying the website approval display. The member-only feed retains its existing access checks and exposes approval totals, never individual voter identities or discussion text. Older plays without approval metadata retain their existing units display.</p>
+    <p>For a late image or correction, trusted staff can set <code>capper_ballots.source_message_id</code> to its message ID in the same ballot channel. This explicit association avoids guessing which older poll a later upload belongs to. Only reset a failed ballot to pending after reconciling any existing saved play/post.</p>
+    <p>The displayed tracking era starts October 14, 2026, at midnight Eastern. Team and capper stats, settled website ledgers, and current-pick displays exclude plays created before that time, even if they settle later. Historical records and Discord posts are retained. The persistent <code>tracking_display_settings.starts_at</code> setting controls this boundary; <code>/tracker_start</code> can further narrow Discord totals by settlement date but does not erase the retained archive.</p>
+  </section>
+
+  <section><h2><span>✅</span>Settling a play with reactions</h2>
+    <p>React directly on the tracked play card in Official_Playmaker_Plays or Capper_plays. A personal play's author or Discord Owner can settle by reaction; team plays are bot-owned, so a Discord Owner grades them by reaction. An OPERATOR role alone does not authorize settling another author's play. Officials can use the /settle picker. Reactions on unrelated messages/channels are ignored.</p>
+    <table>
+      <thead><tr><th>Icon</th><th>Result</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td class="icon">✅</td><td>Win</td><td>Settles immediately and updates the card</td></tr>
+        <tr><td class="icon">❌</td><td>Loss</td><td>Settles immediately and updates the card</td></tr>
+        <tr><td class="icon">🅿️</td><td>Void</td><td>No change to your unit total</td></tr>
+        <tr><td class="icon">🌓</td><td>Partial</td><td>Not processed by reaction — use <code>/settle</code> instead</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section><h2><span>🛠️</span>Tracker and personal tools</h2>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/update_tracker</code></td><td>Officials/moderators refresh the Unit Summary and reconcile missed reactions. The tracker also refreshes automatically every hour, Eastern Time.</td></tr>
+        <tr><td><code>/rankings</code></td><td>Posts the current team ranking summary.</td></tr>
+        <tr><td><code>/summary</code></td><td>Posts the official team unit summary only, without individual capper rankings. Use the configured team-stats channel.</td></tr>
+        <tr><td><code>/capper_tracker [capper:]</code></td><td>Privately requests individual capper totals and monthly breakdown, optionally for one capper. This tracker is never automatically displayed.</td></tr>
+        <tr><td><code>/play_results</code></td><td>Search published settled official team plays by Eastern date range, sport and grade. Browse ten per page; original-post links appear when accessible.</td></tr>
+        <tr><td><code>/mystats</code></td><td>Privately shows individual capper-play, Tail and Vault records. Use its share button to publish to the eligible Free or VIP Chat destination. Tail stats use the play's risk units, not your personal stake.</td></tr>
+        <tr><td><code>/vault_leaderboard</code></td><td>Shows this month's member Vault records. Vault results are separate from the official capper ledger.</td></tr>
+        <tr><td><code>/tracker_start date_value:show</code></td><td>Shows the date the tracker is currently counting from.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section><h2><span>🔒</span>Commands for officials</h2>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/settle</code></td><td>Opens a paginated list of open official plays. Select a play, then choose its result. Use this for partials or when the tracked message cannot be reacted to. The card's Play # identifies the record.</td></tr>
+        <tr><td><code>/regrade</code></td><td>Select a play from the last two days, then enter remaining legs, new American odds and an optional note. Regraded plays count as zero units.</td></tr>
+        <tr><td><code>/unsettle</code></td><td>Select a play settled in the last seven days to reopen an accidental or incorrect settlement. Confirm before applying it.</td></tr>
+        <tr><td><code>/edit_play</code></td><td>Select an open official play and edit units, team, selections and leg odds in a modal. Ownership and role checks still apply.</td></tr>
+        <tr><td><code>/recap</code></td><td>Officials/moderators preview the previous weekly or monthly recap privately; post:true sends it to the results channel. Scheduled recaps run at 10 AM Eastern on Mondays and on the first day of the month.</td></tr>
+        <tr><td><code>/request_insights</code></td><td>Staff can request author insight for up to 50 open picks missing an insight request. Insight is capper-written analysis, not automatically extracted slip text.</td></tr>
+        <tr><td><code>/test [image:]</code></td><td>Officials run system diagnostics or parse an attached slip without recording a play.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section><h2><span>✅</span>Automatic settlement suggestions</h2>
+    <p>Every 15 minutes the bot checks supported full-game moneyline, spread and total legs against cached final scores. It posts a suggested WIN/LOSS/VOID in the confirmation channel. An authorized official/moderator must Confirm; Dismiss leaves the play unchanged. Props and unmatched or unsupported games require manual grading. A suggestion is not an automatic official settlement.</p>
+  </section>
+
+  <section><h2><span>🏦</span>Member Bet Vault and Tail tracking</h2>
+    <p>Eligible members submit in the configured Member Bet Vault channel: attach exactly one static JPEG, PNG or WebP betting-slip image, up to 10 MB. Put units in the caption when needed, then follow the confirmation and settlement controls. The channel is submission-only; read the response before completing your entry.</p>
+    <p>Use the Tail control under an official play to register a tail; use <code>/mystats</code> to see your record. Member Vault entries do not become official capper picks. Access failures, missing units or unclear slip data must be resolved before confirming.</p>
+  </section>
+
+  <section><h2><span>🌐</span>Website: results, picks and profiles</h2>
+    <p>Visit <a href="https://playmakersportsanalytics.com">playmakersportsanalytics.com</a>. The homepage and <code>/results</code> ledger show official team picks only, ten results per page with sport filters on the dedicated page. Individual capper homepage metrics and results use Capper_plays only. Published current picks include both team and personal plays with separate attribution. Test plays, open selections and private account data are excluded from the public settled ledger.</p>
+    <p>This guide is available on the website at <code>/guide</code>, through the <b>Guide (team only)</b> navigation link. Only verified OPERATOR/Owner accounts can open it; paid/trial access alone is insufficient. The page uses the same tab-session access checks as the research tools, and its content RPC checks current access on every fetch.</p>
+    <p><code>/cappers</code> lists current verified OPERATOR cappers, with public profiles and settled performance. <code>/picks</code> contains published open picks for verified member/team access. Filter by sport or capper, and open the insight control where available.</p>
+    <p>Account &gt; View public profile opens your separate member profile. Leave Avatar image URL blank to follow the latest Discord login photo; after changing your Discord avatar, sign out and back in to sync it. Your own Discord avatar URL is treated as automatic, not a frozen custom image. Other custom HTTPS image URLs remain overrides. This does not change the separately managed capper-page artwork.</p>
+    <p>On <code>/account</code>, sign in with Discord, complete age verification, check membership, edit your profile, choose sports/capper follows, and manage alert preferences. The personalized homepage uses those follows. A preference does not guarantee delivery of every alert.</p>
+    <p>Verified capper page owners can edit their own page appearance and their own open-pick insights. A verified Owner can edit all capper pages/insights. Available appearance controls include colors, heading font, bio, social links, avatar, banner and section order. Saving or uploading can fail explicitly; verify the saved result.</p>
+    <div class="callout">Active website access is verified once per browser tab and retained across navigation/reloads until the tab closes. No 30-second or focus role refresh runs. Sign-out, account/profile changes and membership expiry invalidate it. A removed role blocks new protected database requests even if previously viewed content remains in the tab. The browser cache cannot grant server access.</div>
+  </section>
+
+  <section><h2><span>🏟️</span>Website sports center and NFL Matchup Lab</h2>
+    <p>The public sports board and sport pages show cached schedules, scores and update times, with links to each sport center. Coverage varies; empty, unsupported and failed feeds are labeled. The browser reads Supabase caches, not API-Sports directly. A sync timestamp is not proof of an instant live score.</p>
+    <p>OPERATOR/Owner members can use <code>/nfl/lab</code> for matchup records, home/away splits, last-five form, scoring averages and rest context. NFL efficiency panels add nflverse offensive/defensive EPA per play and success rates over up to ten prior regular-season games; at least three are required. Same-day games are excluded from efficiency history.</p>
+    <p>Enter American odds, stake and an optional <b>your estimated probability</b> for implied/break-even probability, payout and conditional expected profit. The calculator is not a sportsbook odds feed. CSV exports include matchup summaries, game history and calculator data. NFL efficiency is descriptive: it does not recalibrate the score-only model.</p>
+  </section>
+
+  <section><h2><span>📈</span>Website Data Models: six competitions</h2>
+    <p>Open <code>/models</code> with verified OPERATOR/Owner access. Choose NFL, NBA, MLB, NHL, NCAA Football or NCAA Men's Basketball, then choose an upcoming matchup. The NFL Lab link appears only under the NFL tab.</p>
+    <p>The page shows stored projections from the Playmaker ratings model (ratings-v2), refreshed by the bot every 30 minutes. A game stays listed until one hour after its scheduled start.</p>
+    <p><b>Ratings:</b> every team carries offensive and defensive ratings that update after each game, adjusted for opponent strength and a learned home advantage, and partially regressed between seasons. At least three prior games per team and 30 league games are required; otherwise no projection is shown.</p>
+    <p><b>Learned adjustments:</b> rest days and back-to-backs, travel distance between venues, and outdoor weather (temperature, wind and precipitation from Open-Meteo) for NFL, MLB, NHL and NBA venues. NCAA has no venue data, so it has no travel or weather adjustment. NFL play-by-play efficiency (EPA) is used only when it improves the backtest; it currently does not.</p>
+    <p><b>NFL injuries:</b> players listed Out or Doubtful reduce their team's projection using fixed position weights (QB weighted most). This is a heuristic, not a depth-chart model.</p>
+    <p><b>Probabilities:</b> hockey and baseball use a Poisson score model; football and basketball use a calibrated normal margin.</p>
+    <p><b>Market comparison:</b> the consensus sportsbook moneyline (no-vig), spread and total are shown beside the model with the model edge, cover and over probabilities. Market prices are never inputs to the projection.</p>
+    <p><b>Track record:</b> a walk-forward backtest projects each past game using only information available before it, tunes on the earlier half and reports the later half against the old score-only baseline (Brier score, log loss, accuracy, margin and total error, plus calibration buckets).</p>
+    <p>Unresolved provider teams and NFL preseason games are excluded. Duplicate fixtures are merged across provider IDs/seasons by teams and exact start time so selections and history count the matchup once. Scored finals take precedence over duplicate schedule rows; fresher data is preferred.</p>
+    <div class="callout">These are experimental estimates, not betting recommendations. Injury, weather and odds feeds can be incomplete; historical weather only covers the last 92 days; odds cannot be backtested. Read sample sizes, update times and the track record.</div>
+  </section>
+
+  <section><h2><span>🔬</span>Laboratory /model: fresh league and game data</h2>
+    <p>Current OPERATOR/Owner members run <code>/model</code> only in Laboratory, configured by <code>CONFIRMATION_CHANNEL_ID=1328130555568455710</code>. Paid/trial access alone is not enough.</p>
+    <ol>
+      <li>Choose one of the six model leagues from the dropdown.</li>
+      <li>In the modal, enter a game date as YYYY-MM-DD in Eastern time and an optional team filter.</li>
+      <li>The bot refreshes the selected league's current and prior seasons from API-Sports, follows all reported pages and saves the refreshed games. This spends shared API allowance.</li>
+      <li>Choose a game from the paginated dropdown; use Previous/Next for more than 25 choices.</li>
+      <li>Type POST in the confirmation modal. The finished model is posted publicly in Laboratory; the picker remains private.</li>
+    </ol>
+    <p>The report includes projected scores and win probability, the market comparison (consensus line, model edge, cover and over), inputs (rest, travel, weather, NFL injuries), prior-game samples, the league's backtest track record, provider refresh time and request count. It uses the same ratings model as the website. Snapshot/picker controls expire after three minutes and cannot publish twice. Roles, channel and picker owner are rechecked. If refresh fails, no stale cached model is posted as a success.</p>
+    <p><b>/league_model: every game in a league on one date</b></p>
+    <p>Run <code>/league_model</code> in Laboratory, choose the league from the dropdown, then pick a date from the suggestions (yesterday through the next two weeks, Eastern time) or type it as YYYY-MM-DD. The bot uses stored league history and stored model inputs (no API allowance), runs the ratings model and posts one model-card image per game as a regular Laboratory message. Each card shows the projection, market comparison, inputs and track record. Games without enough history show an explicit no-projection card.</p>
+  </section>
+
+  <section><h2><span>📚</span>Member stats commands: cached versus refreshed</h2>
+    <table><thead><tr><th>Command</th><th>Purpose</th></tr></thead><tbody>
+      <tr><td>/schedule sport: [team:]</td><td>Seven-day cached schedule, optionally filtered by team.</td></tr>
+      <tr><td>/results sport: [team:]</td><td>Recent provider game results, optionally filtered by team. This is not /play_results, which searches official betting-play settlements.</td></tr>
+      <tr><td>/teamstats sport: team:</td><td>Recent team form and scoring from available cached games, not guaranteed season standings.</td></tr>
+      <tr><td>/matchup sport: team: opponent:</td><td>Upcoming matchup context from the sports cache, not the Laboratory probability model.</td></tr>
+      <tr><td>/gamestats sport: league: game: [player:]</td><td>Choose league/game suggestions and optionally a player/driver for game-specific reports.</td></tr>
+      <tr><td>/playerstats sport: league: player:</td><td>Current/previous season player or driver reports; choose the league and name suggestions.</td></tr>
+    </tbody></table>
+    <p>These commands reply privately and require verified paid/trial access or allowed staff access. Available sports, players and endpoints vary. Without refresh:true they use cached data only and show update times. With refresh:true, live calls require enabled refresh/budget settings and consume your member allowance; player/season lookups may need multiple calls. Previous-season player data can be reused from cache.</p>
+    <p>For /schedule, /results, /teamstats and /matchup, refresh:true updates today's UTC-date feed only; other dates stay cached. For /gamestats it refreshes the selected game's player snapshot; /playerstats uses current/previous-season scope. Neither refresh mode expands provider subscription coverage.</p>
+  </section>
+
+  <section><h2><span>🔌</span>API reference for website and bot integrations</h2>
+    <p>Website requests go to the configured Supabase project at <code>/rest/v1/rpc/FUNCTION_NAME</code>. Use the public publishable/anon key for the project and the signed-in user's access token for protected RPCs, never a service-role key. Functions with “public” in their names can still require team authorization.</p>
+    <table><thead><tr><th>Supabase RPC</th><th>Access and request body</th></tr></thead><tbody>
+      <tr><td>public_settled_results</td><td>Public settled official ledger. No arguments: {}.</td></tr>
+      <tr><td>public_nfl_games / public_nfl_standings / public_nfl_data_status</td><td>Public NFL schedule, standings and freshness. No arguments: {}.</td></tr>
+      <tr><td>website_member_access</td><td>Signed-in account's verified membership/team access. No arguments: {}. This is an access check, not a role-grant endpoint.</td></tr>
+      <tr><td>member_current_picks</td><td>Verified member/team access; published open picks only. No arguments: {}.</td></tr>
+      <tr><td>public_nfl_model_games / public_nfl_team_efficiency</td><td>Verified OPERATOR/Owner research. No arguments: {}.</td></tr>
+      <tr><td>public_sport_model_events</td><td>Verified OPERATOR/Owner research. Example NBA body: {"p_sport_slug":"basketball","p_league_id":"12"}.</td></tr>
+      <tr><td>operator_sport_model_projections</td><td>Verified OPERATOR/Owner research. Stored ratings-model projections with market comparison and inputs. Body: {"p_competition":"nfl"}; other keys are basketball:12 (NBA), baseball:1 (MLB), hockey:57 (NHL), ncaa:2 (NCAA Football) and basketball:116 (NCAA Men's Basketball).</td></tr>
+      <tr><td>operator_sport_model_backtest</td><td>Verified OPERATOR/Owner research. The league's latest walk-forward backtest report. Body: {"p_competition":"hockey:57"}.</td></tr>
+      <tr><td>operator_user_guide</td><td>Verified OPERATOR/Owner guide content. No arguments: {}. Returns HTML text; the underlying content table is not accessible to browser accounts.</td></tr>
+    </tbody></table>
+    <p>With the existing authenticated Supabase JavaScript client, an NBA model-history page is requested as:</p>
+    <p><code>supabase.rpc('public_sport_model_events', { p_sport_slug: 'basketball', p_league_id: '12' }).order('start_at').order('event_id').range(0, 999)</code></p>
+    <p>Check the returned error before using data. Fetch successive 1,000-row ranges until a raw page contains fewer than 1,000 rows; filtering unresolved teams must not determine whether another provider-history page exists.</p>
+    <table><thead><tr><th>Model competition</th><th>Server-side API-Sports GET request</th></tr></thead><tbody>
+      <tr><td>NFL / NCAA Football</td><td>https://v1.american-football.api-sports.io/games · league=1 for NFL, league=2 for NCAA · season=YYYY.</td></tr>
+      <tr><td>NBA / NCAA Men's Basketball</td><td>https://v1.basketball.api-sports.io/games · league=12 for NBA, league=116 for NCAA · season=YYYY-YYYY.</td></tr>
+      <tr><td>MLB</td><td>https://v1.baseball.api-sports.io/games · league=1 · season=YYYY.</td></tr>
+      <tr><td>NHL</td><td>https://v1.hockey.api-sports.io/games · league=57 · season=starting year.</td></tr>
+    </tbody></table>
+    <p>Bot requests authenticate with the server-only x-apisports-key header. Initial season calls omit page; subsequent calls add page only when paging is reported. Owner /api also uses leagues and teams directory endpoints, teams/statistics where supported, and per-game statistics endpoints. NFL/NCAA/basketball team detail uses games/statistics/teams?id=GAME_ID; NFL/NCAA player detail uses games/statistics/players?id=GAME_ID. Soccer uses fixtures and fixture-scoped statistics instead of games.</p>
+    <div class="callout">Use /model, /api or the enabled member refresh commands for normal operations. Ad-hoc direct provider calls bypass this application's reservation accounting and still consume provider quota. Do not expose the provider key in browser code. Confirm provider licensing for public display and downloads before rollout.</div>
+  </section>
+
+  <section><h2><span>🔑</span>Owner /api: refresh a team season cache</h2>
+    <p>Only the Discord Owner role can run <code>/api sport: season:</code> in the configured server. Choose a sport and provider season, then choose a league and team by name from paginated dropdowns. This refreshes available team-season caches; it does not produce a /model prediction.</p>
+    <p>Provider formats differ: NFL/NCAA football/MLB use calendar-year seasons; NHL uses the starting year (2025 for 2025-26); basketball uses split-year text such as 2025-2026. Coverage depends on the selected sport and subscription.</p>
+    <p>The refresh loads the team directory, season schedule, available season-team summaries and supported per-game team/player statistics. NFL/NCAA have no season-summary endpoint in this tool. Other endpoints depend on coverage. Directory queries and detail calls spend shared quota too. Review the completion report: PARTIAL / FAILED means a complete refresh is not claimed. Pickers expire after three minutes; refresh work has a 12-minute interaction limit. Saved components remain cached after failure, but retrying starts again and spends quota again.</p>
+  </section>
+
+  <section><h2><span>🔌</span>API calls, limits and freshness</h2>
+    <table><thead><tr><th>Action</th><th>Provider calls and limits</th></tr></thead><tbody>
+      <tr><td>Website browsing / CSV exports</td><td>Reads stored Supabase data; no direct API-Sports calls. It does not force a provider refresh.</td></tr>
+      <tr><td>Member stats without refresh</td><td>Cached only; no live provider request.</td></tr>
+      <tr><td>Member stats with refresh:true</td><td>Five requests per user per UTC day across products, 20 member requests per product/day, and a five-minute per-product cooldown. Multi-call lookups count each request, not just one command.</td></tr>
+      <tr><td>Staff /model, Owner /api and automated sync</td><td>Use the shared automated allowance, not the member five-request allowance. /model refreshes both seasons and every reported page; /api may call multiple endpoints. Only one /model refresh runs at a time.</td></tr>
+      <tr><td>Shared provider ceiling</td><td>7,500 reserved API-Sports requests per UTC day across all products and system/member usage. Existing usage counts. Bot restart does not reset it. Other apps using the same provider key are not counted by this bot.</td></tr>
+      <tr><td>Model inputs (automated)</td><td>Shared automated allowance. League odds refresh hourly for NBA, MLB, NHL and NCAA basketball (one paged league request); NFL and NCAA Football odds are one request per upcoming game every six hours. NFL injuries and rosters refresh every six hours for teams playing within eight days. Weather comes from Open-Meteo every three hours (not API-Sports quota). Backtests rerun daily at 6:45 AM Eastern.</td></tr>
+      <tr><td>nflverse NFL efficiency</td><td>Separate free nflreadpy/nflverse feed, not API-Sports quota. Bot synchronization updates the stored efficiency panels; feed availability still matters.</td></tr>
+    </tbody></table>
+    <p>API-Sports calls reserve allowance before network access, so failed calls can still consume a reservation. The provider's own quota and subscription rules also apply. Daily budget resets at midnight UTC (8 PM Eastern during daylight time; 7 PM during standard time). Manual refresh does not guarantee that the source has newer data.</p>
+    <p>Automated history backfill resumes saved cursors; routine NFL and multi-sport syncs maintain caches. NFL score checks occur every 15 minutes only during cached game windows. Do not interpret every page load or command as a live provider poll.</p>
+  </section>
+
+  <section><h2>Capper play identity and artwork</h2>
+    <p>Capper Plays posts use the capper's display name and avatar as their top-level Discord webhook identity, without repeating that identity inside the embed. Discord still labels them as app-generated messages; they are not messages sent from the capper's personal account. Official Playmaker Picks keep the bot's identity. The bot needs Manage Webhooks in Capper Plays. Only the bot-owned <code>Playmaker Capper Plays</code> webhook is used for posting and grading edits.</p>
+    <p>Generated cards retain the original slip above the details and use cached team logos or player artwork below-right. Parlays combine available artwork for up to ten legs. If a game is missing, an exact, unambiguous cached team logo can still be used. A misread sport can be recovered for artwork from a unique full matchup/date match without changing grading metadata. Unknown or ambiguous artwork retains the server-icon fallback; unavailable logos are not guessed. Saved fallback cards can pick up newly available team logos on the next card refresh without nesting the generated image.</p>
+    <p>Grading, reopen/regrade refreshes and Tail controls support these webhook posts. Updating an old bot-authored post to a capper identity requires replacement, not an in-place author edit: preserve tracking and ballot references before deleting the original, and suppress new role/user pings during maintenance. Restart the updated bot before migrating pending cards so grading can edit the replacement posts.</p>
+  </section>
+
+  <section><h2>HIGHROLLER member stats dashboard</h2>
+    <p>Open Sports &gt; Member stats (HIGHROLLER) at <code>/stats</code>. Verified active paid/trial members and existing team/research access can use it; Discord identity, age verification, membership freshness and launch gates remain enforced server-side. It does not grant staff research, models, edges, odds feeds or live refresh privileges.</p>
+    <p>Search the full six-league game cache by team, matchup words, game ID, status and local date range. Through date includes the full day; clear dates to remove boundaries. Results are 20 per page in a scrollable list. Compare last 5/10 completed scored games before kickoff, including home/away splits. Samples are bounded to the latest 100 combined team games, not complete seasons.</p>
+    <p>Player research uses up to ten cached team-game snapshots and excludes logs at/after kickoff from averages. Enter a threshold for over/under/push counts; missing statistics are not zero. NFL/NCAA football and basketball have adapters; MLB/NHL player logs are unavailable. No live prop odds or predictions are provided.</p>
+    <p>Save up to 100 teams and players to a private, account-specific watchlist. Team shortcuts search games; player shortcuts select the league and preselect that player when opening a game with their cached logs. Expired members cannot read or modify their watchlist until access is restored. Cache reads and reloads do not spend API credits; the five-request live-refresh allowance is unchanged.</p>
+  </section>
+  <section><h2>Phone-friendly capper research tools</h2>
+    <p>Open <code>/tools</code> on your phone, sign in with Discord, choose a sport, search a team/date, and tap a matchup. Owners approve selected cappers in <code>/integrations</code>. No API key or technical setup is needed on the phone. Active integration keys also qualify unless the Owner explicitly blocks website research access.</p>
+    <p>Review cached recent form, supported player logs and thresholds, available NFL injuries, venue weather, market snapshots and approved Playmaker model summaries. Every feed is timestamped; missing injury coverage does not mean no injuries. Current reports are not historical pregame evidence. This page does not unlock staff model internals, backtests or administration. Use the explicit team-pull button to refresh supported provider data.</p>
+    <p>Add your own sportsbook line or injury notes, optionally read a screenshot, review the extracted text, and press <b>Analyze matchup</b>. User material is unverified and must include a source/date when available. Screenshots are sent to OpenAI for extraction and are not saved to the website database; remove private information first. AI analysis may be wrong and never guarantees a result.</p>
+    <p>The <b>Playmaker model</b> card shows stored pregame projected scores, projected total and two-sided win estimates where available, with sample sizes, model version and timestamps. These are estimates, not guarantees, regulation-only three-way prices or live sportsbook odds. Started/finished games do not show these predictions. A successful team pull queues recalculation using the newly saved cache; the page shows <b>Recalculating model...</b> and waits before reloading the report. The Python bot must be running the queue worker. A failed/unavailable worker is an explicit error, not a successful refresh; do not repeat a provider pull just to check a pending model. Older projections remain flagged. Only the selected team's data is fetched. Unchanged inputs may produce the same scores, and insufficient inputs remain unavailable. Recalculation uses no additional provider calls or AI actions. AI can explain the stored estimates but will not invent missing ones.</p>
+    <p><b>NHL starting goalies:</b> coverage is currently unknown, not confirmed. API-Sports Hockey v1 does not document a starting-lineup/goalie-confirmation feed. Prior appearances and roster membership do not establish tonight's starter. A verified confirmation source is still required.</p>
+    <p>To pull fresh team data, open a matchup, choose <b>Team to refresh</b>, then tap <b>Pull latest team data</b>. This updates the selected team's games for that matchup's season and available NFL injuries, saves them, and reloads the report. Weather, odds and player logs retain their existing cache timestamps; they are not refreshed by this button. Data pulls have their own limit of <b>50 per capper and 500 shared per UTC day</b>, with 15 seconds between pulls. NFL pulls use two provider calls; other leagues use one. The shared 7,500-provider-call daily ceiling also applies.</p>
+    <p>Separately, AI extraction and analysis each count toward 50 AI actions per capper and 500 shared AI actions per UTC day, with 15 seconds between AI actions. Failed provider attempts still count against the applicable allowance; there are no automatic retries. Cached browsing does not spend either allowance or API-Sports requests. Scrambled SportsDataIO trial data is excluded.</p>
+  </section>
+  <section><h2>Private capper API integrations</h2>
+    <p>Owners can open Sports &gt; API integrations at <code>/integrations</code> to create a private, revocable key for a chosen verified capper's own server-side system. The recipient must sign in with Discord and complete age verification first. Keys are shown only once and must not be shared publicly or put in browser code. This is an authenticated API endpoint, not a Discord posting webhook.</p>
+    <p>These integration calls bypass ordinary member quotas and cooldowns but retain the shared 7,500-request UTC-day safety cap and provider limits. One HTTP request forwards one API-Sports data GET. Failures and uncertain timeouts still consume budget; no automatic retries or refunds. Owner-issued keys do not grant website administration, editing or model access. See <code>Capper_API.md</code> for deployment, parameters and integration examples.</p>
+  </section>
+  <section><h2>Capper research workspace</h2>
+    <p>Find games by team or matchup name, game ID, status and local From/Through dates, combined with the league selector. Through date includes the entire day. Clear a date to remove that boundary. Searches read the full available cache without spending live provider credits. Results show 20 games per page in a bounded, scrollable list; use Previous/Next games for more results. Missing games require cache ingestion, not repeated searches.</p>
+    <p>Open Sports &gt; Capper research workspace at <code>/research</code>. Access requires verified OPERATOR/Owner research access or an approved research exception; ordinary paid or trial membership does not unlock this workspace. The six leagues match Models: NFL, NBA, MLB, NHL, NCAA football and NCAA men's basketball.</p>
+    <p>Matchup shows cached team scoring form, head-to-head results, model projections and available injury reports. Player research shows cached logs, home/away/opponent splits, averages and over/under counts against a threshold you enter; it is not a live player-prop odds feed or a complete season sample. Individual-player adapters cover NFL, NCAA football and basketball, not MLB/NHL. Injury ingestion currently covers NFL only and follows the existing scheduled model-input job; refreshing the game does not refresh injuries. Missing records are unavailable, not zero or a healthy roster.</p>
+    <p>Odds compares bookmaker markets in decimal format with raw implied probability, including bookmaker margin. The model's stored consensus edge is separate from these quotes and may have a different timestamp; do not assume different market names or settlement rules are equivalent. Performance filters published settled capper bets by capper, sport, market and settlement window. Parlays count once, void stake is excluded from ROI, and partial results use the settlement ledger's net-unit convention. The current tracking-display cutoff applies; at most 10,000 latest results are returned.</p>
+    <p>Loading or reloading the cache makes no provider request. A live refresh enters a durable bot queue, with a five-minute cooldown per event/data type and one request per user per minute, plus all existing shared daily/member limits. Non-football odds reserve five requests upfront for a bounded league/season scan; unused reservations are not refunded. Other refreshes reserve one. No matching odds on those pages is reported as unavailable, not a successful update. Provider subscription coverage can prevent a result even when a call consumes budget.</p>
+    <p>The bot must run the research worker. Pending requests expire after 15 minutes. Interrupted in-flight requests are marked failed after 10 minutes rather than replayed automatically; inspect cache timestamps before requesting again. Status/error messages appear in Refresh activity, which polls the cache while your account has active requests.</p>
+  </section>
+
+  <section><h2><span>🛠️</span>Deployment checklist for staff</h2>
+    <p>Keep API keys and the Supabase service-role key on the bot server only, never in website VITE variables. Configure GUILD_ID, the required role/channel settings, API_SPORTS_KEY and API_SPORTS_BUDGET_ENABLED=true. Set OPEN_METEO_API_KEY for model weather; without it, weather adjustments are skipped. MEMBER_STATS_REFRESH_ENABLED controls member on-demand refresh, not /model.</p>
+    <p>On the Linux bot host:</p>
+    <p><code>cd /opt/discord-bot</code><br><code>git pull</code><br><code>./.venv/bin/python3 -m pip install -r requirements.txt</code><br><code>systemctl restart discord-bot.service</code><br><code>journalctl -u discord-bot.service --since "2 minutes ago" --no-pager</code></p>
+    <p>Install dependencies only when requirements change or packages are missing, and always into the service's virtual environment. Use -r for requirements.txt; python3 is the server executable. nflreadpy&gt;=0.1.5 is the supported minimum in the requirements.</p>
+    <p>In Supabase SQL Editor, apply the relevant migrations in order after their prerequisites: 20261011170000_sports_model_history.sql, 20261011180000_nflverse_team_efficiency.sql, 20261011193500_shared_api_daily_budget.sql, 20261011214000_operator_research_access.sql and 20261014120000_sport_model_projections.sql (model inputs, projections and backtests; then restart the bot so it fills them). Pulling Git does not execute SQL. Deploy the website separately; a bot restart does not publish frontend fixes.</p>
+    <p>For the protected website guide, apply 20261011230000_operator_user_guide.sql after the research-access migration. Its table stores this guide privately and its RPC checks current OPERATOR/Owner access. Deploy the frontend to expose /guide; no bot restart is needed for this page.</p>
+    <p>For the capper workspace, apply <code>20261017020000_capper_research_workspace.sql</code> after <code>20261017010000_website_research_exception.sql</code> and the model/cache/tracking migrations. Deploy the frontend and restart the updated bot to process live refreshes. Provider credentials stay server-side. Update the stored protected guide from the canonical HTML when publishing documentation changes.</p>
+    <p>After restart, check the command-sync log for /model. Verify a live refresh in Laboratory and the website with a real eligible account. Automated tests do not prove production provider coverage, purchases or Discord role mappings.</p>
+  </section>
+
+  <section><h2><span>🔑</span>Commands for operators and server managers</h2>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/tracker_start date_value:YYYY-MM-DD</code></td><td>Counts only plays settled on or after this date, for example 2026-09-28. Everything earlier is hidden from the tracker but is never deleted.</td></tr>
+        <tr><td><code>/tracker_start date_value:clear</code></td><td>Counts every play again.</td></tr>
+        <tr><td><code>/testing enabled:true</code></td><td>Enables the automatic image test-channel flow, which parses without recording. Manual /play is not a database-free dry run.</td></tr>
+        <tr><td><code>/testing enabled:false</code></td><td>Returns to normal recording.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">Both settings revert to their <code>.env</code> defaults when the bot restarts. Set <code>TRACKER_START_DATE</code> or <code>TESTING</code> in <code>.env</code> to make a change permanent.</div>
+  </section>
+
+  <section><h2><span>📊</span>How units are scored</h2>
+    <p>Wins pay the true price of the bet. Risking 2 units at +250 and winning returns <b>+5 units</b>; the same 2 units at −110 returns <b>+1.82 units</b>. A loss always costs the full amount risked. Voids and regrades count as zero. Your record displays as wins-losses, and the net unit figure reflects actual profit rather than a flat win count.</p>
+  </section>
+
+  <section><h2><span>🚨</span>If something does not appear</h2>
+    <p>Check the bot, role, channel, account identity and source update time. If a play will not settle by reaction, use the authorized /settle picker. Expired controls require rerunning the command. For website errors, deploy the latest frontend and reload; use Retry when offered.</p>
+    <p>Sports-data failure alerts name a job; check its traceback before retrying. A shared-allowance denial is not fixed by restarting. A model can legitimately have insufficient history or no matching game. Unresolved-team and duplicate counts are data-quality notices, not fabricated estimates. Provider or database errors must not be treated as empty successful results.</p>
+  </section>
+
+  <footer>Key settings: GUILD_ID · OFFICIAL_CHANNEL_ID · IMAGE_INPUT_CHANNEL_ID · CONFIRMATION_CHANNEL_ID · MEMBER_BET_CHANNEL_ID · API_SPORTS_KEY · API_SPORTS_BUDGET_ENABLED · MEMBER_STATS_REFRESH_ENABLED · OPEN_METEO_API_KEY · TRACKER_START_DATE<br>Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a>, CC-BY 4.0.<br>nflverse data attribution: <a href="https://nflverse.nflverse.com/">nflverse</a> / <a href="https://nflreadpy.nflverse.com/">nflreadpy</a>, CC-BY 4.0.</footer>
+$playmaker_guide$)
+on conflict (id) do update set html = excluded.html;
+
+create or replace function public.operator_user_guide()
+returns text language plpgsql stable security definer set search_path = ''
+as $$
+declare content text;
+begin
+  perform public.require_operator_research_access();
+  select html into strict content from public.operator_user_guide_content where id;
+  return content;
+end;
+$$;
+revoke all on function public.operator_user_guide() from public, anon, authenticated;
+grant execute on function public.operator_user_guide() to authenticated;
+
+commit;

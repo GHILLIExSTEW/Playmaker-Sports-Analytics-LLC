@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
+from src.services.ballot_vote_service import ballot_rating
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
 
@@ -76,11 +77,20 @@ class OfficialPlayService:
         tracking_scope: str = "official",
         stars: int | None = None,
         ballot_message_id: str | None = None,
+        team_approval: dict | None = None,
     ) -> dict:
         if tracking_scope not in {"official", "capper", "test"}:
             raise ValueError("Unsupported play tracking scope.")
         if stars is not None and (tracking_scope != "official" or stars not in {3, 4, 5}):
             raise ValueError("Only official plays can have 3, 4, or 5 stars.")
+        if team_approval is not None:
+            if tracking_scope != "official" or not ballot_message_id:
+                raise ValueError("Team approval requires an official ballot.")
+            rating = ballot_rating(
+                team_approval["yes"], team_approval["counts"]["no"], team_approval["roster_size"],
+            )
+            if rating != (stars, units) or team_approval["units"] != units or team_approval["stars"] != stars:
+                raise ValueError("Official units and stars must match the saved team approval.")
         validation_error = self.play_service.validate_play(units, legs, odds)
         if validation_error:
             return {"error": validation_error["message"]}
@@ -118,6 +128,7 @@ class OfficialPlayService:
             "tracking_scope": tracking_scope,
             "stars": stars,
             "ballot_message_id": ballot_message_id,
+            "team_approval": team_approval,
         }
 
         existing = (
@@ -131,6 +142,8 @@ class OfficialPlayService:
             for field in ("user_id", "sport_id", "team_name", "units", "legs", "odds", "play_text", "tracking_scope", "stars"):
                 if saved[field] != payload[field]:
                     raise ValueError(f"The ballot's saved {field} differs from its current bet. Staff reconciliation is required.")
+            if saved.get("team_approval") != team_approval:
+                raise ValueError("The ballot's saved team approval differs. Staff reconciliation is required.")
             play_id = int(saved["id"])
         else:
             inserted = supabase_service.insert("plays", payload)
@@ -155,6 +168,7 @@ class OfficialPlayService:
             "play_id": play_id,
             "tracking_scope": tracking_scope,
             "stars": stars,
+            "team_approval": team_approval,
             "user_id": user_id,
             "units": float(units),
             "legs": int(legs),
@@ -171,6 +185,9 @@ class OfficialPlayService:
         return supabase_service.update("plays", {"message_id": str(message_id)}, {"id": int(play_id)})
 
     def edit_play_record(self, play_id: int, units: float, team_name: str, selections: list[str], odds: list[int], note: str = "") -> dict:
+        play = self._fetch_play(play_id)
+        if play.get("team_approval") and float(units) != float(play["units"]):
+            raise ValueError("Ballot-assigned units cannot be edited. Reconcile the ballot instead.")
         if len(selections) != len(odds) or not selections:
             raise ValueError("Selections and odds must contain the same number of legs.")
         combined_odds = self.play_service.combine_american_odds(odds)

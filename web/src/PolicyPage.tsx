@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { membershipPrices } from './membershipPlans'
 
 export type PolicyKind = 'terms' | 'privacy' | 'refunds'
 
@@ -22,11 +23,11 @@ function Terms() {
     <p>Playmaker Picks is operated by Playmaker Sports Analytics, LLC. Membership is for people aged 21 or older, or the higher age required where they live. Do not use the service where prohibited by applicable law.</p>
     <h2>Analysis, not wagering</h2>
     <p>We provide sports analysis, informational picks, and community discussion. PLAYMAKER identifies an approved capper, not a paid membership tier. We do not accept, place, transmit, or hold wagers. No win, outcome, daily pick count, or profit is guaranteed. Historical results do not predict future results. You are responsible for your decisions and compliance with local law; participation never requires placing a wager.</p>
-    <h2>Prepaid membership</h2>
-    <p>HIGHROLLER is our single paid membership: $19.99 USD for a one-time pass lasting exactly 30 days, not a calendar month. First-time eligible members may claim a free seven-day trial with the same available HIGHROLLER features, including analytics and Member Bet Vault submissions, subject to the same usage limits. The trial expires without an automatic charge or paid conversion. Paid passes also expire without automatic renewal; another purchase is required to continue access. ROOKIE is our free verified Discord community role; it and our public settled-play record do not require a paid pass.</p>
-    <p>Trials require a provider-approved trial plan and a verified linked Discord identity. One trial is recorded per Whop buyer and Discord account for our seller; creating another membership, changing the linked identity, or extending the recorded trial window does not reset eligibility. Prior paid membership before the trial also disqualifies that identity. These checks are not a guarantee against people creating multiple accounts. IP addresses alone do not establish identity.</p>
-    <p>ALL-STAR and historical 90-, 180-, and 365-day offers are retired from new sales. Existing purchases retain their purchased access period and benefits; the new offer does not shorten existing access or create another charge.</p>
-    <p>Review the total price, exact expiration, included channels and features, and any taxes or checkout fees before paying. Access begins according to the purchase dates recorded by Whop. Included benefits and any deployment or usage limits must be stated in the offer; do not assume all channels or archives are included. Removing the Discord role or leaving the server does not by itself request a refund.</p>
+    <h2>Subscription billing options and free trial</h2>
+    <p>HIGHROLLER is our single paid membership with three renewing billing options: {membershipPrices}, in USD. Eligible first-time subscribers receive a seven-day free trial on any option, with the same available HIGHROLLER features and usage limits. Unless you cancel before the trial ends, Whop bills the full selected interval price after the trial and automatically renews at that interval until canceled. Three-month and annual prices are charged in full, not monthly installments. Manage or cancel your subscription in Whop before the next billing date to avoid the next charge. ROOKIE is our free verified Discord community role; it and our public settled-play record do not require a paid subscription.</p>
+    <p>Trial eligibility is subject to Whop checkout terms and our verified linked Discord identity checks. One trial is recorded per Whop buyer and Discord account for our seller; creating another membership, changing the linked identity, or extending the recorded trial window does not reset eligibility. Prior paid membership before the trial also disqualifies that identity. These checks are not a guarantee against people creating multiple accounts. IP addresses alone do not establish identity.</p>
+    <p>Changing billing options does not reset trial eligibility. Historical prepaid offers are not the current recurring subscriptions and are not automatically converted into renewing plans.</p>
+    <p>Review the total price, trial end date, renewal date, included channels and features, and any taxes or checkout fees before subscribing. Access follows the membership dates and status recorded by Whop. Included benefits and any availability or usage limits are stated in the offer; do not assume all channels or archives are included. Removing the Discord role, deleting your website account or leaving the server does not cancel your subscription or request a refund.</p>
     <h2>Discord and access verification</h2>
     <p>Checkout and HIGHROLLER role assignment use Whop and its Discord integration. Connect your own Discord account and follow Claim Access instructions. The bot separately verifies payment or eligible trial entitlement and identity for analytics and Member Vault access. ROOKIE, arbitrary free or complimentary access, refunded or expired passes, and otherwise unverified Whop access do not qualify for new vault submissions. Explicitly recorded owner grants are a separate exception, not proof of payment. Verification normally runs every five minutes and may be delayed by provider outages. ROOKIE community access remains after a trial or paid pass expires.</p>
     <h2>Member Bet Vault</h2>
@@ -58,7 +59,7 @@ function Privacy() {
     <h2>Browser storage and security</h2>
     <p>Authentication uses browser storage to keep you signed in. Our service uses restricted database and storage access, but no system can guarantee absolute security. Do not share account credentials, API keys, or unredacted financial screenshots.</p>
     <h2>Retention and your requests</h2>
-    <p>We have not finalized a retention schedule; this is a launch-review item. Deleting a website account removes the member profile and preferences through that workflow, not automatically Discord messages, vault records, official plays, payment-provider records, or audit history. Some records may need to be retained for legal, dispute, or security purposes.</p>
+    <p>We have not finalized a retention schedule. Deleting a website account removes the member profile and preferences through that workflow, not automatically Discord messages, vault records, official plays, payment-provider records, or audit history. Some records may need to be retained for legal, dispute, or security purposes.</p>
     <p>For access, correction, deletion, or other applicable privacy rights, contact <LegalContact />. We may verify identity before acting. We will explain what can be deleted and any required retention; we do not promise automatic deletion from independent providers. This service is not intended for people under 21. Contact us if an underage person has supplied data.</p>
   </>
 }
@@ -70,8 +71,8 @@ function Refunds() {
     <p>We will review payment and access records and help troubleshoot linking or delivery issues. If a duplicate charge or failure to deliver purchased access is confirmed, we will refund the affected charge through Whop. This is not a seven-day satisfaction guarantee, and we do not promise a specific bank-processing time.</p>
     <h2>What does not qualify</h2>
     <p>Losing picks, a losing streak, dissatisfaction with sporting outcomes, or not placing wagers do not qualify by themselves. No profits or minimum number of daily picks are promised. Simply leaving Discord or not using delivered access does not qualify for a discretionary refund. We do not offer discretionary prorated refunds for unused days.</p>
-    <h2>Prepaid, not auto-renewing</h2>
-    <p>New HIGHROLLER paid passes cost $19.99 USD for exactly 30 days and expire without automatically charging again. The optional full-access seven-day trial expires without an automatic charge or paid conversion. Previously purchased ALL-STAR or HIGHROLLER passes keep their original access period and benefits; the retirement of longer-duration offers does not change those purchases.</p>
+    <h2>Subscription cancellation and trial billing</h2>
+    <p>HIGHROLLER billing options are {membershipPrices}, in USD, each automatically renewing at its selected interval until canceled. Eligible first-time subscribers receive seven days free on any option, then the full interval price is charged unless canceled before the trial ends. Cancel through Whop before the next billing date to avoid the next charge. Cancellation does not itself refund an existing charge; refund requests are reviewed under this policy and applicable rights. Historical prepaid purchases are not automatically converted into subscriptions.</p>
     <h2>Refunded access</h2>
     <p>Refunded memberships do not qualify for new Member Vault submissions, including when a payment is partially refunded. The bot normally detects changes during its five-minute verification cycle; Discord role changes are managed separately by Whop. Previously confirmed tickets remain eligible for settlement.</p>
     <h2>Your rights and provider rules</h2>
@@ -85,7 +86,7 @@ export default function PolicyPage({ kind }: { kind: PolicyKind }) {
     <header className="membership-page-heading">
       <p className="eyebrow">Playmaker Sports Analytics, LLC</p>
       <h1>{titles[kind]}</h1>
-      <p>Draft for launch review - updated October 5, 2026. Checkout remains closed. These drafts require professional review and are not a statement of Whop approval.</p>
+      <p>Updated October 20, 2026. Membership enrollment is live through Whop. These policies do not imply endorsement or approval by Whop.</p>
     </header>
     <nav className="policy-nav" aria-label="Customer policies">
       <Link to="/terms">Terms</Link><Link to="/privacy">Privacy</Link><Link to="/refunds">Refunds</Link>

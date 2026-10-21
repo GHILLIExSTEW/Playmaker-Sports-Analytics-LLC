@@ -581,5 +581,78 @@ test(`website member access and current picks enforce server authorization (${ha
     await db.exec("update auth.identities set provider='discord',provider_id='888'")
     assert.equal((await access()).state, 'launch-pending')
   })
+  await t.test('recurring subscriptions support all three trial-to-paid lifecycles without bypassing identity checks', async () => {
+    await load('../../supabase/migrations/20261021040000_recurring_subscription_trials.sql')
+    const config = (await db.query('select enabled,paid_plan_ids,trial_plan_ids from public.website_membership_config')).rows[0]
+    const ids = ['plan_0MxgyyucPbdQZ','plan_sN89nOD7airIA','plan_FAZPnnd4WxDOU']
+    assert.equal(config.enabled, true)
+    assert.deepEqual(config.paid_plan_ids, ids)
+    assert.deepEqual(config.trial_plan_ids, ids)
+    let sequence = 0
+    const now = Date.now()
+    for (const [index, planId] of ids.entries()) {
+      const discordId = String(9000 + index)
+      const snapshot = {
+        membership_id: `mem_recurring_${index}`, whop_user_id: `user_recurring_${index}`,
+        discord_user_id: discordId, account_id: 'biz_rCNwfXRlnl0bFU', plan_id: planId,
+        status: 'trialing', paid: false, payment_id: null, trial_verified: true, cancel_at_period_end: false,
+        paid_from: new Date(now - 86400000).toISOString(), paid_through: new Date(now + 6 * 86400000).toISOString(),
+        source_updated_at: new Date(now).toISOString(), verified_at: new Date(now).toISOString(),
+        verification_reason: 'Verified provider trialing period',
+      }
+      const save = async (changes = {}) => {
+        sequence += 1
+        return (await call(`select public.record_whop_subscription_membership('${JSON.stringify({
+          ...snapshot, source_updated_at: new Date(now + sequence * 1000).toISOString(),
+          verified_at: new Date(now + sequence * 1000).toISOString(), ...changes,
+        })}'::jsonb) as saved`, 'service_role'))[0].saved
+      }
+      await db.exec(`update auth.identities set provider_id='${discordId}'`)
+      assert.equal(await save(), true)
+      assert.equal((await access()).kind, 'trial')
+      assert.equal((await call(`select public.discord_has_trial_access('${discordId}','biz_rCNwfXRlnl0bFU',array['${planId}']) as allowed`, 'service_role'))[0].allowed, true)
+      assert.equal((await db.query('select paid from public.whop_memberships where membership_id=$1', [snapshot.membership_id])).rows[0].paid, false)
+      assert.equal(await save({
+        membership_id: `mem_repeat_${index}`, plan_id: ids[(index + 1) % ids.length],
+      }), true)
+      assert.equal((await db.query('select trial_eligible from public.whop_trial_memberships where membership_id=$1', [`mem_repeat_${index}`])).rows[0].trial_eligible, false)
+      await save({ cancel_at_period_end: true })
+      assert.equal((await access()).kind, 'trial')
+      await assert.rejects(save({ status: 'active' }), /must have trialing status/)
+      // A rejected trial write must also roll back its companion paid-ledger write.
+      const invalidId = `mem_invalid_${index}`
+      await assert.rejects(save({
+        membership_id: invalidId, whop_user_id: `user_invalid_${index}`, discord_user_id: String(9500 + index),
+        paid_through: new Date(now + 7 * 86400000).toISOString(),
+      }), /check constraint/)
+      assert.equal((await db.query('select count(*)::int count from public.whop_memberships where membership_id=$1', [invalidId])).rows[0].count, 0)
+      const paid = {
+        status: 'active', paid: true, payment_id: `pay_${index}`, trial_verified: false,
+        paid_from: new Date(now - 10000).toISOString(),
+        paid_through: new Date(now + [30, 90, 365][index] * 86400000).toISOString(),
+      }
+      await save(paid)
+      assert.equal((await access()).kind, 'paid')
+      assert.equal((await db.query('select trial_verified from public.whop_trial_memberships where membership_id=$1', [snapshot.membership_id])).rows[0].trial_verified, false)
+      // An older trial snapshot cannot restore an unpaid entitlement after conversion.
+      assert.equal(await save({
+        verified_at: snapshot.verified_at, source_updated_at: snapshot.source_updated_at,
+      }), false)
+      assert.equal((await access()).kind, 'paid')
+      await save({ ...paid, cancel_at_period_end: true })
+      assert.equal((await access()).kind, 'paid')
+      await save({ ...paid, paid: false, payment_id: null, status: 'past_due' })
+      assert.equal((await access()).state, 'membership-required')
+      await save({ status: 'canceled', trial_verified: false })
+      assert.equal((await access()).state, 'membership-required')
+      assert.equal((await db.query('select count(*)::int count from public.membership_trial_claims where membership_id=$1', [snapshot.membership_id])).rows[0].count, 1)
+      await assert.rejects(save({ trial_verified: true, paid: true, payment_id: 'bad' }), /cannot be both/)
+    }
+    await db.exec('update public.member_profiles set age_verified_at=null')
+    assert.equal((await access()).state, 'age-required')
+    await db.exec('update public.member_profiles set age_verified_at=now()')
+    await assert.rejects(call("select public.record_whop_subscription_membership('{}')"), /permission denied/)
+    await assert.rejects(call('select public.website_member_access_standard()'), /permission denied/)
+  })
 })
 }

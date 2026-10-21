@@ -16,6 +16,8 @@ type CurrentPick = {
   analysis: string
   odds: number
   units: number
+  approval_yes: number | null
+  eligible_cappers: number | null
 }
 
 function parsePicks(value: unknown): CurrentPick[] {
@@ -32,8 +34,17 @@ function parsePicks(value: unknown): CurrentPick[] {
       || !('avatar_url' in row) || (row.avatar_url !== null && typeof row.avatar_url !== 'string')) {
       throw new Error('Unexpected current-picks record.')
     }
+    const approvalYes = 'approval_yes' in row ? row.approval_yes : null
+    const eligibleCappers = 'eligible_cappers' in row ? row.eligible_cappers : null
+    if ((approvalYes !== null || eligibleCappers !== null) && (
+      typeof approvalYes !== 'number' || !Number.isInteger(approvalYes)
+      || typeof eligibleCappers !== 'number' || ![3, 4, 5].includes(eligibleCappers)
+      || approvalYes <= Math.floor(eligibleCappers / 2) || approvalYes > eligibleCappers
+      || row.units !== (eligibleCappers === 3 ? approvalYes : approvalYes - eligibleCappers + 3)
+    )) throw new Error('Unexpected official team approval.')
     return { id: row.id, created_at: row.created_at, sport: row.sport, capper: row.capper,
-      selection: row.selection, analysis: row.analysis, odds: row.odds, units: row.units, avatar_url: row.avatar_url }
+      selection: row.selection, analysis: row.analysis, odds: row.odds, units: row.units, avatar_url: row.avatar_url,
+      approval_yes: approvalYes, eligible_cappers: eligibleCappers }
   })
 }
 
@@ -131,6 +142,9 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
             : <Link to={`/cappers/${capperSlug(pick.capper)}`}>{pick.capper}</Link>}<span>{pick.sport} · Open</span></header>
           <h3>{pick.selection}</h3>
           <p className="current-pick-line">{pick.odds > 0 ? '+' : ''}{pick.odds} <span>Risk: {pick.units}u</span></p>
+          {pick.approval_yes !== null && <p className="current-pick-line">
+            Team approval: {pick.approval_yes} of {pick.eligible_cappers} cappers | Official stake: {pick.units}u
+          </p>}
           <p className="current-pick-time">Published <time dateTime={pick.created_at}>{new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(new Date(pick.created_at))}</time> ET</p>
           {pick.analysis.trim() && <details className="current-pick-insight">
             <summary>Capper insight</summary>

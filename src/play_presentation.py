@@ -12,6 +12,7 @@ from src.play_settlement import SETTLEABLE_STATUSES
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_features_service import PlayFeaturesService
 from src.services.play_service import PlayService
+from src.services.ballot_vote_service import approval_text
 from src.services.play_card_service import download_artwork, play_card_service
 
 logger = logging.getLogger("official_play_bot")
@@ -24,6 +25,8 @@ def build_play_embed(payload: dict) -> discord.Embed:
     embed.add_field(name="To win", value=f"{float(payload['to_win']):g}u", inline=True)
     if payload.get("stars"):
         embed.add_field(name="Team rating", value="⭐" * int(payload["stars"]), inline=False)
+    if explanation := approval_text(payload.get("team_approval"), payload["units"]):
+        embed.add_field(name="Official team approval", value=explanation, inline=False)
     if payload.get("play_text"):
         embed.add_field(name="Selections", value=payload["play_text"][:1024], inline=False)
     return embed
@@ -72,6 +75,8 @@ def build_play_card_embed(message: discord.Message, play: dict) -> discord.Embed
         key = field.name.casefold()
         if key in values:
             embed.set_field_at(index, name=field.name, value=values[key], inline=field.inline)
+    if explanation := approval_text(play.get("team_approval"), units):
+        embed.description = explanation
     return embed
 
 

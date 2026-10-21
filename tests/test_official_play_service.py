@@ -52,3 +52,32 @@ def test_ballot_metadata_is_on_play_and_response_not_legs(monkeypatch, recover):
     else:
         assert insert.call_args.args[1]["ballot_message_id"] == "500"
     assert set(upsert.call_args.args[1][0]) == {"play_id", "leg_number", "selection", "odds", "details"}
+
+
+def test_team_approval_is_persisted_and_must_match_official_stake(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(official_play_module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
+    insert = Mock(return_value=SimpleNamespace(data=[{"id": 7}]))
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", insert)
+    decision = {"yes": 2, "counts": {"no": 0}, "roster_size": 3, "units": 2, "stars": 4}
+    result = service.create_play_record(
+        "900", "Official", 2, 1, "-110", stars=4, ballot_message_id="500", team_approval=decision,
+    )
+    assert result["team_approval"] == decision
+    assert insert.call_args.args[1]["team_approval"] == decision
+    with pytest.raises(ValueError, match="must match"):
+        service.create_play_record(
+            "900", "Official", 1, 1, "-110", stars=3, ballot_message_id="500", team_approval=decision,
+        )
+
+
+def test_ballot_assigned_units_cannot_be_manually_edited(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_fetch_play", lambda _: {"units": 2, "team_approval": {"yes": 2}})
+    update = Mock()
+    monkeypatch.setattr(official_play_module.supabase_service, "update", update)
+    with pytest.raises(ValueError, match="cannot be edited"):
+        service.edit_play_record(7, 1, "Team", ["Team ML"], [-110])
+    update.assert_not_called()

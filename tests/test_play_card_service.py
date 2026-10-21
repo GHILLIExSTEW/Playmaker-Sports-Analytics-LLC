@@ -95,6 +95,24 @@ def test_rating_is_rendered_as_gold_stars(monkeypatch, stars):
     assert all(len(points) == 10 and color == "#fbbf24" for points, color in drawn)
 
 
+def test_official_approval_and_personal_slip_disclaimer_are_drawn(monkeypatch):
+    original = ImageDraw.ImageDraw.text
+    drawn = []
+
+    def capture(self, xy, text, *args, **kwargs):
+        drawn.append(text)
+        return original(self, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", capture)
+    render_play_card(
+        play(units=2, stars=4, team_approval={"yes": 2, "roster_size": 3}),
+        png(), png(), "Server",
+    )
+    text = " ".join(drawn)
+    assert "Team approval: 2 of 3 cappers | Official stake: 2u" in text
+    assert "capper's personal wager, not the official team stake" in text
+
+
 def test_very_long_words_never_overflow_details_or_badge_panel():
     draw = ImageDraw.Draw(Image.new("RGB", (1200, 1)))
     font = _font(28)

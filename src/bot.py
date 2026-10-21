@@ -136,7 +136,7 @@ class OfficialBot(commands.Bot):
         await self.add_cog(CapperBallots(
             self, official=official_play_service, resolve_channel=resolve_channel,
             is_tracked_operator=is_tracked_operator, staff_alert=send_staff_alert,
-            get_testing=get_testing_enabled,
+            get_testing=get_testing_enabled, tracked_operators=tracked_operator_ids,
         ))
         await self.add_cog(Reporting(
             self,
@@ -285,7 +285,7 @@ async def tracked_operator_ids() -> set[int] | None:
     if role is None:
         logger.warning("tracker_role_missing role=%s", TRACKER_ROLE_ID)
         return None
-    return {member.id for member in role.members}
+    return {member.id for member in role.members if not member.bot}
 
 
 def settlement_channel_settings() -> list[tuple[str, int | None]]:

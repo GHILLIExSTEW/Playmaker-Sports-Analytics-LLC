@@ -12,22 +12,41 @@ from src.capper_ballots import CapperBallots, ballot_counts, ballot_rating
 from src.play_presentation import build_play_card_embed
 
 
-@pytest.mark.parametrize("yes", range(6))
-@pytest.mark.parametrize("no", range(6))
-def test_exact_vote_thresholds(yes, no):
-    expected = (yes, yes - 2) if yes >= 3 and yes > no else None
-    assert ballot_rating(yes, no) == expected
+@pytest.mark.parametrize("size", [3, 4, 5])
+def test_exact_vote_thresholds(size):
+    for yes in range(size + 1):
+        for no in range(size - yes + 1):
+            units = yes if size == 3 else yes - size + 3
+            expected = (units + 2, units) if yes > size // 2 else None
+            assert ballot_rating(yes, no, size) == expected
 
 
 @pytest.mark.parametrize("yes,no", [(6, 0), (-1, 0), (3, -1)])
 def test_out_of_range_votes_require_review(yes, no):
     with pytest.raises(ValueError):
-        ballot_rating(yes, no)
+        ballot_rating(yes, no, 5)
+
+
+@pytest.mark.parametrize("size", [0, 1, 2, 6, 10])
+def test_unsupported_roster_requires_review(size):
+    with pytest.raises(ValueError):
+        ballot_rating(0, 0, size)
 
 
 def poll(yes=4, no=1, passed=0, final=True):
+    next_id = 42
+    answers = []
+    for name, count in [("Yes", yes), ("No", no), ("Pass", passed)]:
+        ids = list(range(next_id, next_id + count))
+        next_id += count
+
+        async def voters(limit=None, ids=ids):
+            for voter_id in ids:
+                yield SimpleNamespace(id=voter_id, bot=False)
+
+        answers.append(SimpleNamespace(text=name, vote_count=count, voters=voters))
     return SimpleNamespace(
-        answers=[SimpleNamespace(text=name, vote_count=count) for name, count in [("Yes", yes), ("No", no), ("Pass", passed)]],
+        answers=answers,
         multiple=False, is_finalised=lambda: final, question="Home ML",
     )
 
@@ -44,8 +63,15 @@ def make_cog():
         )),
         is_tracked_operator=Mock(return_value=True), staff_alert=AsyncMock(),
         get_testing=Mock(return_value=False),
+        tracked_operators=AsyncMock(return_value={42, 43, 44, 45, 46}),
+        chat_votes=Mock(collect=AsyncMock(return_value=({}, False))),
         images=Mock(extract_play=Mock(return_value={"legs": [{"selection": "Home ML", "odds": 150}]})),
-        store=Mock(claim=Mock(return_value=True), pending=Mock(return_value=[]), source_message_id=Mock(return_value=None)),
+        store=Mock(
+            claim=Mock(return_value=True), pending=Mock(return_value=[]), source_message_id=Mock(return_value=None),
+            get=Mock(return_value={
+                "state": "pending", "eligible_voter_ids": ["42", "43", "44", "45", "46"], "policy_version": "roster-v1",
+            }),
+        ),
     )
 
 
@@ -95,7 +121,7 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     assert sent["allowed_mentions"].replied_user is False
     assert embed.author.name == "Playmaker Picks Team" and embed.author.icon_url == "https://cdn/bot"
     assert embed.fields == []
-    assert embed.description is None
+    assert embed.description == f"Team approval: {yes} of 5 cappers | Official stake: {yes - 2}u"
     rendered_play = mock_play_cards.call_args.args[0]
     assert rendered_play["stars"] == yes and rendered_play["units"] == yes - 2
     assert embed.image.url == f"attachment://{sent['file'].filename}"
@@ -111,7 +137,7 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     cog.staff_alert.assert_not_awaited()
 
 
-@pytest.mark.parametrize("yes,no", [(0, 0), (2, 0), (3, 3), (4, 5)])
+@pytest.mark.parametrize("yes,no", [(0, 0), (2, 0), (2, 3)])
 def test_rejected_ballot_never_reads_or_posts_a_bet(monkeypatch, yes, no):
     monkeypatch.setattr(module, "GUILD_ID", 123)
     cog = make_cog()
@@ -189,18 +215,25 @@ def test_testing_disables_ballot_publication():
 
 
 def test_daily_cleanup_deletes_every_channel_post_and_closes_active_ballots(monkeypatch):
+    from datetime import datetime, timezone
+
     monkeypatch.setattr(module, "GUILD_ID", 123)
     assert module.BALLOT_CLEANUP_TIME.hour == 3 and module.BALLOT_CLEANUP_TIME.minute == 0
     assert module.BALLOT_CLEANUP_TIME.tzinfo.key == "America/New_York"
     cog = make_cog()
-    cog.store.scan_state.return_value = {"last_message_id": "50", "started_at": "2026-10-14T00:00:00+00:00"}
+    cog.store.scan_state.return_value = {
+        "last_message_id": "50", "started_at": "2026-10-14T00:00:00+00:00",
+        "policy_started_at": "2026-10-20T00:00:00+00:00",
+    }
     cog.store.pending.return_value = [{"message_id": "101"}]
     cog.store.interrupted.return_value = [{"message_id": "102"}]
     poll_message = SimpleNamespace(
-        id=100, poll=poll(), author=SimpleNamespace(bot=False),
+        id=100, poll=poll(), author=SimpleNamespace(id=42, bot=False),
+        created_at=datetime(2026, 10, 21, tzinfo=timezone.utc),
     )
     channel = cog.resolve_channel.return_value
     channel.guild.id = 123
+    channel.guild.get_member = Mock()
     channel.purge = AsyncMock(return_value=[poll_message, SimpleNamespace(id=90)])
 
     async def history(**kwargs):
@@ -297,14 +330,157 @@ def test_late_image_uses_explicit_staff_source_not_an_unrelated_upload():
 
 
 def test_discovery_resumes_cursor_and_never_overwrites_saved_ballot_state():
+    from datetime import datetime, timezone
+
     cog = make_cog()
-    cog.store.scan_state.return_value = {"last_message_id": "100", "started_at": "2015-01-01T00:00:00+00:00"}
+    cog.store.scan_state.return_value = {
+        "last_message_id": "100", "started_at": "2015-01-01T00:00:00+00:00",
+        "policy_started_at": "2026-10-20T00:00:00+00:00",
+    }
 
     async def history(**kwargs):
         assert kwargs["after"].id == 100 and kwargs["oldest_first"] is True
-        yield SimpleNamespace(id=101, poll=poll(), author=SimpleNamespace(bot=False))
+        yield SimpleNamespace(
+            id=101, poll=poll(), author=SimpleNamespace(id=42, bot=False),
+            created_at=datetime(2026, 10, 21, tzinfo=timezone.utc),
+        )
         yield SimpleNamespace(id=102, poll=None, author=SimpleNamespace(bot=False))
 
-    asyncio.run(cog.discover(SimpleNamespace(history=history)))
-    cog.store.remember.assert_called_once_with(101)
+    asyncio.run(cog.discover(SimpleNamespace(history=history, guild=SimpleNamespace(get_member=Mock()))))
+    cog.store.remember.assert_called_once_with(101, ["42", "43", "44", "45", "46"])
     assert [call.args[0] for call in cog.store.advance.call_args_list] == [101, 102]
+
+
+@pytest.mark.parametrize("size,yes,units", [(3, 2, 2), (3, 3, 3), (4, 3, 2), (4, 4, 3), (5, 3, 1), (5, 4, 2), (5, 5, 3)])
+def test_dynamic_units_are_claimed_saved_and_rendered(monkeypatch, size, yes, units, mock_play_cards):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.store.get.return_value["eligible_voter_ids"] = [str(value) for value in range(42, 42 + size)]
+    cog.official.create_play_record.return_value.update(units=units, stars=units + 2)
+    asyncio.run(cog.evaluate(message(poll(yes=yes, no=0))))
+    decision = cog.store.claim.call_args.args[1]
+    assert decision["units"] == units
+    assert decision["stars"] == units + 2
+    assert decision["roster_size"] == size
+    kwargs = cog.official.create_play_record.call_args.kwargs
+    assert kwargs["units"] == units and kwargs["team_approval"] == decision
+    assert mock_play_cards.call_args.args[0]["units"] == units
+    assert cog.resolve_channel.return_value.send.call_args.kwargs["embed"].description == (
+        f"Team approval: {yes} of {size} cappers | Official stake: {units}u"
+    )
+
+
+def test_native_vote_overrides_confirmed_chat_and_never_double_counts(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.store.get.return_value["eligible_voter_ids"] = ["42", "43", "44"]
+    cog.chat_votes.collect.return_value = ({"42": "no", "43": "yes", "44": "yes"}, False)
+    asyncio.run(cog.evaluate(message(poll(yes=1, no=0))))
+    decision = cog.store.claim.call_args.args[1]
+    assert decision["yes"] == 3 and decision["units"] == 3
+    assert decision["native_voter_ids"] == ["42"]
+    assert decision["chat_voter_ids"] == ["43", "44"]
+
+
+def test_unconfirmed_statement_holds_closed_ballot(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.chat_votes.collect.return_value = ({}, True)
+    asyncio.run(cog.evaluate(message()))
+    cog.store.claim.assert_not_called()
+    cog.official.create_play_record.assert_not_called()
+
+
+def test_open_poll_collects_chat_without_publishing(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    asyncio.run(cog.evaluate(message(poll(final=False))))
+    cog.chat_votes.collect.assert_awaited_once()
+    cog.store.claim.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["confirm", "reject"])
+def test_verification_buttons_validate_source_and_persist_actor(monkeypatch, action):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    monkeypatch.setattr(module, "CAPPER_BALLOT_CHANNEL_ID", 100)
+    cog = make_cog()
+    cog.chat_votes.store.get.return_value = {"prompt_message_id": "900", "escalation_message_id": "901"}
+    cog.chat_votes.valid_source = AsyncMock(return_value=True)
+    cog.chat_votes.store.approve.return_value = "confirmed" if action == "confirm" else "rejected"
+    interaction = SimpleNamespace(
+        data={"custom_id": f"pm:cv:501:{action}"}, guild_id=123, channel_id=100,
+        user=SimpleNamespace(id=42, bot=False), message=SimpleNamespace(id=900),
+        response=SimpleNamespace(defer=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()),
+    )
+    asyncio.run(cog.on_vote_verification(interaction))
+    cog.chat_votes.store.approve.assert_called_once_with("501", "42", action == "reject")
+    assert "not accepted" not in interaction.followup.send.call_args.args[0]
+
+
+@pytest.mark.parametrize("reason", ["guild", "channel", "bot", "role", "message", "source", "testing"])
+def test_invalid_verification_controls_never_approve(monkeypatch, reason):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    monkeypatch.setattr(module, "CAPPER_BALLOT_CHANNEL_ID", 100)
+    cog = make_cog()
+    cog.chat_votes.store.get.return_value = {"prompt_message_id": "900", "escalation_message_id": "901"}
+    cog.chat_votes.valid_source = AsyncMock(return_value=reason != "source")
+    interaction = SimpleNamespace(
+        data={"custom_id": "pm:cv:501:confirm"}, guild_id=0 if reason == "guild" else 123,
+        channel_id=0 if reason == "channel" else 100, user=SimpleNamespace(id=42, bot=reason == "bot"),
+        message=SimpleNamespace(id=0 if reason == "message" else 900),
+        response=SimpleNamespace(defer=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()),
+    )
+    if reason == "role":
+        cog.is_tracked_operator.return_value = False
+    if reason == "testing":
+        cog.get_testing.return_value = True
+    asyncio.run(cog.on_vote_verification(interaction))
+    cog.chat_votes.store.approve.assert_not_called()
+    assert "Verification not accepted" in interaction.followup.send.call_args.args[0]
+
+
+def test_discord_voter_list_must_be_complete(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    source = message()
+    source.poll.answers[0].vote_count += 1
+    asyncio.run(cog.evaluate(source))
+    cog.store.claim.assert_not_called()
+    cog.staff_alert.assert_awaited_once()
+    assert "voter list does not match" in cog.staff_alert.call_args.args[1]
+
+
+@pytest.mark.parametrize("roster", [None, set(), {42, 43}, {42, 43, 44, 45, 46, 47}])
+def test_bad_new_roster_holds_only_the_new_ballot_and_advances_discovery(roster):
+    from datetime import datetime, timezone
+
+    cog = make_cog()
+    cog.tracked_operators.return_value = roster
+    cog.store.scan_state.return_value = {
+        "last_message_id": "100", "policy_started_at": "2026-10-20T00:00:00+00:00",
+    }
+
+    async def history(**kwargs):
+        yield SimpleNamespace(
+            id=101, poll=poll(), author=SimpleNamespace(id=42, bot=False),
+            created_at=datetime(2026, 10, 21, tzinfo=timezone.utc), jump_url="https://discord.com/channels/123/100/101",
+        )
+
+    asyncio.run(cog.discover(SimpleNamespace(history=history, guild=SimpleNamespace(get_member=Mock()))))
+    cog.store.hold.assert_called_once()
+    cog.store.remember.assert_not_called()
+    cog.store.advance.assert_called_once_with(101)
+    cog.staff_alert.assert_awaited_once()
+
+
+def test_cleanup_does_not_require_a_current_eligible_roster(monkeypatch):
+    monkeypatch.setattr(module, "GUILD_ID", 123)
+    cog = make_cog()
+    cog.tracked_operators.return_value = None
+    cog.store.pending.return_value = []
+    cog.store.interrupted.return_value = []
+    channel = cog.resolve_channel.return_value
+    channel.purge = AsyncMock(return_value=[])
+    asyncio.run(cog.daily_ballot_cleanup.coro(cog))
+    channel.purge.assert_awaited_once()
+    cog.tracked_operators.assert_not_awaited()

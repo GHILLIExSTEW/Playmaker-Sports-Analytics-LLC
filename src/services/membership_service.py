@@ -27,8 +27,8 @@ class MembershipService:
     def has_trial_access(self, discord_user_id: int) -> bool:
         if not WHOP_TRIAL_PLAN_IDS:
             return False
-        if not WHOP_ACCOUNT_ID or WHOP_TRIAL_PLAN_IDS & WHOP_PAID_PLAN_IDS:
-            raise RuntimeError("Configure a seller and separate approved paid/trial plans.")
+        if not WHOP_ACCOUNT_ID:
+            raise RuntimeError("Configure a seller and approved trial-capable plans.")
         result = self.db._ensure_client().rpc(
             "discord_has_trial_access", {
                 "p_discord_user_id": str(discord_user_id),
@@ -70,8 +70,8 @@ class MembershipService:
         ids = self.paid_discord_ids()
         if not WHOP_TRIAL_PLAN_IDS:
             return ids
-        if not WHOP_ACCOUNT_ID or WHOP_TRIAL_PLAN_IDS & WHOP_PAID_PLAN_IDS:
-            raise RuntimeError("Configure a seller and separate approved paid/trial plans.")
+        if not WHOP_ACCOUNT_ID:
+            raise RuntimeError("Configure a seller and approved trial-capable plans.")
         rows = self.db._ensure_client().rpc(
             "trial_discord_member_ids", {
                 "p_account_id": WHOP_ACCOUNT_ID, "p_plan_ids": sorted(WHOP_TRIAL_PLAN_IDS),
