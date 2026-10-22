@@ -43,7 +43,13 @@ def env(monkeypatch):
         async def fetch(message_id, channel_id=channel_id):
             return messages[(channel_id, message_id)]
 
+        async def history(limit, channel_id=channel_id):
+            for (stored_channel_id, _), message in list(messages.items())[:limit]:
+                if stored_channel_id == channel_id:
+                    yield message
+
         channel.send, channel.fetch_message = AsyncMock(side_effect=send), AsyncMock(side_effect=fetch)
+        channel.history = history
         channels[channel_id] = channel
     source_embed = discord.Embed()
     source_embed.set_author(name="Personal Capper")
@@ -59,7 +65,8 @@ def env(monkeypatch):
     messages[(303, 500)] = source
     play = {
         "id": 7, "message_id": "500", "status": "win", "tracking_scope": "official",
-        "units": 2, "odds": 109, "play_text": "Three-way parlay",
+        "units": 2, "odds": 109, "play_text": "Three-way parlay", "team_name": "Wolves",
+        "created_at": "2026-10-16T23:00:00Z",
     }
     records = {}
 
@@ -92,6 +99,7 @@ def env(monkeypatch):
         "claim": claim, "complete": complete, "fail": fail, "recover": recover,
         "deliveries": lambda play_id: list(records.values()), "stale": lambda is_test, test_channel_id: [],
         "pending": lambda: [], "finish_event": lambda play_id, revision: None,
+        "recent_plays": lambda: [dict(play)],
     }.items():
         monkeypatch.setattr(bang_service, name, Mock(side_effect=function))
     bot = Mock(user=author, get_guild=Mock(return_value=guild))
@@ -109,9 +117,36 @@ def click(env, manager=True, guild=None):
     return SimpleNamespace(
         guild=env.guild if guild is None else guild, guild_id=123,
         user=SimpleNamespace(id=42, bot=False, roles=[], guild_permissions=SimpleNamespace(manage_guild=manager)),
-        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        response=SimpleNamespace(defer=AsyncMock(), edit_message=AsyncMock(), send_message=AsyncMock()),
+        message=SimpleNamespace(edit=AsyncMock()),
         followup=SimpleNamespace(send=AsyncMock()),
     )
+
+
+def test_recent_plays_query_is_official_published_newest_first_and_limited(monkeypatch):
+    query = Mock()
+    for method in ("select", "eq", "order", "limit"):
+        getattr(query, method).return_value = query
+    query.not_ = SimpleNamespace(is_=Mock(return_value=query))
+    plays = [{"id": play_id} for play_id in range(10, 0, -1)]
+    query.execute.return_value = SimpleNamespace(data=plays)
+    client = Mock()
+    client.table.return_value = query
+    monkeypatch.setattr(bang_service.supabase_service, "_ensure_client", lambda: client)
+
+    assert bang_service.recent_plays() == plays
+
+    client.table.assert_called_once_with("plays")
+    query.select.assert_called_once_with(
+        "id,created_at,team_name,play_text,status,units,odds,message_id,tracking_scope",
+    )
+    query.eq.assert_called_once_with("tracking_scope", "official")
+    query.not_.is_.assert_called_once_with("message_id", "null")
+    assert query.order.call_args_list == [
+        (("created_at",), {"desc": True}),
+        (("id",), {"desc": True}),
+    ]
+    query.limit.assert_called_once_with(10)
 
 
 def test_bang_branding_image_profit_and_highroller_only_once(env):
@@ -316,20 +351,42 @@ def test_event_failure_stays_pending_and_testing_mode_does_not_consume_live_even
     bang_service.finish_event.assert_not_called()
 
 
+def test_bang_commands_show_recent_play_dropdown_without_parameters(env):
+    for command in ("status_command", "retry_command", "recover_command"):
+        request = click(env)
+        asyncio.run(getattr(BangNotifications, command).callback(env.cog, request))
+        bang_service.recent_plays.assert_called()
+        view = request.followup.send.call_args.kwargs["view"]
+        assert view.children[0].options[0].value == "7"
+        assert request.followup.send.call_args.kwargs["ephemeral"]
+
+
+def test_selected_status_dropdown_routes_to_status(env):
+    request = click(env)
+    view = module.RecentBangPlayView(env.cog, "status", request.user.id, [env.play])
+    dropdown = view.children[0]
+    dropdown._values = ["7"]
+
+    asyncio.run(dropdown.callback(request))
+
+    request.response.edit_message.assert_awaited_once_with(content="Selected Play #7.", view=None)
+    assert "Play #7: official / win" in request.followup.send.call_args.args[0]
+
+
 def test_staff_status_reports_uncertain_delivery_and_how_to_recover(env):
     bang_service.claim(7, 101, False)
     env.records[101].update(state="uncertain", last_error="Connection lost")
     request = click(env)
-    asyncio.run(BangNotifications.status_command.callback(env.cog, request, 7))
+    asyncio.run(env.cog.show_status(request, 7))
     text = request.followup.send.call_args.args[0]
     assert "uncertain" in text and "Connection lost" in text and "/bang_recover" in text
     assert request.followup.send.call_args.kwargs["ephemeral"]
 
 
-@pytest.mark.parametrize("command,args", [("status_command", (7,)), ("retry_command", (7, True)), ("recover_command", (7, "1001"))])
-def test_recovery_commands_require_staff_authority(env, command, args):
+@pytest.mark.parametrize("command", ["status_command", "retry_command", "recover_command"])
+def test_recovery_commands_require_staff_authority(env, command):
     request = click(env, manager=False)
-    asyncio.run(getattr(BangNotifications, command).callback(env.cog, request, *args))
+    asyncio.run(getattr(BangNotifications, command).callback(env.cog, request))
     request.response.send_message.assert_awaited_once()
     bang_service.deliveries.assert_not_called()
     bang_service.recover.assert_not_called()
@@ -337,16 +394,21 @@ def test_recovery_commands_require_staff_authority(env, command, args):
 
 def test_retry_requires_explicit_confirmation(env):
     request = click(env)
-    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, False))
+    asyncio.run(env.cog.handle_selected_play(request, "retry", 7))
     bang_service.recover.assert_not_called()
     env.channels[101].send.assert_not_awaited()
-    assert "No retry" in request.followup.send.call_args.args[0]
+    assert "Only retry if you confirmed no BANG exists" in request.followup.send.call_args.args[0]
+    confirm_view = request.followup.send.call_args.kwargs["view"]
+    assert confirm_view.children[0].label == "I checked: no BANG exists"
+    asyncio.run(confirm_view.children[0].callback(request))
+    env.channels[101].send.assert_awaited_once()
+    bang_service.recover.assert_not_called()
 
 
 def test_retry_refuses_already_delivered_message(env):
     asyncio.run(env.cog.send(env.source, 7))
     request = click(env)
-    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, True))
+    asyncio.run(env.cog.retry_selected_play(request, 7))
     env.channels[101].send.assert_awaited_once()
     assert "already tracked" in request.followup.send.call_args.args[0]
 
@@ -355,7 +417,7 @@ def test_staff_can_retry_checked_uncertain_delivery_with_rotated_token(env):
     bang_service.claim(7, 101, False)
     env.records[101]["state"] = "uncertain"
     request = click(env)
-    asyncio.run(BangNotifications.retry_command.callback(env.cog, request, 7, True))
+    asyncio.run(env.cog.retry_selected_play(request, 7))
     bang_service.recover.assert_called_once_with(7, 101, "attempt-1", 42, None)
     assert env.records[101]["attempt_id"] == "attempt-2"
     assert env.records[101]["state"] == "delivered"
@@ -367,7 +429,7 @@ def test_staff_links_existing_uncertain_bang_without_resending(env):
     env.records[101].update(state="uncertain", message_id=None, displayed_status=None)
     env.play["status"] = "loss"
     request = click(env)
-    asyncio.run(BangNotifications.recover_command.callback(env.cog, request, 7, "1001"))
+    asyncio.run(env.cog.recover_selected_play(request, 7))
     bang_service.recover.assert_called_once_with(7, 101, "attempt-1", 42, 1001)
     assert env.records[101]["displayed_status"] == "loss"
     assert env.messages[(101, 1001)].edit.call_args.kwargs["allowed_mentions"].to_dict() == {"parse": []}
@@ -386,7 +448,7 @@ def test_recovery_rejects_unrelated_messages(env, bad_message):
     else:
         message.embeds[0].title = "Play #7 Open"
     request = click(env)
-    asyncio.run(BangNotifications.recover_command.callback(env.cog, request, 7, "1001"))
+    asyncio.run(env.cog.recover_selected_play(request, 7))
     bang_service.recover.assert_not_called()
 
 

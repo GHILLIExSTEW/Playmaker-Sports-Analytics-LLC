@@ -11,6 +11,19 @@ def deliveries(play_id: int) -> list[dict]:
     return supabase_service.select("play_bang_notifications", "*", {"play_id": play_id}).data or []
 
 
+def recent_plays() -> list[dict]:
+    response = supabase_service._execute(
+        lambda: supabase_service._ensure_client().table("plays")
+        .select("id,created_at,team_name,play_text,status,units,odds,message_id,tracking_scope")
+        .eq("tracking_scope", "official").not_.is_("message_id", "null")
+        .order("created_at", desc=True).order("id", desc=True).limit(10).execute()
+    )
+    result = response.data
+    if not isinstance(result, list):
+        raise RuntimeError("Recent official plays lookup returned an unexpected response.")
+    return result
+
+
 def pending() -> list[dict]:
     return supabase_service._execute(
         lambda: supabase_service._ensure_client().table("play_bang_events")

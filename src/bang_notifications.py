@@ -49,6 +49,66 @@ def build_bang_embed(play: dict, source_url: str, author, image_url: str | None 
     return embed
 
 
+class RecentBangPlaySelect(discord.ui.Select):
+    def __init__(self, cog: BangNotifications, action: str, actor_id: int, plays: list[dict]) -> None:
+        options = [
+            discord.SelectOption(
+                label=f"Play #{play['id']} - {str(play.get('team_name') or play.get('play_text') or 'Official play')[:75]}",
+                description=f"{play['status']} | {float(play['units']):g}u | {int(play['odds']):+d} | {str(play['created_at'])[:10]}",
+                value=str(play["id"]),
+            )
+            for play in plays
+        ]
+        super().__init__(
+            placeholder="Choose one of the 10 most recent official plays",
+            min_values=1, max_values=1, options=options,
+        )
+        self.cog, self.action, self.actor_id = cog, action, actor_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(content=f"Selected Play #{self.values[0]}.", view=None)
+        await self.cog.handle_selected_play(interaction, self.action, int(self.values[0]))
+
+
+class RecentBangPlayView(discord.ui.View):
+    def __init__(self, cog: BangNotifications, action: str, actor_id: int, plays: list[dict]) -> None:
+        super().__init__(timeout=180)
+        self.actor_id = actor_id
+        self.add_item(RecentBangPlaySelect(cog, action, actor_id, plays))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            interaction.user.id != self.actor_id or interaction.guild is None
+            or interaction.guild.id != GUILD_ID or not can_change_settings(interaction)
+        ):
+            await interaction.response.send_message("Only the staff member who opened this menu can use it.", ephemeral=True)
+            return False
+        return True
+
+
+class ConfirmBangRetryView(discord.ui.View):
+    def __init__(self, cog: BangNotifications, actor_id: int, play_id: int) -> None:
+        super().__init__(timeout=120)
+        self.cog, self.actor_id, self.play_id = cog, actor_id, play_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (
+            interaction.user.id != self.actor_id or interaction.guild is None
+            or interaction.guild.id != GUILD_ID or not can_change_settings(interaction)
+        ):
+            await interaction.response.send_message("Only the staff member who selected this play can confirm the retry.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="I checked: no BANG exists", style=discord.ButtonStyle.danger)
+    async def confirm_retry(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        _button.disabled = True
+        await interaction.message.edit(view=None)
+        await self.cog.retry_selected_play(interaction, self.play_id)
+        self.stop()
+
+
 class BangNotifications(commands.Cog):
     def __init__(
         self, bot: commands.Bot, *, official: OfficialPlayService,
@@ -280,11 +340,47 @@ class BangNotifications(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         return True
 
-    @app_commands.command(name="bang_status", description="Staff: inspect BANG delivery and correction tracking")
+    async def select_recent_play(self, interaction: discord.Interaction, action: str) -> None:
+        try:
+            plays = await asyncio.to_thread(bang_service.recent_plays)
+            if not plays:
+                await interaction.followup.send("No published official plays are available.", ephemeral=True)
+                return
+            await interaction.followup.send(
+                "Choose an official play:",
+                view=RecentBangPlayView(self, action, interaction.user.id, plays),
+                ephemeral=True,
+            )
+        except Exception as exc:
+            logger.exception("bang_recent_plays_failed action=%s", action)
+            await interaction.followup.send(
+                f"Could not load recent official plays: {exc}", ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    async def handle_selected_play(
+        self, interaction: discord.Interaction, action: str, play_id: int,
+    ) -> None:
+        if action == "status":
+            await self.show_status(interaction, play_id)
+        elif action == "retry":
+            await interaction.followup.send(
+                f"Inspect Winning Slips for **Play #{play_id}** first. Only retry if you confirmed no BANG exists.",
+                view=ConfirmBangRetryView(self, interaction.user.id, play_id), ephemeral=True,
+            )
+        elif action == "recover":
+            await self.recover_selected_play(interaction, play_id)
+        else:
+            raise ValueError("Unknown BANG action.")
+
+    @app_commands.command(name="bang_status", description="Staff: select a recent play to inspect its BANG")
     @app_commands.guild_only()
-    async def status_command(self, interaction: discord.Interaction, play_id: app_commands.Range[int, 1]) -> None:
+    async def status_command(self, interaction: discord.Interaction) -> None:
         if not await self.staff_only(interaction):
             return
+        await self.select_recent_play(interaction, "status")
+
+    async def show_status(self, interaction: discord.Interaction, play_id: int) -> None:
         try:
             play = await asyncio.to_thread(self.official._fetch_play, play_id)
             records = await asyncio.to_thread(bang_service.deliveries, play_id)
@@ -305,17 +401,14 @@ class BangNotifications(commands.Cog):
             logger.exception("bang_status_failed play=%s", play_id)
             await interaction.followup.send(f"Could not read BANG status: {exc}", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="bang_retry", description="Staff: retry only after confirming no BANG exists in the destination")
+    @app_commands.command(name="bang_retry", description="Staff: select a recent play to retry a checked missing BANG")
     @app_commands.guild_only()
-    async def retry_command(
-        self, interaction: discord.Interaction, play_id: app_commands.Range[int, 1],
-        confirmed_no_message: bool,
-    ) -> None:
+    async def retry_command(self, interaction: discord.Interaction) -> None:
         if not await self.staff_only(interaction):
             return
-        if not confirmed_no_message:
-            await interaction.followup.send("Inspect the destination, then explicitly confirm no BANG exists. No retry was attempted.", ephemeral=True)
-            return
+        await self.select_recent_play(interaction, "retry")
+
+    async def retry_selected_play(self, interaction: discord.Interaction, play_id: int) -> None:
         logger.info("bang_retry_requested play=%s actor=%s", play_id, interaction.user.id)
         async with self._locks.setdefault(play_id, asyncio.Lock()):
             try:
@@ -346,33 +439,44 @@ class BangNotifications(commands.Cog):
                 await self.staff_alert(f"bang:{play_id}", f"Staff retry for Play #{play_id} failed: {exc}. Check /bang_status before another attempt.")
                 await interaction.followup.send(f"BANG retry failed: {exc}. Check /bang_status before retrying.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
-    @app_commands.command(name="bang_recover", description="Staff: link an existing BANG after an uncertain delivery")
+    @app_commands.command(name="bang_recover", description="Staff: select a recent play to find and link an existing BANG")
     @app_commands.guild_only()
-    async def recover_command(
-        self, interaction: discord.Interaction, play_id: app_commands.Range[int, 1],
-        message_id: str,
-    ) -> None:
+    async def recover_command(self, interaction: discord.Interaction) -> None:
         if not await self.staff_only(interaction):
             return
+        await self.select_recent_play(interaction, "recover")
+
+    async def recover_selected_play(self, interaction: discord.Interaction, play_id: int) -> None:
         async with self._locks.setdefault(play_id, asyncio.Lock()):
             try:
-                if not message_id.isdecimal() or not 1 <= len(message_id) <= 20:
-                    raise ValueError("Message ID must be a Discord snowflake.")
                 play = await asyncio.to_thread(self.official._fetch_play, play_id)
+                if displayed_status(play) == "not_official" or not play.get("message_id"):
+                    raise ValueError("Only published official plays can be recovered.")
                 name, channel_id, _ = self.target()
                 channel = await self.checked_channel(interaction.guild, channel_id, name)
-                message = await channel.fetch_message(int(message_id))
-                if (
-                    self.bot.user is None or message.author.id != self.bot.user.id
-                    or not message.embeds or f"Play #{play_id} " not in (message.embeds[0].title or "")
-                    or "Playmaker Picks" not in (message.embeds[0].footer.text or "")
-                    or "BANG" not in (message.embeds[0].title or "")
-                ):
-                    raise ValueError("That message is not this bot's BANG for the requested play.")
                 records = await asyncio.to_thread(bang_service.deliveries, play_id)
                 record = next((row for row in records if int(row["channel_id"]) == channel.id), None)
                 if record is None or not self.in_mode(record):
                     raise ValueError("No recoverable claim exists in this mode/destination. Check /bang_status.")
+                if record["state"] == "delivered":
+                    raise ValueError("A BANG is already tracked for this play. Use /bang_status to inspect it.")
+                if self.bot.user is None:
+                    raise RuntimeError("The bot's identity is unavailable.")
+                message = None
+                async for candidate in channel.history(limit=100):
+                    if (
+                        candidate.author.id == self.bot.user.id and candidate.embeds
+                        and f"Play #{play_id} " in (candidate.embeds[0].title or "")
+                        and "Playmaker Picks" in (candidate.embeds[0].footer.text or "")
+                        and "BANG" in (candidate.embeds[0].title or "")
+                    ):
+                        message = candidate
+                        break
+                if message is None:
+                    raise ValueError(
+                        "No matching BANG was found in the latest 100 destination messages. "
+                        "Inspect the channel manually before using /bang_retry."
+                    )
                 token = await asyncio.to_thread(
                     bang_service.recover, play_id, channel.id, record["attempt_id"], interaction.user.id, message.id,
                 )
@@ -380,7 +484,13 @@ class BangNotifications(commands.Cog):
                     **record, "message_id": str(message.id), "attempt_id": token, "is_test": self.get_testing(),
                 })
                 logger.info("bang_recovered play=%s message=%s actor=%s", play_id, message.id, interaction.user.id)
-                await interaction.followup.send("Existing BANG linked and synchronized without another role ping.", ephemeral=True)
+                await interaction.followup.send(
+                    f"Existing BANG for Play #{play_id} linked and synchronized without another role ping.",
+                    ephemeral=True,
+                )
             except Exception as exc:
                 logger.exception("bang_recovery_failed play=%s actor=%s", play_id, interaction.user.id)
-                await interaction.followup.send(f"BANG recovery failed: {exc}. Check /bang_status before retrying.", ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.followup.send(
+                    f"BANG recovery failed: {exc}. Check /bang_status before retrying.",
+                    ephemeral=True, allowed_mentions=discord.AllowedMentions.none(),
+                )
