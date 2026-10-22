@@ -577,7 +577,8 @@
   .personalized-feed-heading { align-items: flex-start; flex-direction: column; }
   .personalized-feed-item { grid-template-columns: minmax(0, 1fr) auto; gap: 9px 12px; }
   .personalized-feed-item strong, .personalized-feed-item > span { grid-column: 1; }
-  .personalized-feed-item .status, .personalized-feed-item > b { grid-column: 2; grid-row: 1; justify-self: end; }
+  .personalized-feed-item .status { grid-column: 2; grid-row: 1; justify-self: end; }
+  .personalized-feed-item > b { grid-column: 2; grid-row: 2; justify-self: end; white-space: nowrap; }
   .nfl-page { padding-top: 46px; }
   .nfl-page-heading h1 { font-size: 60px; }
   .data-models-page { padding-top: 46px; }

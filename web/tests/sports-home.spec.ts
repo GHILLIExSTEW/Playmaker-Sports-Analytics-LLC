@@ -1,6 +1,60 @@
 import { expect, test, type Page } from '@playwright/test'
 import { sportsCatalog } from '../src/sportsCatalog'
 
+for (const width of [390, 768, 1440]) {
+  test(`personalized feed result labels and net units do not overlap at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await mockSports(page)
+    await page.addInitScript(() => {
+      const userId = '11111111-1111-1111-1111-111111111111'
+      const expiresAt = Math.floor(new Date('2026-10-11T15:00:00Z').getTime() / 1000)
+      const token = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({
+        sub: userId, exp: expiresAt, aud: 'authenticated', role: 'authenticated',
+      }))}.test-signature`
+      localStorage.setItem('sb-lhsevzucmmzetpshpffv-auth-token', JSON.stringify({
+        access_token: token, refresh_token: 'synthetic-refresh', token_type: 'bearer',
+        expires_in: 86400, expires_at: expiresAt, user: { id: userId, aud: 'authenticated', role: 'authenticated' },
+      }))
+    })
+    const results = [
+      { status: 'win', net_units: 2.12 }, { status: 'loss', net_units: -1.07 },
+      { status: 'void', net_units: 0 }, { status: 'partial', net_units: 0.5 },
+    ].map((result) => ({
+      ...result, settled_at: '2026-10-10T12:00:00Z', sport: 'Basketball', capper: 'Test Capper',
+      selection: `Long selection for the personalized ${result.status} result`, odds: -118,
+      units: 2.5, tracking_scope: 'official',
+    }))
+    await page.route('**/rest/v1/rpc/public_settled_results*', (route) => route.fulfill({ json: results }))
+    await page.route('**/rest/v1/member_profiles*', (route) => route.fulfill({ json: { age_verified_at: '2026-10-01T00:00:00Z' } }))
+    await page.route('**/rest/v1/member_favorite_sports*', (route) => route.fulfill({ json: [{ sport_id: 1 }] }))
+    await page.route('**/rest/v1/member_favorite_cappers*', (route) => route.fulfill({ json: [] }))
+    await page.route('**/rest/v1/rpc/public_favorite_sports*', (route) => route.fulfill({ json: [{ id: 1, name: 'Basketball' }] }))
+    await page.goto('/')
+    const items = page.locator('.personalized-feed-item')
+    await expect(items).toHaveCount(4)
+    for (let index = 0; index < results.length; index++) {
+      const item = items.nth(index)
+      const status = item.locator('.status')
+      const units = item.locator(':scope > b')
+      await expect(status).toHaveText(results[index].status)
+      const badgeBox = await status.boundingBox()
+      const unitsBox = await units.boundingBox()
+      expect(badgeBox).not.toBeNull()
+      expect(unitsBox).not.toBeNull()
+      const horizontalGap = Math.max(
+        unitsBox!.x - (badgeBox!.x + badgeBox!.width),
+        badgeBox!.x - (unitsBox!.x + unitsBox!.width),
+      )
+      const verticalGap = Math.max(
+        unitsBox!.y - (badgeBox!.y + badgeBox!.height),
+        badgeBox!.y - (unitsBox!.y + unitsBox!.height),
+      )
+      expect(Math.max(horizontalGap, verticalGap)).toBeGreaterThanOrEqual(4)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
+
 test('homepage shows all settled results in pages of ten without sport filters', async ({ page }) => {
   await mockSports(page)
   const results = Array.from({ length: 23 }, (_, index) => ({
