@@ -81,3 +81,43 @@ def test_ballot_assigned_units_cannot_be_manually_edited(monkeypatch):
     with pytest.raises(ValueError, match="cannot be edited"):
         service.edit_play_record(7, 1, "Team", ["Team ML"], [-110])
     update.assert_not_called()
+
+
+@pytest.mark.parametrize("yes,size,units", [(2, 5, 1), (3, 5, 2), (4, 4, 3), (7, 7, 3)])
+def test_slip_approval_uses_additional_supporters_not_legacy_majority(monkeypatch, yes, size, units):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(official_play_module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", Mock(return_value=SimpleNamespace(data=[{"id": 7}])))
+    decision = {
+        "policy_version": "slip-v1", "author_id": "42", "voter_choices": {"42": "yes"},
+        "yes": yes, "roster_size": size, "counts": {"yes": yes, "no": 0, "pass": 0},
+        "units": units, "stars": units + 2,
+    }
+    result = service.create_play_record(
+        "900", "Official", units, 1, "-110", stars=units + 2,
+        ballot_message_id="500", team_approval=decision,
+    )
+    assert result["units"] == units
+    assert result["team_approval"] == decision
+    decision["voter_choices"]["42"] = "pass"
+    with pytest.raises(ValueError, match="author"):
+        service.create_play_record(
+            "900", "Official", units, 1, "-110", stars=units + 2,
+            ballot_message_id="500", team_approval=decision,
+        )
+
+
+@pytest.mark.parametrize("selection,odds", [("Other ML", 100), ("Wolves ML", -110)])
+def test_approved_slip_selection_and_odds_cannot_be_edited(monkeypatch, selection, odds):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_fetch_play", lambda _: {
+        "units": 1, "team_name": None, "team_approval": {"policy_version": "slip-v1"},
+    })
+    monkeypatch.setattr(service, "get_play_legs", lambda _: [{"selection": "Wolves ML", "odds": 100}])
+    update = Mock()
+    monkeypatch.setattr(official_play_module.supabase_service, "update", update)
+    with pytest.raises(ValueError, match="fresh slip review"):
+        service.edit_play_record(7, 1, "", [selection], [odds])
+    update.assert_not_called()

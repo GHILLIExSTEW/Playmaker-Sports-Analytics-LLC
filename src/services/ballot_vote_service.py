@@ -5,6 +5,16 @@ import re
 from src.services.supabase_service import supabase_service
 
 POLICY_VERSION = "roster-v1"
+SLIP_POLICY_VERSION = "slip-v1"
+
+
+def slip_rating(yes: int, no: int, roster_size: int) -> tuple[int, int] | None:
+    if roster_size < 2 or min(yes, no) < 0 or yes + no > roster_size:
+        raise ValueError("Invalid slip review counts or eligible roster.")
+    if yes < 2 or yes <= no:
+        return None
+    units = min(yes - 1, 3)
+    return units + 2, units
 
 
 def ballot_rating(yes: int, no: int, roster_size: int) -> tuple[int, int] | None:
@@ -52,6 +62,17 @@ def statement_matches_ballot(text: str, question: str) -> bool:
 def approval_text(approval: dict | None, units: float) -> str | None:
     if not approval:
         return None
+    if approval.get("policy_version") == SLIP_POLICY_VERSION:
+        counts = approval["counts"]
+        missing = approval["roster_size"] - sum(counts.values())
+        unanimity = (
+            " | Unanimous team approval" if counts["yes"] == approval["roster_size"] else
+            " | Unanimous among respondents" if counts["no"] == counts["pass"] == 0 else ""
+        )
+        return (
+            f"{counts['yes']} supported | {counts['no']} opposed | {counts['pass']} passed"
+            f" | {missing} did not respond | Official stake: {float(units):g}u{unanimity}"
+        )
     return (
         f"Team approval: {approval['yes']} of {approval['roster_size']} cappers"
         f" | Official stake: {float(units):g}u"

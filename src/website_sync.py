@@ -186,7 +186,7 @@ class WebsiteSync(commands.Cog):
             ))
             view.stop()
             message = await channel.send(
-                f"<@{owner_id}> Please add your justification for Play #{play_id} "
+                f"<@{owner_id}> Your justification is required for Play #{play_id} "
                 f"({rows[0]['selection'][:200]}). Only you can use this button. "
                 "The form is private; your insight will be published to authorized website members.",
                 view=view, allowed_mentions=discord.AllowedMentions(

@@ -157,6 +157,26 @@ def test_unfinished_or_already_claimed_ballot_is_not_published(final, claim):
     cog.resolve_channel.assert_not_awaited()
 
 
+@pytest.mark.parametrize("blocked", ["event-started", "testing"])
+def test_publication_rechecks_start_time_and_testing_before_discord_send(blocked):
+    from datetime import datetime, timedelta, timezone
+
+    cog = make_cog()
+    if blocked == "testing":
+        cog.get_testing.return_value = True
+    decision = {
+        "policy_version": "roster-v1", "yes": 4, "roster_size": 5,
+        "counts": {"yes": 4, "no": 0, "pass": 0}, "units": 2, "stars": 4,
+    }
+    if blocked == "event-started":
+        decision["event_starts_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    with pytest.raises(ValueError):
+        asyncio.run(cog.publish_approved(
+            message(), {"legs": [{"selection": "Home ML", "odds": 150}]}, decision, slip=b"original",
+        ))
+    cog.resolve_channel.return_value.send.assert_not_awaited()
+
+
 @pytest.mark.parametrize("failure", ["author", "read", "publish", "link"])
 def test_failures_are_durable_and_alert_staff_without_retrying(monkeypatch, failure):
     monkeypatch.setattr(module, "GUILD_ID", 123)

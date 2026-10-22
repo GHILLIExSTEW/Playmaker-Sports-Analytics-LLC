@@ -27,6 +27,7 @@ class ImagePlayService:
         "explain uncertainty in the selection. When readable, each leg may also include: "
         "sport (nfl, ncaa for American college football, basketball, baseball, hockey, football for soccer, mma, or other), "
         "home_name and away_name (full team names), event_date (YYYY-MM-DD in America/New_York or null), "
+        "event_start (ISO 8601 date and time with a timezone offset, only if explicitly readable; otherwise null), "
         "market (moneyline, spread, total, or other for props/futures), side (home, away, over, under, or null), "
         "line (number or null), and scope (full_game, or partial for halves/quarters/periods/innings). "
         "Use null for any of these you cannot read; never guess them."

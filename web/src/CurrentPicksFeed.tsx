@@ -18,6 +18,10 @@ type CurrentPick = {
   units: number
   approval_yes: number | null
   eligible_cappers: number | null
+  approval_policy: 'roster-v1' | 'slip-v1' | null
+  approval_no: number | null
+  approval_pass: number | null
+  can_edit_insight: boolean
 }
 
 function parsePicks(value: unknown): CurrentPick[] {
@@ -36,15 +40,29 @@ function parsePicks(value: unknown): CurrentPick[] {
     }
     const approvalYes = 'approval_yes' in row ? row.approval_yes : null
     const eligibleCappers = 'eligible_cappers' in row ? row.eligible_cappers : null
-    if ((approvalYes !== null || eligibleCappers !== null) && (
+    const policy = 'approval_policy' in row ? row.approval_policy : approvalYes === null ? null : 'roster-v1'
+    const opposed = 'approval_no' in row ? row.approval_no : null
+    const passed = 'approval_pass' in row ? row.approval_pass : null
+    const canEditInsight = 'can_edit_insight' in row ? row.can_edit_insight : false
+    if (canEditInsight !== null && typeof canEditInsight !== 'boolean') throw new Error('Unexpected insight editing permission.')
+    if (policy !== null && policy !== 'roster-v1' && policy !== 'slip-v1') throw new Error('Unknown team approval policy.')
+    if ((approvalYes !== null || eligibleCappers !== null || policy !== null) && (
       typeof approvalYes !== 'number' || !Number.isInteger(approvalYes)
-      || typeof eligibleCappers !== 'number' || ![3, 4, 5].includes(eligibleCappers)
-      || approvalYes <= Math.floor(eligibleCappers / 2) || approvalYes > eligibleCappers
-      || row.units !== (eligibleCappers === 3 ? approvalYes : approvalYes - eligibleCappers + 3)
+      || typeof eligibleCappers !== 'number' || !Number.isInteger(eligibleCappers) || approvalYes > eligibleCappers
+      || (policy === 'slip-v1'
+        ? eligibleCappers < 2 || approvalYes < 2
+          || typeof opposed !== 'number' || !Number.isInteger(opposed) || opposed < 0 || opposed >= approvalYes
+          || typeof passed !== 'number' || !Number.isInteger(passed) || passed < 0
+          || approvalYes + opposed + passed > eligibleCappers || row.units !== Math.min(approvalYes - 1, 3)
+        : policy !== 'roster-v1' || ![3, 4, 5].includes(eligibleCappers)
+          || approvalYes <= Math.floor(eligibleCappers / 2)
+          || row.units !== (eligibleCappers === 3 ? approvalYes : approvalYes - eligibleCappers + 3))
     )) throw new Error('Unexpected official team approval.')
     return { id: row.id, created_at: row.created_at, sport: row.sport, capper: row.capper,
       selection: row.selection, analysis: row.analysis, odds: row.odds, units: row.units, avatar_url: row.avatar_url,
-      approval_yes: approvalYes, eligible_cappers: eligibleCappers }
+      approval_yes: approvalYes, eligible_cappers: eligibleCappers,
+      approval_policy: policy, approval_no: typeof opposed === 'number' ? opposed : null,
+      approval_pass: typeof passed === 'number' ? passed : null, can_edit_insight: canEditInsight === true }
   })
 }
 
@@ -143,14 +161,22 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
           <h3>{pick.selection}</h3>
           <p className="current-pick-line">{pick.odds > 0 ? '+' : ''}{pick.odds} <span>Risk: {pick.units}u</span></p>
           {pick.approval_yes !== null && <p className="current-pick-line">
-            Team approval: {pick.approval_yes} of {pick.eligible_cappers} cappers | Official stake: {pick.units}u
+            {pick.approval_policy === 'slip-v1'
+              ? `${pick.approval_yes} supported | ${pick.approval_no} opposed | ${pick.approval_pass} passed | ${
+                (pick.eligible_cappers ?? 0) - pick.approval_yes - (pick.approval_no ?? 0) - (pick.approval_pass ?? 0)
+              } did not respond | Official stake: ${pick.units}u${
+                pick.approval_yes === pick.eligible_cappers ? ' | Unanimous team approval'
+                  : pick.approval_no === 0 && pick.approval_pass === 0 ? ' | Unanimous among respondents' : ''
+              }`
+              : `Team approval: ${pick.approval_yes} of ${pick.eligible_cappers} cappers | Official stake: ${pick.units}u`}
           </p>}
           <p className="current-pick-time">Published <time dateTime={pick.created_at}>{new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(new Date(pick.created_at))}</time> ET</p>
           {pick.analysis.trim() && <details className="current-pick-insight">
             <summary>Capper insight</summary>
             <p className="current-pick-analysis">{pick.analysis}</p>
           </details>}
-          {owner?.access === access && (owner.all || owner.name === pick.capper) && <PickInsightEditor
+          {(pick.approval_policy === 'slip-v1' ? pick.can_edit_insight
+            : owner?.access === access && (owner.all || owner.name === pick.capper)) && <PickInsightEditor
             key={pick.id} playId={pick.id} insight={pick.analysis}
             onSaved={(value) => setLoaded((current) => current && current.access === access
               ? { ...current, picks: current.picks.map((item) => item.id === pick.id ? { ...item, analysis: value } : item) }

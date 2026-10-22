@@ -64,7 +64,7 @@ class PlaySubmission(commands.Cog):
             return "TEST_CHANNEL_ID", TEST_CHANNEL_ID
         if interaction.channel_id == CAPPER_CHANNEL_ID:
             return "CAPPER_CHANNEL_ID", CAPPER_CHANNEL_ID
-        raise ValueError(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays are generated from closed ballots.")
+        raise ValueError(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays are generated from finalized slip reviews.")
 
     def record_identity(self, interaction: discord.Interaction) -> dict:
         scope = "test" if self.get_testing() else "capper"
@@ -159,7 +159,7 @@ class PlaySubmission(commands.Cog):
             await interaction.response.send_message("You do not have permission to import plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
-            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from closed ballots.", ephemeral=True)
+            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from finalized slip reviews.", ephemeral=True)
             return
         if not image.content_type or not image.content_type.startswith("image/"):
             await interaction.response.send_message("Attach an image file.", ephemeral=True)
@@ -190,7 +190,7 @@ class PlaySubmission(commands.Cog):
             await interaction.response.send_message("You do not have permission to log official plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
-            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from closed ballots.", ephemeral=True)
+            await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from finalized slip reviews.", ephemeral=True)
             return
         await interaction.response.send_modal(PlayModal(self))
 

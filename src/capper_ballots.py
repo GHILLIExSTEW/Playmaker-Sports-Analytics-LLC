@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import discord
@@ -235,51 +235,9 @@ class CapperBallots(commands.Cog):
                 parsed = await asyncio.to_thread(self.images.extract_play, image.url, text, require_readable=True)
             else:
                 parsed = await asyncio.to_thread(self.images.extract_text_play, text)
-            legs = parsed["legs"]
-            channel = await self.resolve_channel(OFFICIAL_CHANNEL_ID, "OFFICIAL_CHANNEL_ID", required=True)
-            if channel.guild.id != message.guild.id or self.bot.user is None:
-                raise RuntimeError("Official channel or bot identity is unavailable.")
-            payload = await asyncio.to_thread(
-                self.official.create_play_record,
-                discord_user_id=str(self.bot.user.id), username="Official Playmaker Picks",
-                units=units, legs=len(legs),
-                odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
-                play_text="\n".join(
-                    f"Leg {index}: {leg['selection']} ({int(leg['odds']):+d})"
-                    for index, leg in enumerate(legs, start=1)
-                ),
-                team_name=parsed.get("team_name"), leg_records=legs,
-                tracking_scope="official", stars=stars, ballot_message_id=str(message.id),
-                team_approval=decision,
+            await self.publish_approved(
+                message, parsed, decision, slip=await image.read() if image is not None else None,
             )
-            if payload.get("error"):
-                raise ValueError(payload["error"])
-            await asyncio.to_thread(self.store.finish, message.id, "processing", play_id=payload["play_id"], votes=counts)
-            embed = build_play_embed(payload)
-            embed.set_author(name=self.bot.user.display_name, icon_url=self.bot.user.display_avatar.url)
-            file = await play_card_service.file(
-                {**payload, "id": payload["play_id"], "status": "open"},
-                message.guild, slip=await image.read() if image is not None else None, legs=legs,
-            )
-            try:
-                kwargs = {}
-                if file is not None:
-                    embed.clear_fields()
-                    embed.description = approval_text(decision, units)
-                    embed.set_image(url=f"attachment://{file.filename}")
-                    kwargs["file"] = file
-                published = await channel.send(
-                    content=f"<@&{HIGHROLLER_ROLE_ID}>",
-                    allowed_mentions=discord.AllowedMentions(
-                        everyone=False, users=False, roles=[discord.Object(id=HIGHROLLER_ROLE_ID)], replied_user=False,
-                    ),
-                    embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs,
-                )
-            finally:
-                if file is not None:
-                    file.close()
-            await asyncio.to_thread(self.official.attach_message_id, payload["play_id"], published.id)
-            await asyncio.to_thread(self.store.finish, message.id, "published", official_message_id=str(published.id))
         except Exception as exc:
             logger.exception("capper_ballot_failed message=%s", message.id)
             next_step = (
@@ -295,6 +253,62 @@ class CapperBallots(commands.Cog):
                     f"ballot:{message.id}",
                     f"Ballot {message.jump_url} needs staff review: `{str(exc)[:1500]}`. {next_step}",
                 )
+
+    async def publish_approved(
+        self, message: discord.Message, parsed: dict, decision: dict, *, slip: bytes | None,
+    ) -> dict:
+        """Publish only after the caller has durably claimed the final decision."""
+        legs, units, stars = parsed["legs"], decision["units"], decision["stars"]
+        channel = await self.resolve_channel(OFFICIAL_CHANNEL_ID, "OFFICIAL_CHANNEL_ID", required=True)
+        if channel.guild.id != message.guild.id or self.bot.user is None:
+            raise RuntimeError("Official channel or bot identity is unavailable.")
+        payload = await asyncio.to_thread(
+            self.official.create_play_record,
+            discord_user_id=str(self.bot.user.id), username="Official Playmaker Picks",
+            units=units, legs=len(legs),
+            odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
+            play_text="\n".join(
+                f"Leg {index}: {leg['selection']} ({int(leg['odds']):+d})"
+                for index, leg in enumerate(legs, start=1)
+            ),
+            team_name=parsed.get("team_name"), leg_records=legs,
+            tracking_scope="official", stars=stars, ballot_message_id=str(message.id),
+            team_approval=decision,
+        )
+        if payload.get("error"):
+            raise ValueError(payload["error"])
+        await asyncio.to_thread(
+            self.store.finish, message.id, "processing", play_id=payload["play_id"], votes=decision["counts"],
+        )
+        embed = build_play_embed(payload)
+        embed.set_author(name=self.bot.user.display_name, icon_url=self.bot.user.display_avatar.url)
+        file = await play_card_service.file(
+            {**payload, "id": payload["play_id"], "status": "open"}, message.guild, slip=slip, legs=legs,
+        )
+        try:
+            kwargs = {}
+            if file is not None:
+                embed.clear_fields()
+                embed.description = approval_text(decision, units)
+                embed.set_image(url=f"attachment://{file.filename}")
+                kwargs["file"] = file
+            if decision.get("event_starts_at") and datetime.now(timezone.utc) >= datetime.fromisoformat(decision["event_starts_at"]):
+                raise ValueError("The earliest event started before the official post could be sent.")
+            if self.get_testing():
+                raise ValueError("Official publication is disabled in testing mode.")
+            published = await channel.send(
+                content=f"<@&{HIGHROLLER_ROLE_ID}>",
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, users=False, roles=[discord.Object(id=HIGHROLLER_ROLE_ID)], replied_user=False,
+                ),
+                embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs,
+            )
+        finally:
+            if file is not None:
+                file.close()
+        await asyncio.to_thread(self.official.attach_message_id, payload["play_id"], published.id)
+        await asyncio.to_thread(self.store.finish, message.id, "published", official_message_id=str(published.id))
+        return payload
 
     @tasks.loop(minutes=1)
     async def evaluate_ballots(self) -> None:

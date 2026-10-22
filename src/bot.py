@@ -19,7 +19,7 @@ from src.data_sync import DataSync
 from src.model_projections import ModelProjections
 from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
-from src.capper_ballots import CapperBallots
+from src.capper_slip_reviews import CapperSlipReviews
 from src.bang_notifications import BangNotifications
 from src.research_workspace import ResearchWorkspace
 from src.config import CAPPER_CHANNEL_ID
@@ -133,10 +133,11 @@ class OfficialBot(commands.Bot):
             announce_play=announce_new_play,
             staff_alert=send_staff_alert,
         ))
-        await self.add_cog(CapperBallots(
+        await self.add_cog(CapperSlipReviews(
             self, official=official_play_service, resolve_channel=resolve_channel,
             is_tracked_operator=is_tracked_operator, staff_alert=send_staff_alert,
             get_testing=get_testing_enabled, tracked_operators=tracked_operator_ids,
+            request_insight=send_insight_request,
         ))
         await self.add_cog(Reporting(
             self,

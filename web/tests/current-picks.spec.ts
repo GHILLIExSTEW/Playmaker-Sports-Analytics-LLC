@@ -78,6 +78,72 @@ test('inconsistent approval and stake are rejected rather than displayed', async
   await expect(page.getByRole('article').filter({ hasText: 'New NHL selection' })).toHaveCount(0)
 })
 
+test('slip approval shows missing responses separately and uses additional-supporter units', async ({ page }) => {
+  const dataset = [{ ...picks[0], capper: 'Official Playmaker Picks', units: 1,
+    approval_yes: 2, eligible_cappers: 5, approval_policy: 'slip-v1', approval_no: 0, approval_pass: 1 }]
+  await mockApi(page, { dataset })
+  await page.goto('/picks')
+  const official = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  await expect(official).toContainText('2 supported | 0 opposed | 1 passed | 2 did not respond | Official stake: 1u')
+  await expect(official).not.toContainText('Unanimous')
+})
+
+test('slip approval distinguishes respondent unanimity from whole-team unanimity', async ({ page }) => {
+  const dataset = [
+    { ...picks[0], capper: 'Official Playmaker Picks', units: 2,
+      approval_yes: 3, eligible_cappers: 5, approval_policy: 'slip-v1', approval_no: 0, approval_pass: 0 },
+    { ...picks[1], capper: 'Official Playmaker Picks', units: 3,
+      approval_yes: 6, eligible_cappers: 6, approval_policy: 'slip-v1', approval_no: 0, approval_pass: 0 },
+  ]
+  await mockApi(page, { dataset })
+  await page.goto('/picks')
+  const partial = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  const full = page.getByRole('article').filter({ hasText: 'First NFL selection' })
+  await expect(partial).toContainText('2 did not respond')
+  await expect(partial).toContainText('Unanimous among respondents')
+  await expect(partial).not.toContainText('Unanimous team approval')
+  await expect(full).toContainText('Unanimous team approval')
+})
+
+test('original team slip author can add website justification without owning the bot team page', async ({ page }) => {
+  const dataset = [{ ...picks[0], capper: 'Official Playmaker Picks', units: 1,
+    analysis: '', approval_yes: 2, eligible_cappers: 5, approval_policy: 'slip-v1',
+    approval_no: 0, approval_pass: 0, can_edit_insight: true }]
+  await mockApi(page, { dataset, pageOwner: 'Original Capper' })
+  await page.goto('/picks')
+  const official = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  await official.getByRole('button', { name: 'Add your insight' }).click()
+  await official.getByLabel('Your reasoning for this pick').fill('Matchup advantage from the original capper.')
+  await official.getByRole('button', { name: 'Save insight', exact: true }).click()
+  await expect(official.getByRole('status')).toHaveText('Insight saved.')
+  await official.getByText('Capper insight', { exact: true }).click()
+  await expect(official.getByText('Matchup advantage from the original capper.', { exact: true })).toBeVisible()
+})
+
+test('Owner does not receive an editor for another cappers team slip justification', async ({ page }) => {
+  const dataset = [{ ...picks[0], capper: 'Official Playmaker Picks', units: 1,
+    approval_yes: 2, eligible_cappers: 5, approval_policy: 'slip-v1',
+    approval_no: 0, approval_pass: 0, can_edit_insight: false }]
+  await mockApi(page, { dataset, editAll: true })
+  await page.goto('/picks')
+  const official = page.getByRole('article').filter({ hasText: 'New NHL selection' })
+  await expect(official).toBeVisible()
+  await expect(official.getByRole('button', { name: /your insight/ })).toHaveCount(0)
+})
+
+for (const invalid of [
+  { units: 2 }, { approval_no: 2 }, { approval_pass: 4 }, { approval_policy: 'unknown' },
+]) {
+  test(`invalid slip approval is rejected: ${JSON.stringify(invalid)}`, async ({ page }) => {
+    const dataset = [{ ...picks[0], units: 1, approval_yes: 2, eligible_cappers: 5,
+      approval_policy: 'slip-v1', approval_no: 0, approval_pass: 0, ...invalid }]
+    await mockApi(page, { dataset })
+    await page.goto('/picks')
+    await expect(page.getByRole('alert').filter({ hasText: 'Current picks could not be loaded' })).toBeVisible()
+    await expect(page.getByRole('article').filter({ hasText: 'New NHL selection' })).toHaveCount(0)
+  })
+}
+
 test('insight stays collapsed and missing insight has no reveal control', async ({ page }) => {
   await mockApi(page, { dataset: [{ ...picks[0], analysis: '' }, picks[1]] })
   await page.goto('/picks')

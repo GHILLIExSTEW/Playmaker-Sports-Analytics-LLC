@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
-from src.services.ballot_vote_service import ballot_rating
+from src.services.ballot_vote_service import POLICY_VERSION, SLIP_POLICY_VERSION, ballot_rating, slip_rating
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
 
@@ -86,7 +86,14 @@ class OfficialPlayService:
         if team_approval is not None:
             if tracking_scope != "official" or not ballot_message_id:
                 raise ValueError("Team approval requires an official ballot.")
-            rating = ballot_rating(
+            version = team_approval.get("policy_version", POLICY_VERSION)
+            if version not in {POLICY_VERSION, SLIP_POLICY_VERSION}:
+                raise ValueError("Unknown official approval policy.")
+            if version == SLIP_POLICY_VERSION and (
+                team_approval.get("voter_choices", {}).get(team_approval.get("author_id")) != "yes"
+            ):
+                raise ValueError("Slip approval requires the author's confirmed support.")
+            rating = (slip_rating if version == SLIP_POLICY_VERSION else ballot_rating)(
                 team_approval["yes"], team_approval["counts"]["no"], team_approval["roster_size"],
             )
             if rating != (stars, units) or team_approval["units"] != units or team_approval["stars"] != stars:
@@ -188,6 +195,14 @@ class OfficialPlayService:
         play = self._fetch_play(play_id)
         if play.get("team_approval") and float(units) != float(play["units"]):
             raise ValueError("Ballot-assigned units cannot be edited. Reconcile the ballot instead.")
+        if (play.get("team_approval") or {}).get("policy_version") == SLIP_POLICY_VERSION:
+            saved_legs = self.get_play_legs(play_id)
+            if (
+                selections != [leg["selection"] for leg in saved_legs]
+                or odds != [leg["odds"] for leg in saved_legs]
+                or (" ".join((team_name or "").strip().split()) or None) != play.get("team_name")
+            ):
+                raise ValueError("Approved slip selections and odds are locked. Submit a fresh slip review for changes.")
         if len(selections) != len(odds) or not selections:
             raise ValueError("Selections and odds must contain the same number of legs.")
         combined_odds = self.play_service.combine_american_odds(odds)

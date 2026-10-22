@@ -110,6 +110,7 @@ def test_request_posts_in_confirmation_channel_and_deduplicates_after_restart(mo
     args, kwargs = channel.send.call_args
     assert "<@42>" in args[0] and "Play #7" in args[0]
     assert "authorized website members" in args[0]
+    assert "justification is required" in args[0]
     assert [item.custom_id for item in kwargs["view"].children] == ["pm:insight:7"]
     assert kwargs["view"].is_finished()
     assert [user.id for user in kwargs["allowed_mentions"].users] == [42]

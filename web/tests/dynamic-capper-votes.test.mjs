@@ -138,16 +138,20 @@ test('website feed exposes only approval totals and preserves the existing acces
   await assert.rejects(db.query('select * from public.member_current_picks()'), /permission denied/)
 })
 
-test('generated website guide matches the maintained HTML and documents both verification paths', async (t) => {
+test('latest generated website guide matches the maintained HTML and documents slip reviews', async (t) => {
   const db = await setup(t)
   await db.exec('create function public.require_operator_research_access() returns void language sql as $$ select $$')
   await db.exec(await readFile(new URL('../../supabase/migrations/20261021010000_dynamic_capper_voting_guide.sql', import.meta.url), 'utf8'))
   await db.exec(await readFile(new URL('../../supabase/migrations/20261021030000_live_membership_guide.sql', import.meta.url), 'utf8'))
   await db.exec(await readFile(new URL('../../supabase/migrations/20261021050000_subscription_options_guide.sql', import.meta.url), 'utf8'))
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261022020000_slip_review_guide.sql', import.meta.url), 'utf8'))
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261022040000_official_capper_insights_guide.sql', import.meta.url), 'utf8'))
   const html = await readFile(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8')
   const saved = (await db.query('select public.operator_user_guide() as html')).rows[0].html
   assert.equal(saved, html.split('<main>')[1].split('</main>')[0])
-  assert.match(saved, /Two other distinct eligible cappers MUST each approve/)
-  assert.match(saved, /10 minutes without confirmation/)
-  assert.match(saved, /3 cappers: 2 Yes = 2u; 3 Yes = 3u/)
+  assert.match(saved, /Confirm details \+ set cutoff/)
+  assert.match(saved, /No response is not a No/)
+  assert.match(saved, /1 = 1u; 2 = 2u; 3 or more = 3u maximum/)
+  assert.match(saved, /Team plays still require the original capper's written justification/)
+  assert.match(saved, /team-discussion \(1328130555568455710\)/)
 })

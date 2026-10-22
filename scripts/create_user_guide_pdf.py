@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "Playmaker_Picks_User_Guide.pdf"
 DOCS_OUTPUT = ROOT / "docs" / "Playmaker_Bot_User_Guide.pdf"
 SOURCE = ROOT / "Playmaker_Picks_User_Guide.html"
-GUIDE_MIGRATION = ROOT / "supabase" / "migrations" / "20261011230000_operator_user_guide.sql"
+GUIDE_MIGRATION = ROOT / "supabase" / "migrations" / "20261022040000_official_capper_insights_guide.sql"
 EMOJI_FONT = r"C:\Windows\Fonts\seguiemj.ttf"
 # Segoe UI Emoji stores its color layers at 109px; other sizes render flat.
 EMOJI_RENDER_PX = 109
