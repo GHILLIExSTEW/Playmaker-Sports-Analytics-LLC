@@ -147,3 +147,14 @@ def test_operator_or_server_manager_cannot_react_to_settle_someone_elses_pick(mo
 
 def test_bot_cannot_settle_even_as_author():
     assert not bot_module.user_can_settle(SimpleNamespace(id=123, bot=True), "123", None)
+
+
+def test_staff_can_settle_official_bot_owned_plays_only(monkeypatch):
+    monkeypatch.setattr(bot_module, "OPERATOR_ROLE_IDS", {4242})
+    monkeypatch.setattr(bot_module.bot, "_connection", SimpleNamespace(user=SimpleNamespace(id=999)), raising=False)
+    for roles, manager, expected in [([4242], False, True), ([], True, True), ([1], False, False)]:
+        member = SimpleNamespace(id=555, roles=[SimpleNamespace(id=role) for role in roles],
+                                 guild_permissions=SimpleNamespace(manage_guild=manager))
+        guild = SimpleNamespace(get_member=lambda user_id, member=member: member)
+        assert bot_module.user_can_settle(member, "999", guild) is expected
+        assert not bot_module.user_can_settle(member, "123", guild)

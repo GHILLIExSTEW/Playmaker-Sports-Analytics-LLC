@@ -93,6 +93,9 @@ class PlaySettlement(commands.Cog):
             channel = self.bot.get_channel(payload.channel_id) or await self.bot.fetch_channel(payload.channel_id)
             reactor = payload.member or self.bot.get_user(payload.user_id) or await self.bot.fetch_user(payload.user_id)
             if not self.user_can_settle(reactor, str(play.get("discord_user_id")), getattr(channel, "guild", None)):
+                logger.info(
+                    "reaction_settlement_denied play=%s user=%s emoji=%s", play["id"], payload.user_id, payload.emoji,
+                )
                 return
             await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
             message = await channel.fetch_message(payload.message_id)

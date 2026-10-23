@@ -303,7 +303,15 @@ def user_can_settle(user, owner_id: str, guild: discord.Guild | None) -> bool:
     member = user if isinstance(user, discord.Member) else (guild.get_member(user.id) if guild else None)
     if member is None:
         return False
-    return any(role.id == WEBSITE_OWNER_ROLE_ID for role in getattr(member, "roles", []))
+    if any(role.id == WEBSITE_OWNER_ROLE_ID for role in getattr(member, "roles", [])):
+        return True
+    # Official plays are owned by the bot itself, so staff must be able to settle them by reaction.
+    if bot.user is not None and str(owner_id) == str(bot.user.id):
+        return (
+            any(role.id in OPERATOR_ROLE_IDS for role in getattr(member, "roles", []))
+            or bool(getattr(member.guild_permissions, "manage_guild", False))
+        )
+    return False
 
 
 async def reconcile_open_play_reactions(plays: list[dict], users: list[dict], channels: list) -> int:
