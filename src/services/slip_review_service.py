@@ -1,11 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from src.capper_ballots import BallotStore
 from src.services.ballot_vote_service import SLIP_POLICY_VERSION
 from src.services.play_service import PlayService
 from src.services.supabase_service import supabase_service
+
+EASTERN = ZoneInfo("America/New_York")
+ZONES = {
+    "et": EASTERN, "est": EASTERN, "edt": EASTERN,
+    "ct": ZoneInfo("America/Chicago"), "cst": ZoneInfo("America/Chicago"), "cdt": ZoneInfo("America/Chicago"),
+    "mt": ZoneInfo("America/Denver"), "mst": ZoneInfo("America/Denver"), "mdt": ZoneInfo("America/Denver"),
+    "pt": ZoneInfo("America/Los_Angeles"), "pst": ZoneInfo("America/Los_Angeles"),
+    "pdt": ZoneInfo("America/Los_Angeles"), "utc": timezone.utc, "gmt": timezone.utc,
+}
+MONTHS = {name: number for number, name in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+TIME_HELP = "Try a time like 7:30 PM, tonight 8pm, tomorrow 1pm, or Oct 22 7:30 PM (Eastern Time unless you add CT/PT/etc.)."
 
 
 def review_time(value: str) -> datetime:
@@ -18,6 +33,113 @@ def review_time(value: str) -> datetime:
     return result.astimezone(timezone.utc)
 
 
+def friendly_time(value: datetime) -> str:
+    local = value.astimezone(EASTERN)
+    hour = local.hour % 12 or 12
+    return f"{local:%b} {local.day}, {hour}:{local:%M} {'AM' if local.hour < 12 else 'PM'} ET"
+
+
+def _parse_clock(text: str, now: datetime, base_day: date | None) -> datetime:
+    """Parse a casual date/time; dates default to base_day, or to the next occurrence of the time."""
+    raw = text.strip().lower().replace(",", " ")
+    if not raw:
+        raise ValueError(f"Enter a time. {TIME_HELP}")
+    zone = EASTERN
+    zone_match = re.search(r"\b(" + "|".join(ZONES) + r")\b\.?\s*$", raw)
+    if zone_match:
+        zone = ZONES[zone_match.group(1)]
+        raw = raw[:zone_match.start()].strip()
+    local_now = now.astimezone(zone)
+    day, explicit_day = base_day or local_now.date(), False
+
+    def take(pattern: str) -> re.Match | None:
+        nonlocal raw
+        match = re.search(pattern, raw)
+        if match:
+            raw = f"{raw[:match.start()]} {raw[match.end():]}"
+        return match
+
+    if match := take(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"):
+        day, explicit_day = date(*(int(part) for part in match.groups())), True
+    elif match := take(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b"):
+        year = int(match.group(3)) if match.group(3) else local_now.year
+        day, explicit_day = date(year + 2000 if year < 100 else year, int(match.group(1)), int(match.group(2))), True
+        if not match.group(3) and day < local_now.date() - timedelta(days=1):
+            day = day.replace(year=day.year + 1)
+    elif match := take(r"\b(" + "|".join(MONTHS) + r")[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{4}))?\b"):
+        year = int(match.group(3)) if match.group(3) else local_now.year
+        day, explicit_day = date(year, MONTHS[match.group(1)], int(match.group(2))), True
+        if not match.group(3) and day < local_now.date() - timedelta(days=1):
+            day = day.replace(year=day.year + 1)
+    elif take(r"\b(today|tonight)\b"):
+        day, explicit_day = local_now.date(), True
+    elif take(r"\b(tomorrow|tmrw|tmw)\b"):
+        day, explicit_day = local_now.date() + timedelta(days=1), True
+    elif match := take(r"\b(" + "|".join(WEEKDAYS) + r")[a-z]*\b"):
+        ahead = (WEEKDAYS.index(match.group(1)) - local_now.weekday()) % 7
+        day, explicit_day = local_now.date() + timedelta(days=ahead), True
+
+    match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(a|p)\.?m?\.?(?!\w)", raw)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2) or 0)
+        if not 1 <= hour <= 12:
+            raise ValueError(f"'{text.strip()}' is not a valid time. {TIME_HELP}")
+        hour = hour % 12 + (12 if match.group(3) == "p" else 0)
+    elif match := re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", raw):
+        hour, minute = int(match.group(1)), int(match.group(2))
+    elif re.search(r"\b\d{1,2}\b", raw):
+        raise ValueError(f"Add AM or PM to '{text.strip()}', for example 7:30 PM.")
+    else:
+        raise ValueError(f"Couldn't understand '{text.strip()}'. {TIME_HELP}")
+    if minute > 59:
+        raise ValueError(f"'{text.strip()}' is not a valid time. {TIME_HELP}")
+    try:
+        result = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+    except ValueError as exc:
+        raise ValueError(f"'{text.strip()}' is not a valid date. {TIME_HELP}") from exc
+    if not explicit_day and base_day is None and result <= now:
+        result += timedelta(days=1)
+    return result.astimezone(timezone.utc)
+
+
+def parse_event_start(text: str, now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    try:
+        return review_time(text)
+    except ValueError:
+        pass
+    try:
+        naive = datetime.fromisoformat(text.strip())
+        return naive.replace(tzinfo=EASTERN).astimezone(timezone.utc)
+    except ValueError:
+        return _parse_clock(text, now, None)
+
+
+def parse_cutoff(text: str, start: datetime, now: datetime | None = None, *, default_minutes: int = 10) -> datetime:
+    """Blank means a default lead before start; also accepts '30 min before', '1 hour', or a clock time."""
+    now = now or datetime.now(timezone.utc)
+    raw = (text or "").strip().lower()
+    if not raw:
+        return start - timedelta(minutes=default_minutes)
+    relative = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)(?:\s+(?:before|prior)(?:\s+(?:start|kickoff|tip|first pitch))?)?",
+        raw,
+    )
+    if relative:
+        amount = float(relative.group(1))
+        return start - (timedelta(hours=amount) if relative.group(2).startswith("h") else timedelta(minutes=amount))
+    try:
+        return review_time(text)
+    except ValueError:
+        pass
+    local_start = start.astimezone(EASTERN)
+    result = _parse_clock(text, now, local_start.date())
+    if result >= start and not re.search(r"\d{1,2}/\d|\b(?:today|tonight|tomorrow|tmrw)\b|"
+                                         + "|".join(MONTHS), raw):
+        result -= timedelta(days=1)
+    return result
+
+
 def confirmed_legs(text: str, previous: list[dict]) -> list[dict]:
     legs = []
     for line in text.splitlines():
@@ -26,9 +148,12 @@ def confirmed_legs(text: str, previous: list[dict]) -> list[dict]:
         selection, separator, odds = line.rpartition("|")
         if not separator or not selection.strip():
             raise ValueError("Enter one leg per line as Selection | American odds.")
-        normalized = PlayService.normalize_odds(odds.strip())
+        try:
+            normalized = PlayService.normalize_odds(odds.strip())
+        except ValueError:
+            raise ValueError(f"Add valid odds for '{selection.strip()}' after the | (for example -110 or +150).") from None
         if normalized == 0:
-            raise ValueError("Every leg must have nonzero odds.")
+            raise ValueError(f"Add valid odds for '{selection.strip()}' after the | (for example -110 or +150).")
         old = next((leg for leg in previous if leg["selection"] == selection.strip() and leg["odds"] == normalized), {})
         legs.append({**old, "selection": selection.strip(), "odds": normalized})
     if not 1 <= len(legs) <= 10:

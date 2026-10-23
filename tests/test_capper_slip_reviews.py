@@ -9,7 +9,9 @@ import pytest
 import src.capper_slip_reviews as module
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
 from src.services.ballot_vote_service import approval_text, slip_rating
-from src.services.slip_review_service import confirmed_legs, response_choices, review_time
+from src.services.slip_review_service import (
+    confirmed_legs, parse_cutoff, parse_event_start, response_choices, review_time,
+)
 
 
 def saved_row():
@@ -102,14 +104,31 @@ def test_approval_distinguishes_respondent_and_team_unanimity():
     assert "Unanimous" not in approval_text(approval, 2)
 
 
-def test_author_modal_requires_start_and_cutoff_without_guessed_default(monkeypatch):
+def test_author_modal_requires_start_but_cutoff_is_optional(monkeypatch):
     async def check():
         cog, _, _ = make_cog(monkeypatch)
         modal = SlipConfirmation(cog, saved_row())
         assert modal.start.default == ""
-        assert modal.cutoff.default is None
-        assert modal.start.required and modal.cutoff.required
+        assert modal.start.required and not modal.cutoff.required
     asyncio.run(check())
+
+
+def test_friendly_times():
+    now = datetime(2026, 10, 22, 14, 0, tzinfo=timezone.utc)  # 10:00 AM ET
+    start = parse_event_start("tonight 7:30 pm", now)
+    assert start.isoformat() == "2026-10-22T23:30:00+00:00"
+    assert parse_event_start("7pm", now).isoformat() == "2026-10-22T23:00:00+00:00"
+    assert parse_event_start("9am", now).isoformat() == "2026-10-23T13:00:00+00:00"
+    assert parse_event_start("Oct 24 1pm", now).isoformat() == "2026-10-24T17:00:00+00:00"
+    assert parse_event_start("10/24 8:15 PM CT", now).isoformat() == "2026-10-25T01:15:00+00:00"
+    assert parse_event_start("2026-10-22T19:00-04:00", now) == start - timedelta(minutes=30)
+    assert parse_cutoff("", start, now) == start - timedelta(minutes=10)
+    assert parse_cutoff("30 min before", start, now) == start - timedelta(minutes=30)
+    assert parse_cutoff("1 hour", start, now) == start - timedelta(hours=1)
+    assert parse_cutoff("6:45 PM", start, now).isoformat() == "2026-10-22T22:45:00+00:00"
+    for bad in ["", "7", "soon"]:
+        with pytest.raises(ValueError):
+            parse_event_start(bad, now)
 
 
 def test_confirm_saves_author_cutoff_and_frozen_roster(monkeypatch):

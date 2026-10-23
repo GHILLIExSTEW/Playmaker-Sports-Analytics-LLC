@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -60,7 +61,20 @@ class PlayService:
 
     @staticmethod
     def normalize_odds(value: Any) -> int:
-        text = str(value).strip()
+        text = str(value).translate({0x2212: "-", 0x2013: "-", 0x2014: "-"})
+        text = re.sub(r"[\s()\[\],]", "", text)
+        if text.lower() in {"even", "evens", "ev", "pk"}:
+            return 100
+        if text[-1:] in {"x", "X", "\u00d7"} and len(text) > 1:
+            # Sleeper shows a payout multiplier (total return per 1 staked), e.g. 1.99x.
+            try:
+                multiplier = float(text[:-1])
+            except ValueError as exc:
+                raise ValueError("Odds must be an integer like -110 or +164, or a multiplier like 1.99x") from exc
+            if multiplier <= 1:
+                raise ValueError("A multiplier must be greater than 1.00x.")
+            profit = multiplier - 1
+            return round(profit * 100) if profit >= 1 else -round(100 / profit)
         if not text:
             raise ValueError("Odds cannot be empty.")
         if text.startswith("+"):

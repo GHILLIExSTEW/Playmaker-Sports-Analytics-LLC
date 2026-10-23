@@ -23,7 +23,8 @@ class ImagePlayService:
     PROMPT = (
         "Read this betting slip. Return JSON only with keys: units (number), "
         "team_name (string or null), and legs (array). Each legs item must have "
-        "selection (string) and odds (American integer or decimal format like 1.44). Do not guess unreadable text; "
+        "selection (string) and odds (American integer, or a payout multiplier written with its x such as \"1.99x\" "
+        "as Sleeper shows; never convert multipliers yourself). Do not guess unreadable text; "
         "explain uncertainty in the selection. When readable, each leg may also include: "
         "sport (nfl, ncaa for American college football, basketball, baseball, hockey, football for soccer, mma, or other), "
         "home_name and away_name (full team names), event_date (YYYY-MM-DD in America/New_York or null), "
@@ -33,7 +34,9 @@ class ImagePlayService:
         "Use null for any of these you cannot read; never guess them."
     )
 
-    def extract_play(self, image_url: str, message_text: str = "", *, require_readable: bool = False) -> dict[str, Any]:
+    def extract_play(
+        self, image_url: str, message_text: str = "", *, require_readable: bool = False, allow_missing_odds: bool = False,
+    ) -> dict[str, Any]:
         errors = []
         unreadable: list[BallotUnreadable] = []
         providers = []
@@ -49,7 +52,8 @@ class ImagePlayService:
             for attempt in range(2):
                 try:
                     parsed = self._extract_with_provider(
-                        image_url, message_text, name, url, api_key, model, require_readable=require_readable,
+                        image_url, message_text, name, url, api_key, model,
+                        require_readable=require_readable, allow_missing_odds=allow_missing_odds,
                     )
                     text_units = self.extract_units_from_text(message_text)
                     if text_units is not None:
@@ -82,14 +86,20 @@ class ImagePlayService:
 
     def _extract_with_provider(
         self, image_url: str, message_text: str, name: str, url: str, api_key: str, model: str,
-        *, require_readable: bool = False,
+        *, require_readable: bool = False, allow_missing_odds: bool = False,
     ) -> dict[str, Any]:
         prompt = self.PROMPT
         if not image_url:
             prompt = prompt.replace("Read this betting slip.", "Read the bet from the supplied Discord text.")
+        if allow_missing_odds:
+            prompt += (
+                " If a leg's odds are not shown or not clearly legible, set that leg's odds to null; "
+                "the author will fill them in. Never invent odds."
+            )
         if require_readable:
             prompt += (
-                " Also return readable (boolean): true only when every selection and its odds are fully readable "
+                " Also return readable (boolean): true only when every selection"
+                f"{'' if allow_missing_odds else ' and its odds'} is fully readable "
                 "and unambiguous. Otherwise return readable:false; do not guess or substitute uncertainty text. "
                 "When readable is false, also return reason: one short sentence naming what is missing or unclear "
                 "(for example, no odds are given for a selection)."
@@ -129,11 +139,11 @@ class ImagePlayService:
             reason = parsed.get("reason")
             detail = f" {str(reason).strip()[:200]}" if isinstance(reason, str) and reason.strip() else ""
             raise BallotUnreadable(f"The ballot bet {source} could not be read unambiguously.{detail}")
-        self._validate(parsed)
+        self._validate(parsed, allow_missing_odds=allow_missing_odds)
         return parsed
 
     @staticmethod
-    def _validate(data: dict[str, Any]) -> None:
+    def _validate(data: dict[str, Any], *, allow_missing_odds: bool = False) -> None:
         if data.get("units") in {None, "", "unknown", "Unknown"}:
             data["units"] = None
         else:
@@ -155,7 +165,9 @@ class ImagePlayService:
             except (TypeError, ValueError):
                 odds = 0
             if odds == 0:
-                raise ValueError("At least one leg's odds could not be read.")
+                if not allow_missing_odds:
+                    raise ValueError("At least one leg's odds could not be read.")
+                odds = None
             leg["odds"] = odds
 
 

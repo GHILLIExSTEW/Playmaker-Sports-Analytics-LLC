@@ -16,7 +16,9 @@ from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
-from src.services.slip_review_service import SlipReviewStore, confirmed_legs, response_choices, review_time
+from src.services.slip_review_service import (
+    SlipReviewStore, confirmed_legs, friendly_time, parse_cutoff, parse_event_start, response_choices, review_time,
+)
 
 logger = logging.getLogger("official_play_bot")
 SUPPORT = "\N{THUMBS UP SIGN}"
@@ -40,7 +42,9 @@ def review_embed(row: dict) -> discord.Embed:
     parsed = row["review"]["parsed"]
     embed = discord.Embed(title="Capper slip review", color=discord.Color.orange())
     embed.description = "\n".join(
-        f"{index}. {discord.utils.escape_markdown(leg['selection'])} ({int(leg['odds']):+d})"
+        f"{index}. {discord.utils.escape_markdown(leg['selection'])} "
+        f"({int(leg['odds']):+d})" if leg.get("odds") else
+        f"{index}. {discord.utils.escape_markdown(leg['selection'])} (odds needed)"
         for index, leg in enumerate(parsed["legs"], 1)
     )[:4096]
     if row["review"].get("image_filename"):
@@ -90,25 +94,29 @@ class SlipConfirmation(discord.ui.Modal, title="Confirm slip and set voting cuto
         super().__init__(timeout=600)
         self.cog, self.row = cog, row
         self.legs = discord.ui.TextInput(
-            label="One leg per line: Selection | American odds",
+            label="One leg per line: Selection | Odds",
             style=discord.TextStyle.paragraph,
-            default="\n".join(f"{leg['selection']} | {int(leg['odds']):+d}" for leg in row["review"]["parsed"]["legs"]),
+            default="\n".join(
+                f"{leg['selection']} | {int(leg['odds']):+d}" if leg.get("odds") else f"{leg['selection']} | "
+                for leg in row["review"]["parsed"]["legs"]
+            ),
             max_length=4000,
         )
         starts = [leg.get("event_start") for leg in row["review"]["parsed"]["legs"]]
         default_start = ""
         if all(isinstance(value, str) and value for value in starts):
             try:
-                default_start = min(review_time(value) for value in starts).isoformat()
+                default_start = friendly_time(min(review_time(value) for value in starts))
             except ValueError:
                 logger.info("slip_reader_start_requires_confirmation message=%s", row["message_id"])
         self.start = discord.ui.TextInput(
-            label="Earliest event start (date, time, UTC offset)",
-            placeholder="2026-10-22T19:00-04:00", default=default_start, max_length=40,
+            label="When does the first game start? (Eastern)",
+            placeholder="Tonight 7:30 PM  |  Sat 1pm  |  Oct 22 8:15 PM", default=default_start, max_length=40,
         )
         self.cutoff = discord.ui.TextInput(
-            label="Voting cutoff (date, time, UTC offset)",
-            placeholder="2026-10-22T18:55-04:00", max_length=40,
+            label="Voting closes (optional)",
+            placeholder="Blank = 10 min before start  |  30 min before  |  6:45 PM",
+            required=False, max_length=40,
         )
         for item in (self.legs, self.start, self.cutoff):
             self.add_item(item)
@@ -146,6 +154,7 @@ class CapperSlipReviews(commands.Cog):
         self.lock = asyncio.Lock()
         self.review_locks: dict[int, asyncio.Lock] = {}
         self.intake_ids: set[int] = set()
+        self.prompt_edits: dict[int, tuple] = {}
         self.needs_reconciliation = True
 
     def review_lock(self, message_id: int) -> asyncio.Lock:
@@ -185,6 +194,28 @@ class CapperSlipReviews(commands.Cog):
         if channel.guild.id != GUILD_ID:
             raise RuntimeError("Slip reviews must use the configured guild.")
         return channel
+
+    async def edit_prompt(self, channel, prompt, *, final: bool = True, **kwargs) -> None:
+        """Edit the review prompt, skipping no-op edits; Discord caps edits to messages older than an hour (30046)."""
+        embed = kwargs.get("embed")
+        signature = (embed.to_dict(), kwargs.get("view") is None) if embed is not None else None
+        if signature is not None and self.prompt_edits.get(prompt.id) == signature:
+            return
+        try:
+            await prompt.edit(**kwargs)
+            if signature is not None:
+                self.prompt_edits[prompt.id] = signature
+        except discord.HTTPException as exc:
+            if exc.code != 30046:
+                raise
+            logger.info("slip_prompt_edit_limit message=%s final=%s", prompt.id, final)
+            if final and kwargs.get("embed") is not None:
+                kwargs.pop("attachments", None)
+                kwargs["embed"] = kwargs["embed"].copy()
+                kwargs["embed"].set_image(url=None)
+                await channel.send(
+                    f"[Slip review update]({prompt.jump_url})", allowed_mentions=discord.AllowedMentions.none(), **kwargs,
+                )
 
     async def fail(self, message_id: int, reason: str) -> None:
         logger.error("slip_review_failed message=%s reason=%s", message_id, reason)
@@ -247,7 +278,8 @@ class CapperSlipReviews(commands.Cog):
             if not await asyncio.to_thread(self.store.register, message.id, review):
                 return
             parsed = await asyncio.to_thread(
-                self.publisher.images.extract_play, image.url, message.content, require_readable=True,
+                self.publisher.images.extract_play, image.url, message.content,
+                require_readable=True, allow_missing_odds=True,
             )
             review["parsed"] = parsed
             await asyncio.to_thread(self.store.update_review, message.id, review=review)
@@ -284,9 +316,13 @@ class CapperSlipReviews(commands.Cog):
                 raise ValueError("Only the capper who submitted the slip can confirm it.")
             if row["state"] != "pending" or row["cutoff_at"] is not None:
                 raise ValueError("This slip has already been confirmed or closed.")
-            start, cutoff = review_time(start_text), review_time(cutoff_text)
+            start = parse_event_start(start_text)
+            cutoff = parse_cutoff(cutoff_text, start)
             if not datetime.now(timezone.utc) < cutoff < start:
-                raise ValueError("Your cutoff must be in the future and before the earliest event starts.")
+                raise ValueError(
+                    "Voting has to close before the first game starts, and after right now. "
+                    "Check the start time, or set voting to close sooner (for example '5 min before')."
+                )
             channel = await self.channel()
             if not await self.valid_source(channel, row):
                 raise ValueError("The original slip was edited or deleted. Submit a fresh slip.")
@@ -299,7 +335,7 @@ class CapperSlipReviews(commands.Cog):
             try:
                 row = await asyncio.to_thread(self.store.get, message_id)
                 prompt = await channel.fetch_message(int(row["review_message_id"]))
-                await prompt.edit(embed=review_embed(row), view=review_view(message_id))
+                await self.edit_prompt(channel, prompt, embed=review_embed(row), view=review_view(message_id))
                 await prompt.clear_reactions()
                 for emoji in (SUPPORT, OPPOSE):
                     await prompt.add_reaction(emoji)
@@ -330,7 +366,7 @@ class CapperSlipReviews(commands.Cog):
             return
         decision = await asyncio.to_thread(self.store.finalize, message_id)
         if decision is None:
-            await prompt.edit(embed=review_embed(row), view=review_view(message_id))
+            await self.edit_prompt(channel, prompt, final=False, embed=review_embed(row), view=review_view(message_id))
             remaining = review_time(row["cutoff_at"]) - datetime.now(timezone.utc)
             if timedelta(0) < remaining <= timedelta(minutes=2) and not row["reminder_sent"]:
                 missing = set(row["eligible_voter_ids"]) - response_choices(row).keys()
@@ -348,7 +384,7 @@ class CapperSlipReviews(commands.Cog):
         if decision["outcome"] == "expired":
             await self.fail(message_id, "The earliest event has started. Late official posting is blocked.")
             embed.title = "Review closed - event already started"
-            await prompt.edit(embed=embed, view=None)
+            await self.edit_prompt(channel, prompt, embed=embed, view=None)
         elif decision["outcome"] == "rejected":
             embed.title = "Review closed - personal only"
             counts = decision["counts"]
@@ -358,10 +394,10 @@ class CapperSlipReviews(commands.Cog):
                       f" | {decision['roster_size'] - sum(counts.values())} did not respond",
                 inline=False,
             )
-            await prompt.edit(embed=embed, view=None)
+            await self.edit_prompt(channel, prompt, embed=embed, view=None)
         else:
             embed.title = "Review locked - publishing"
-            await prompt.edit(embed=embed, view=None)
+            await self.edit_prompt(channel, prompt, final=False, embed=embed, view=None)
             source = await channel.fetch_message(message_id)
             payload = await self.publisher.publish_approved(
                 source, row["review"]["parsed"], decision,
@@ -379,7 +415,7 @@ class CapperSlipReviews(commands.Cog):
                 )
             embed.title = "Review closed - official pick published"
             embed.add_field(name="Final decision", value=approval_text(decision, decision["units"]), inline=False)
-            await prompt.edit(embed=embed)
+            await self.edit_prompt(channel, prompt, embed=embed)
 
     async def reaction(self, payload, *, added: bool) -> None:
         if self.publisher.get_testing():

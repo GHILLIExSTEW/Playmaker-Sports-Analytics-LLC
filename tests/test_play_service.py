@@ -41,3 +41,9 @@ def test_normalize_decimal_odds_to_american():
     service = PlayService()
     assert service.normalize_odds("1.44") == 44
     assert service.normalize_odds("1.57") == 57
+    assert service.normalize_odds("\u2212110") == -110
+    assert service.normalize_odds("(+150)") == 150
+    assert service.normalize_odds("EVEN") == 100
+    assert service.normalize_odds("1.99x") == -101
+    assert service.normalize_odds("3.5x") == 250
+    assert service.normalize_odds("2x") == 100
