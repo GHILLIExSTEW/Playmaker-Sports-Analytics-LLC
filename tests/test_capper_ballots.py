@@ -121,7 +121,7 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     assert sent["allowed_mentions"].replied_user is False
     assert embed.author.name == "Playmaker Picks Team" and embed.author.icon_url == "https://cdn/bot"
     assert embed.fields == []
-    assert embed.description == f"Team approval: {yes} of 5 cappers | Official stake: {yes - 2}u"
+    assert "approval" not in embed.description.lower() and "Official stake" not in embed.description
     rendered_play = mock_play_cards.call_args.args[0]
     assert rendered_play["stars"] == yes and rendered_play["units"] == yes - 2
     assert embed.image.url == f"attachment://{sent['file'].filename}"
@@ -385,9 +385,8 @@ def test_dynamic_units_are_claimed_saved_and_rendered(monkeypatch, size, yes, un
     kwargs = cog.official.create_play_record.call_args.kwargs
     assert kwargs["units"] == units and kwargs["team_approval"] == decision
     assert mock_play_cards.call_args.args[0]["units"] == units
-    assert cog.resolve_channel.return_value.send.call_args.kwargs["embed"].description == (
-        f"Team approval: {yes} of {size} cappers | Official stake: {units}u"
-    )
+    description = cog.resolve_channel.return_value.send.call_args.kwargs["embed"].description
+    assert "approval" not in description.lower() and "Official stake" not in description
 
 
 def test_native_vote_overrides_confirmed_chat_and_never_double_counts(monkeypatch):

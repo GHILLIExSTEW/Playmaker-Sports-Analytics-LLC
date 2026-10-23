@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 
 from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, OFFICIAL_CHANNEL_ID
 from src.capper_chat_votes import ChatVoteCoordinator
-from src.services.ballot_vote_service import POLICY_VERSION, approval_text, ballot_rating
+from src.services.ballot_vote_service import POLICY_VERSION, ballot_rating
 from src.play_presentation import build_engagement_view, build_play_embed
 from src.services.image_play_service import BallotUnreadable, ImagePlayService, image_play_service
 from src.services.official_play_service import OfficialPlayService
@@ -289,7 +289,6 @@ class CapperBallots(commands.Cog):
             kwargs = {}
             if file is not None:
                 embed.clear_fields()
-                embed.description = approval_text(decision, units)
                 embed.set_image(url=f"attachment://{file.filename}")
                 kwargs["file"] = file
             if decision.get("event_starts_at") and datetime.now(timezone.utc) >= datetime.fromisoformat(decision["event_starts_at"]):

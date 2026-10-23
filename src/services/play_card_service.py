@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from src.services.ballot_vote_service import approval_text
 
 import asyncio
 import base64
@@ -144,10 +143,8 @@ def render_play_card(play: dict, slip: bytes | None, badge: bytes | None, badge_
         (f"PLAY #{play['id']}  |  {status.replace('_', ' ').upper()}", title_font, white),
         (f"Stake: {float(play['units']):g}u    Odds: {int(play['odds']):+d}", body_font, white),
     ]
-    if explanation := approval_text(play.get("team_approval"), play["units"]):
-        details.append((explanation, body_font, white))
-        if slip:
-            details.append(("Original slip above: capper's personal wager, not the official team stake.", small_font, muted))
+    if play.get("team_approval") and slip:
+        details.append(("Original slip above: capper's personal wager, not the official team stake.", small_font, muted))
     amount = (
         f"Net profit: {SettlementService.tally_for_result(status, float(play['units']), play['odds']):+g}u"
         if status in {"win", "loss", "partial", "void"}

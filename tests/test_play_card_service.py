@@ -109,7 +109,7 @@ def test_official_approval_and_personal_slip_disclaimer_are_drawn(monkeypatch):
         png(), png(), "Server",
     )
     text = " ".join(drawn)
-    assert "Team approval: 2 of 3 cappers | Official stake: 2u" in text
+    assert "Team approval" not in text and "Official stake" not in text
     assert "capper's personal wager, not the official team stake" in text
 
 
