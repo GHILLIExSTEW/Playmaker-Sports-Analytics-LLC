@@ -186,6 +186,7 @@ class OfficialBot(commands.Bot):
                 raise RuntimeError("MEMBER_BET_CHANNEL_ID must be a separate submission-only channel.")
             await asyncio.to_thread(member_bet_vault.service.ready)
             await asyncio.to_thread(member_bet_vault.membership.ready)
+            await self.add_cog(member_bet_vault)
             self.add_view(member_bet_vault.view)
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)

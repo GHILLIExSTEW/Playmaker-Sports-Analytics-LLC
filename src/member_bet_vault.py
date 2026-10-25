@@ -6,14 +6,14 @@ from datetime import datetime, timezone
 from io import BytesIO
 
 import discord
-from discord.ext import tasks
+from discord import app_commands
+from discord.ext import commands, tasks
 
 from src.config import OPERATOR_ROLE_IDS
 from src.datetime_utils import parse_iso_datetime
 from src.services.member_bet_service import (
     MemberBetService, SETTLED, accepted_photo, sanitize_photo, validate_ticket,
 )
-from src.services.play_service import PlayService
 from src.services.membership_service import MembershipService
 
 logger = logging.getLogger("member_bet_vault")
@@ -33,11 +33,14 @@ def card_embed(row: dict) -> discord.Embed:
     labels = {
         "processing": "Processing", "draft": "Awaiting confirmation",
         "open": "Open", "review": "Moderator review required",
-        "win": "Won", "loss": "Lost", "void": "Push / Void",
+        "win": "Won", "loss": "Lost", "void": "Push / Void", "rejected": "Rejected",
     }
     embed = discord.Embed(
         title=f"Member Bet #{row['id']} - {labels[status]}",
-        description=f"Submitted by <@{row['owner_id']}>. Not an official Playmaker pick.",
+        description=(
+            f"Submitted by <@{row['owner_id']}>. Not an official Playmaker pick.\n"
+            "Monthly challenge: most ticket wins earns a free month of Highroller. All tied leaders qualify."
+        ),
         color=discord.Color.green() if status == "win" else discord.Color.red() if status == "loss" else discord.Color.blurple(),
     )
     # Draft OCR is private until the author has reviewed and confirmed it.
@@ -49,8 +52,9 @@ def card_embed(row: dict) -> discord.Embed:
         embed.add_field(name="Selections", value="\n".join(
             leg["selection"] for leg in row["details"]["legs"]
         )[:1024], inline=False)
-        net = PlayService.calculate_to_win(float(row["units"]), int(row["odds"])) if status == "win" else -float(row["units"]) if status == "loss" else 0
-        embed.add_field(name="Net units", value=f"{net:+g}u")
+        eligible = row.get("challenge_eligibility") == "eligible"
+        result = "1 win" if status == "win" else "1 loss" if status == "loss" else "Not counted (push / void)"
+        embed.add_field(name="Challenge result", value=result if eligible else "Not counted (not challenge-eligible)")
         embed.add_field(name="Verification", value=row["verification"], inline=False)
     else:
         embed.add_field(name="Selections", value="Hidden until settled.", inline=False)
@@ -66,6 +70,15 @@ def card_embed(row: dict) -> discord.Embed:
                 value="A moderator must review this ticket. Its selection remains hidden.",
                 inline=False,
             )
+    embed.add_field(
+        name="Challenge eligibility",
+        value={
+            "eligible": "Pregame verified. One whole ticket = one win or loss; legs and units do not affect scoring.",
+            "pending": "Pending verification. Upload and confirm before the earliest leg starts. Ticket odds must be +100 or higher.",
+        }.get(row.get("challenge_eligibility"), "Not entered in the monthly challenge."),
+        inline=False,
+    )
+    # The footer also identifies cards during recovery after an interrupted send.
     embed.set_footer(text=f"Member Vault ticket {row['id']} | Units are personal, not dollar amounts.")
     embed.timestamp = parse_iso_datetime(row["created_at"])
     return embed
@@ -108,6 +121,14 @@ def ticket_file(row: dict, private: bool = False) -> discord.File:
             ))
     if private and row.get("review_reason"):
         lines.append(f"\nReview reason: {row['review_reason']}")
+    if private:
+        lines.extend([
+            f"\nUploaded: {row.get('submitted_at') or 'Historical entry (excluded)'}",
+            f"Confirmed: {row.get('confirmed_at') or 'Not yet confirmed'}",
+            f"Challenge eligibility: {row.get('challenge_eligibility', 'excluded')}",
+        ])
+        for index, event in enumerate(row.get("challenge_events", []), 1):
+            lines.append(f"Leg {index} verified start: {event['start_at'] if event else 'Moderator verification required'}")
     if not private:
         lines.extend([f"\nResult: {row['status']}", f"Verification: {row.get('verification')}"])
     suffix = "private-review" if private else "settled-selections"
@@ -148,6 +169,7 @@ class ConfirmTicketModal(discord.ui.Modal, title="Confirm member ticket"):
                 )
                 await self.vault.publish(row)
             await interaction.followup.send(
+                f"Ticket rejected: {row['review_reason']}" if row["status"] == "rejected" else
                 "Ticket confirmed and locked. " + (
                     "API verification is scheduled." if row["status"] == "open"
                     else "A moderator must settle this ticket."
@@ -159,6 +181,51 @@ class ConfirmTicketModal(discord.ui.Modal, title="Confirm member ticket"):
             logger.exception("member_confirm_failed bet=%s", self.bet_id)
             await interaction.followup.send(
                 "Could not complete confirmation. Check the card before retrying; moderators have a logged error.",
+                ephemeral=True,
+            )
+
+
+class VerifyChallengeModal(discord.ui.Modal, title="Verify pregame eligibility"):
+    starts = discord.ui.TextInput(
+        label="All leg starts: one ISO timestamp per line",
+        placeholder="2026-11-01T19:00:00-05:00",
+        style=discord.TextStyle.paragraph, max_length=1000,
+    )
+    evidence = discord.ui.TextInput(
+        label="Start-time evidence (private audit)", style=discord.TextStyle.paragraph, max_length=1000,
+    )
+
+    def __init__(self, vault: MemberBetVault, bet_id: int):
+        super().__init__()
+        self.vault = vault
+        self.bet_id = bet_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not can_moderate(interaction.user):
+            await interaction.response.send_message("Only moderators can verify start times.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.vault.lock:
+                changed = await asyncio.to_thread(
+                    self.vault.service.verify_challenge, self.bet_id, str(interaction.user.id),
+                    self.starts.value, self.evidence.value,
+                )
+                if not changed:
+                    raise ValueError("This ticket is not awaiting pregame verification.")
+                row = await asyncio.to_thread(self.vault.service.get, self.bet_id)
+                await self.vault.publish(row)
+            await interaction.followup.send(
+                f"Ticket rejected: {row['review_reason']}" if row["status"] == "rejected"
+                else "Pregame eligibility verified and audited. The ticket can now be settled.",
+                ephemeral=True,
+            )
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+        except Exception:
+            logger.exception("member_challenge_verification_failed bet=%s", self.bet_id)
+            await interaction.followup.send(
+                "Verification or card update failed. Check the card before retrying; the error was logged.",
                 ephemeral=True,
             )
 
@@ -182,6 +249,8 @@ class SettleTicketModal(discord.ui.Modal, title="Moderator settlement"):
                 row = await asyncio.to_thread(self.vault.service.get, self.bet_id)
                 if not row.get("confirmed_at"):
                     raise ValueError("This ticket was never confirmed. Ask the member to resubmit a readable slip.")
+                if row.get("challenge_eligibility") == "pending":
+                    raise ValueError("Verify every leg's start time before settling this challenge ticket.")
                 changed = await asyncio.to_thread(
                     self.vault.service.settle, self.bet_id, str(interaction.user.id),
                     self.result.value.strip().lower(), "Moderator-settled", self.reason.value,
@@ -219,6 +288,13 @@ class ModeratorSettlementView(discord.ui.View):
         super().__init__(timeout=600)
         self.vault = vault
         self.bet_id = bet_id
+
+    @discord.ui.button(label="Verify all leg start times", style=discord.ButtonStyle.primary)
+    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not can_moderate(interaction.user):
+            await interaction.response.send_message("Only moderators can verify start times.", ephemeral=True)
+            return
+        await interaction.response.send_modal(VerifyChallengeModal(self.vault, self.bet_id))
 
     @discord.ui.button(label="Enter result and reason", style=discord.ButtonStyle.secondary)
     async def settle(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -265,7 +341,9 @@ class VaultCardView(discord.ui.View):
         text = (
             "Review every extracted field in the attached private review, including the API grading fields. Confirm only an ordinary, "
             "uncashed-out ticket with no special promotions. If any selection, event date, market, or rule "
-            "is wrong, resubmit a clearer photo instead. Confirmation locks the ticket."
+            "is wrong, resubmit a clearer photo instead. Confirmation locks the ticket. "
+            "Upload AND confirm before the earliest leg starts. Only positive ticket odds (+100 or higher) qualify; "
+            "each whole ticket counts as one win or loss regardless of legs or units."
         )
         await interaction.followup.send(
             text, embed=review_embed(row), file=ticket_file(row, private=True), ephemeral=True,
@@ -287,13 +365,15 @@ class VaultCardView(discord.ui.View):
             await interaction.followup.send("This ticket is not ready for settlement.", ephemeral=True)
             return
         await interaction.followup.send(
-            "Review the ticket, then enter a result and evidence. This is labeled Moderator-settled, not API-verified.",
+            "Review the ticket and verify ALL leg starts in ticket order if eligibility is pending. "
+            "Use explicit timezone offsets and source evidence; API-verified starts cannot be overridden. "
+            "Then enter one result for the whole ticket, not each leg. This is labeled Moderator-settled, not API-verified.",
             embed=review_embed(row), file=ticket_file(row, private=True),
             view=ModeratorSettlementView(self.vault, row["id"]), ephemeral=True,
         )
 
 
-class MemberBetVault:
+class MemberBetVault(commands.Cog):
     def __init__(self, bot, channel_id: int, service=None, membership=None):
         self.bot = bot
         self.channel_id = channel_id
@@ -302,6 +382,54 @@ class MemberBetVault:
         self.lock = asyncio.Lock()
         self.ingest_slots = asyncio.Semaphore(2)
         self.view = VaultCardView(self)
+
+    @app_commands.command(name="vault_challenge", description="View monthly Member Vault win/loss standings and prize rules")
+    @app_commands.guild_only()
+    @app_commands.describe(month="Submission month in Eastern time (YYYY-MM); defaults to this month")
+    async def challenge(self, interaction: discord.Interaction, month: str | None = None) -> None:
+        if interaction.channel_id != self.channel_id or interaction.guild_id is None:
+            await interaction.response.send_message(f"Use this command in <#{self.channel_id}>.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            day, rows = await asyncio.to_thread(self.service.standings, interaction.guild_id, self.channel_id, month)
+            lines = [
+                f"{row['position']}. <@{row['owner_id']}> - {row['wins']}W / {row['losses']}L"
+                f" | unresolved: {row['unresolved']}"
+                + (" | Leader" if row["position"] == 1 and row["wins"] > 0 else "")
+                for row in rows
+            ]
+            embed = discord.Embed(
+                title=f"Member Vault Challenge - {day:%B %Y}",
+                description="\n".join(lines[:20]) or "No entries for this submission month.",
+                color=discord.Color.blurple(),
+            )
+            embed.add_field(
+                name="Prize and scoring",
+                value="Most wins earns a free month of Highroller; ALL tied leaders receive it. "
+                "Each whole ticket is one win or loss, regardless of legs, odds or units. Pushes/voids do not count. No submission cap.",
+                inline=False,
+            )
+            embed.add_field(
+                name="Eligibility",
+                value="Positive ticket odds (+100 or higher) only. Upload AND confirm before the earliest leg starts. "
+                "Unverified starts require moderator evidence. Months follow the upload date in Eastern time.",
+                inline=False,
+            )
+            embed.set_footer(text="Provisional standings. Staff resolve outstanding entries and award the free month; no automatic access grant.")
+            kwargs = {}
+            if len(lines) > 20:
+                kwargs["file"] = discord.File(
+                    BytesIO("\n".join(lines).encode("utf-8")), filename=f"vault-challenge-{day:%Y-%m}.txt",
+                )
+            await interaction.followup.send(
+                embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **kwargs,
+            )
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+        except Exception:
+            logger.exception("member_challenge_standings_failed channel=%s", self.channel_id)
+            await interaction.followup.send("Standings could not be loaded. Please retry; the error was logged.", ephemeral=True)
 
     async def notify(self, message, text: str) -> None:
         # Members are never DMed; notices go in-channel and clean themselves up.
@@ -377,22 +505,41 @@ class MemberBetVault:
     async def channel(self):
         return self.bot.get_channel(self.channel_id) or await self.bot.fetch_channel(self.channel_id)
 
-    async def publish(self, row: dict) -> None:
-        channel = await self.channel()
-        selection_text = "\n".join(leg["selection"] for leg in row["details"].get("legs", []))
-        reveal = ticket_file(row) if row["status"] in SETTLED and len(selection_text) > 1024 else None
-        card = None
+    async def find_card(self, channel, row: dict):
         if row.get("card_message_id"):
             try:
-                card = await channel.fetch_message(int(row["card_message_id"]))
+                return await channel.fetch_message(int(row["card_message_id"]))
             except discord.NotFound:
-                logger.warning("member_card_missing bet=%s; recreating", row["id"])
+                logger.warning("member_card_missing bet=%s", row["id"])
         else:
             # Recover a send that succeeded just before a restart/database failure.
             async for candidate in channel.history(limit=None, after=discord.Object(id=int(row["source_message_id"]))):
                 if candidate.author.id == self.bot.user.id and candidate.embeds and candidate.embeds[0].footer.text == card_embed(row).footer.text:
-                    card = candidate
-                    break
+                    return candidate
+        return None
+
+    async def publish(self, row: dict) -> None:
+        channel = await self.channel()
+        card = await self.find_card(channel, row)
+        if row["status"] == "rejected":
+            if not row.get("original_removed") and not await self.original_removed(row):
+                raise RuntimeError("The rejected upload could not be removed.")
+            if card is not None:
+                try:
+                    await card.delete()
+                except discord.NotFound:
+                    pass
+            await channel.send(
+                f"<@{row['owner_id']}> Member Bet #{row['id']} was rejected: {row['review_reason']}",
+                delete_after=NOTICE_SECONDS,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=[discord.Object(id=int(row["owner_id"]))]),
+            )
+            await asyncio.to_thread(self.service.db.update, "member_bets", {
+                "card_message_id": None, "card_dirty": False, "original_removed": True,
+            }, {"id": row["id"], "updated_at": row["updated_at"]})
+            return
+        selection_text = "\n".join(leg["selection"] for leg in row["details"].get("legs", []))
+        reveal = ticket_file(row) if row["status"] in SETTLED and len(selection_text) > 1024 else None
         if card is None:
             kwargs = {"file": reveal} if reveal else {}
             card = await channel.send(embed=card_embed(row), view=self.view if row["status"] not in SETTLED else None, allowed_mentions=discord.AllowedMentions.none(), **kwargs)

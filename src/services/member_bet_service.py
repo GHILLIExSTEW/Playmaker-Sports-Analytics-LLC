@@ -180,7 +180,7 @@ class MemberBetService:
 
     def ready(self) -> None:
         client = self.db._ensure_client()
-        client.table("member_bets").select("id").limit(1).execute()
+        client.table("member_bets").select("id,submitted_at,challenge_eligibility,challenge_events").limit(1).execute()
         bucket = client.storage.get_bucket(BUCKET)
         if bucket.public:
             raise RuntimeError("The member-bet-vault storage bucket must be private.")
@@ -211,6 +211,7 @@ class MemberBetService:
             "source_message_id": str(message.id), "channel_id": str(message.channel.id),
             "guild_id": str(message.guild.id), "owner_id": str(message.author.id),
             "owner_name": message.author.display_name, "image_path": path,
+            "submitted_at": message.created_at.isoformat(), "challenge_eligibility": "pending",
             # Persist only caption units; do not retain arbitrary public-message text.
             "details": {"caption_units": self.vision.extract_units_from_text(message.content)},
         }).data[0]
@@ -228,6 +229,8 @@ class MemberBetService:
         image_url = "data:image/png;base64," + base64.b64encode(photo).decode("ascii")
         units = row["details"].get("caption_units")
         details = self.vision.extract_play(image_url, f"Units: {units}" if units is not None else "")
+        if details.get("ticket_odds") is not None and details["ticket_odds"] < 100:
+            return self.reject(row["id"], "Only positive American ticket odds (+100 or higher) qualify. Negative-odds tickets are removed.", "processing")
         units = details.get("units")
         if units is not None:
             units = number(units, "Units")
@@ -270,8 +273,11 @@ class MemberBetService:
         if str(owner_id) != row["owner_id"] or row["status"] != "draft":
             raise ValueError("Only the uploader can confirm an awaiting-confirmation ticket.")
         units, odds = validate_ticket(units, odds)
+        if odds < 100 or (row.get("odds") is not None and row["odds"] < 100):
+            return self.reject(bet_id, "Only positive American ticket odds (+100 or higher) qualify. Negative-odds tickets are removed.", "draft")
         legs = row["details"]["legs"]
-        event = self.match_event(legs[0]) if len(legs) == 1 else None
+        events = [self.match_event(leg) for leg in legs]
+        event = events[0] if len(legs) == 1 else None
         leg = legs[0]
         supported = (
             event is not None and len(legs) == 1
@@ -286,6 +292,7 @@ class MemberBetService:
         next_check = max(now, parse_iso_datetime(event["start_at"])) if supported else now
         updated = self.update(bet_id, {
             "units": units, "odds": odds, "event": event,
+            "challenge_events": events,
             "status": "open" if supported else "review",
             "review_reason": None if supported else "Unsupported market, rules, or ambiguous event; moderator settlement required.",
             "confirmed_at": now.isoformat(), "next_check_at": next_check.isoformat(),
@@ -293,6 +300,51 @@ class MemberBetService:
         if updated is None:
             raise ValueError("This ticket has already been confirmed.")
         return updated
+
+    def reject(self, bet_id: int, reason: str, status: str) -> dict:
+        row = self.update(bet_id, {
+            "status": "rejected", "challenge_eligibility": "rejected", "review_reason": reason,
+        }, status)
+        if row is None:
+            raise ValueError("This ticket has already changed. Refresh its card.")
+        return row
+
+    def verify_challenge(self, bet_id: int, actor_id: str, starts: str, evidence: str) -> bool:
+        values = []
+        for value in starts.splitlines():
+            if not value.strip():
+                continue
+            try:
+                timestamp = parse_iso_datetime(value.strip())
+            except ValueError as exc:
+                raise ValueError("Use one ISO 8601 start time per leg, including its timezone offset.") from exc
+            if timestamp.tzinfo is None:
+                raise ValueError("Each start time must include a timezone offset, such as -04:00 or Z.")
+            values.append(timestamp.isoformat())
+        if not values or not evidence.strip():
+            raise ValueError("Start times for every leg and verification evidence are required.")
+        return bool(self.db._ensure_client().rpc("verify_member_challenge", {
+            "p_bet_id": bet_id, "p_actor_id": actor_id, "p_starts": values, "p_evidence": evidence.strip(),
+        }).execute().data)
+
+    def standings(self, guild_id: int, channel_id: int, month: str | None = None) -> tuple[date, list[dict]]:
+        if month is None:
+            day = datetime.now(EASTERN).date().replace(day=1)
+        else:
+            if not re.fullmatch(r"\d{4}-\d{2}", month):
+                raise ValueError("Use YYYY-MM for the challenge month.")
+            try:
+                day = date.fromisoformat(f"{month}-01")
+            except ValueError as exc:
+                raise ValueError("Use a valid challenge month in YYYY-MM format.") from exc
+        rows: list[dict] = []
+        while True:
+            page = self.db._ensure_client().rpc("member_challenge_standings", {
+                "p_guild_id": str(guild_id), "p_channel_id": str(channel_id), "p_month": day.isoformat(),
+            }).range(len(rows), len(rows) + 499).execute().data
+            rows.extend(page)
+            if len(page) < 500:
+                return day, rows
 
     def settle(self, bet_id: int, actor_id: str, result: str, verification: str, reason: str) -> bool:
         if result not in SETTLED or verification not in {"API-verified", "Moderator-settled"} or not reason.strip():

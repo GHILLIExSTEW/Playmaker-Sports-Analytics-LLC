@@ -77,7 +77,10 @@ class MemberOnboarding(commands.Cog):
             vault_text += (
                 f"\nIf verified, submit in <#{MEMBER_BET_CHANNEL_ID}>: attach exactly one static "
                 "JPEG, PNG or WebP slip photo (up to 10 MB). Units can go in the caption."
-                "\nThis is a submission-only channel; read the confirmation before completing it."
+                "\nUpload AND confirm before the earliest leg starts. Positive ticket odds (+100 or higher) only."
+                "\nMonthly challenge: one win/loss per whole ticket, regardless of legs or units. Pushes/voids do not count."
+                "\nMost wins earns a free month of Highroller; all tied leaders qualify. No submission cap."
+                "\nUse `/vault_challenge` in the vault for standings by Eastern submission month."
             )
         else:
             vault_text += "\nThe submission channel is not configured; contact staff."

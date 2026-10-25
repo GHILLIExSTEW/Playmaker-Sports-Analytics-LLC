@@ -1,6 +1,6 @@
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -11,7 +11,9 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 import src.bot as bot_module
-from src.member_bet_vault import MemberBetVault, card_embed, can_moderate, review_embed, ticket_file
+from src.member_bet_vault import (
+    MemberBetVault, VerifyChallengeModal, card_embed, can_moderate, review_embed, ticket_file,
+)
 from src.services.member_bet_service import (
     MemberBetService, MemberImageService, accepted_photo, grade_leg, sanitize_photo,
     validate_ticket,
@@ -28,7 +30,9 @@ def paid_membership_default(monkeypatch):
 def ticket(**overrides):
     row = {
         "id": 1, "owner_id": "10", "source_message_id": "100", "card_message_id": "200",
-        "channel_id": "300", "status": "open", "units": 2, "odds": -110,
+        "channel_id": "300", "status": "open", "units": 2, "odds": 120,
+        "submitted_at": "2026-10-03T00:00:00+00:00", "challenge_eligibility": "eligible",
+        "challenge_events": [],
         "created_at": "2026-10-03T00:00:00+00:00",
         "updated_at": "2026-10-03T00:00:00+00:00",
         "confirmed_at": "2026-10-03T00:01:00+00:00",
@@ -53,6 +57,7 @@ def ticket(**overrides):
 def message(attachments=None, channel=300):
     return SimpleNamespace(
         id=100, guild=SimpleNamespace(id=400), webhook_id=None,
+        created_at=datetime(2026, 10, 3, tzinfo=timezone.utc),
         channel=SimpleNamespace(id=channel, send=AsyncMock()),
         author=SimpleNamespace(id=10, bot=False, display_name="Member", mention="<@10>", send=AsyncMock()),
         content="2u", attachments=attachments or [], delete=AsyncMock(),
@@ -143,11 +148,12 @@ def test_draft_game_is_private_until_confirmed():
     assert "OCR MIGHT LEAK" not in str(card_embed(row).to_dict())
 
 
-@pytest.mark.parametrize("result,net", [("win", "+1.82u"), ("loss", "-2u"), ("void", "+0u")])
-def test_settled_cards_reveal_only_sanitized_selection(result, net):
+@pytest.mark.parametrize("result,points", [("win", "1 win"), ("loss", "1 loss"), ("void", "Not counted (push / void)")])
+def test_settled_cards_reveal_only_sanitized_selection(result, points):
     embed = card_embed(ticket(status=result, verification="Moderator-settled"))
     assert "SECRET" in str(embed.to_dict())
-    assert any(field.name == "Net units" and field.value == net for field in embed.fields)
+    assert any(field.name == "Challenge result" and field.value == points for field in embed.fields)
+    assert not any(field.name == "Net units" for field in embed.fields)
     assert any(field.name == "Verification" and field.value == "Moderator-settled" for field in embed.fields)
     assert not embed.image.url
 
@@ -329,7 +335,7 @@ def test_unsupported_ticket_routes_to_moderator_review():
     service.get = Mock(return_value=row)
     service.match_event = Mock(return_value=None)
     service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
-    confirmed = service.confirm(1, 10, 2, -110)
+    confirmed = service.confirm(1, 10, 2, 120)
     assert confirmed["status"] == "review"
     assert confirmed["confirmed_at"]
     assert "moderator" in confirmed["review_reason"]
@@ -340,10 +346,11 @@ def test_parlay_never_auto_grades():
     row["details"]["legs"].append(deepcopy(row["details"]["legs"][0]))
     service = MemberBetService(database=Mock())
     service.get = Mock(return_value=row)
-    service.match_event = Mock()
+    service.match_event = Mock(return_value=None)
     service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
-    assert service.confirm(1, 10, 2, -110)["status"] == "review"
-    service.match_event.assert_not_called()
+    assert service.confirm(1, 10, 2, 120)["status"] == "review"
+    assert service.match_event.call_count == 2
+    assert service.update.call_args.args[1]["challenge_events"] == [None, None]
 
 
 def test_api_failure_backoff_then_moderator_fallback_never_settles():
@@ -463,7 +470,7 @@ def test_supported_confirmation_waits_for_event_start():
     service.get = Mock(return_value=row)
     service.match_event = Mock(return_value=event)
     service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
-    confirmed = service.confirm(1, 10, 2, -110)
+    confirmed = service.confirm(1, 10, 2, 120)
     assert confirmed["status"] == "open"
     assert confirmed["next_check_at"] == event["start_at"]
     assert service.update.call_args.args[2] == "draft"
@@ -476,7 +483,7 @@ def test_missing_line_does_not_get_auto_grading():
     service.get = Mock(return_value=row)
     service.match_event = Mock(return_value=row["event"])
     service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
-    assert service.confirm(1, 10, 2, -110)["status"] == "review"
+    assert service.confirm(1, 10, 2, 120)["status"] == "review"
 
 
 def test_private_bucket_required_at_startup():
@@ -648,3 +655,254 @@ def test_membership_expiring_while_queued_is_rechecked(paid_membership_default):
     asyncio.run(MemberBetVault(Mock(), 300, service).handle_message(msg))
     service.save_submission.assert_not_called()
     assert "expired" in msg.channel.send.call_args.args[0]
+
+
+def test_submission_preserves_discord_upload_time_not_processing_time():
+    database = Mock()
+    database.insert.return_value.data = [ticket()]
+    service = MemberBetService(database=database)
+    service.for_source = Mock(return_value=None)
+    service.save_submission(message(), photo_bytes())
+    payload = database.insert.call_args.args[1]
+    assert payload["submitted_at"] == message().created_at.isoformat()
+    assert payload["challenge_eligibility"] == "pending"
+
+
+def test_negative_ticket_odds_rejected_during_extraction():
+    row = ticket(status="processing", image_path="400/10/100.png")
+    vision = Mock()
+    vision.extract_play.return_value = {**row["details"], "ticket_odds": -110}
+    database = Mock()
+    database._ensure_client.return_value.storage.from_.return_value.download.return_value = photo_bytes()
+    service = MemberBetService(database=database, vision=vision)
+    service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
+    rejected = service.extract(row)
+    assert rejected["status"] == "rejected"
+    assert "positive" in rejected["review_reason"]
+    assert rejected["challenge_eligibility"] == "rejected"
+
+
+@pytest.mark.parametrize("stored_odds,entered_odds", [(120, -110), (-110, 120), (-110, -110)])
+def test_negative_odds_cannot_be_confirmed_or_corrected_into_eligibility(stored_odds, entered_odds):
+    row = ticket(status="draft", confirmed_at=None, odds=stored_odds)
+    service = MemberBetService(database=Mock())
+    service.get = Mock(return_value=row)
+    service.match_event = Mock()
+    service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
+    assert service.confirm(1, 10, 2, entered_odds)["status"] == "rejected"
+    service.match_event.assert_not_called()
+
+
+def test_positive_parlay_checks_every_leg_but_counts_as_one_ticket():
+    row = ticket(status="draft", confirmed_at=None, odds=450, units=10)
+    row["details"]["legs"] *= 3
+    service = MemberBetService(database=Mock())
+    service.get = Mock(return_value=row)
+    service.match_event = Mock(return_value=row["event"])
+    service.update = Mock(side_effect=lambda bet_id, fields, status: {**row, **fields})
+    confirmed = service.confirm(1, 10, 10, 450)
+    assert confirmed["status"] == "review"
+    assert len(confirmed["challenge_events"]) == 3
+    assert service.match_event.call_count == 3
+    assert any(field.value == "1 win" for field in card_embed({**confirmed, "status": "win"}).fields)
+
+
+def test_historical_tickets_are_not_challenge_points():
+    row = ticket(status="win", challenge_eligibility="excluded")
+    assert any(field.value == "Not counted (not challenge-eligible)" for field in card_embed(row).fields)
+
+
+def test_rejected_ticket_card_removed_and_short_lived_notice_sent():
+    async def run():
+        card = SimpleNamespace(delete=AsyncMock())
+        channel = SimpleNamespace(fetch_message=AsyncMock(return_value=card), send=AsyncMock())
+        bot = SimpleNamespace(get_channel=lambda channel_id: channel)
+        service = Mock()
+        vault = MemberBetVault(bot, 300, service)
+        row = ticket(status="rejected", original_removed=True, review_reason="Positive ticket odds only.")
+        await vault.publish(row)
+        card.delete.assert_awaited_once()
+        assert "rejected" in channel.send.call_args.args[0]
+        assert "SECRET" not in channel.send.call_args.args[0]
+        assert channel.send.call_args.kwargs["delete_after"] == 60
+        assert service.db.update.call_args.args[1]["card_dirty"] is False
+
+    asyncio.run(run())
+
+
+def test_failed_rejection_card_deletion_remains_retryable():
+    async def run():
+        card = SimpleNamespace(delete=AsyncMock(side_effect=discord.Forbidden(
+            SimpleNamespace(status=403, reason="Forbidden"), "No permission",
+        )))
+        channel = SimpleNamespace(fetch_message=AsyncMock(return_value=card), send=AsyncMock())
+        service = Mock()
+        vault = MemberBetVault(SimpleNamespace(get_channel=lambda channel_id: channel), 300, service)
+        with pytest.raises(discord.Forbidden):
+            await vault.publish(ticket(status="rejected", original_removed=True))
+        service.db.update.assert_not_called()
+        channel.send.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_rejected_ticket_recovers_and_deletes_card_sent_before_database_failure():
+    async def run():
+        row = ticket(status="rejected", original_removed=True, card_message_id=None, review_reason="Negative odds.")
+        card = SimpleNamespace(
+            author=SimpleNamespace(id=99), embeds=[card_embed(ticket())], delete=AsyncMock(),
+        )
+
+        async def history(**kwargs):
+            yield card
+
+        channel = SimpleNamespace(history=history, send=AsyncMock())
+        bot = SimpleNamespace(get_channel=lambda channel_id: channel, user=SimpleNamespace(id=99))
+        service = Mock()
+        await MemberBetVault(bot, 300, service).publish(row)
+        card.delete.assert_awaited_once()
+        assert service.db.update.call_args.args[1]["card_dirty"] is False
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("starts", ["2026-11-01T19:00:00", "tomorrow", ""])
+def test_moderator_start_times_require_explicit_timezone(starts):
+    service = MemberBetService(database=Mock())
+    with pytest.raises(ValueError):
+        service.verify_challenge(1, "20", starts, "Schedule evidence")
+    service.db._ensure_client.assert_not_called()
+
+
+def test_moderator_verification_sends_every_start_and_evidence_to_atomic_rpc():
+    database = Mock()
+    database._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
+    service = MemberBetService(database=database)
+    assert service.verify_challenge(1, "20", "2026-11-01T19:00:00-05:00\n2026-11-02T01:00:00Z", " Schedule ")
+    database._ensure_client.return_value.rpc.assert_called_once_with("verify_member_challenge", {
+        "p_bet_id": 1, "p_actor_id": "20", "p_starts": [
+            "2026-11-01T19:00:00-05:00", "2026-11-02T01:00:00+00:00",
+        ], "p_evidence": "Schedule",
+    })
+
+
+def test_member_cannot_submit_moderator_start_verification():
+    async def run():
+        vault = MemberBetVault(Mock(), 300, Mock())
+        modal = VerifyChallengeModal(vault, 1)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=10), response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        await modal.on_submit(interaction)
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+        vault.service.verify_challenge.assert_not_called()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("month", ["2026-13", "2026-1", "not-a-month", "2026-01-01"])
+def test_standings_reject_invalid_month(month):
+    service = MemberBetService(database=Mock())
+    with pytest.raises(ValueError, match="month"):
+        service.standings(400, 300, month)
+    service.db._ensure_client.assert_not_called()
+
+
+def test_standings_are_scoped_to_guild_channel_and_submission_month():
+    database = Mock()
+    database._ensure_client.return_value.rpc.return_value.range.return_value.execute.return_value.data = []
+    service = MemberBetService(database=database)
+    day, rows = service.standings(400, 300, "2026-10")
+    assert day.isoformat() == "2026-10-01" and rows == []
+    database._ensure_client.return_value.rpc.assert_called_once_with("member_challenge_standings", {
+        "p_guild_id": "400", "p_channel_id": "300", "p_month": "2026-10-01",
+    })
+
+
+def test_standings_paginate_without_losing_tied_leaders():
+    database = Mock()
+    rpc = database._ensure_client.return_value.rpc.return_value
+    rpc.range.return_value.execute.side_effect = [
+        SimpleNamespace(data=[{"owner_id": str(index)} for index in range(500)]),
+        SimpleNamespace(data=[{"owner_id": "500"}]),
+    ]
+    _, rows = MemberBetService(database=database).standings(400, 300, "2026-10")
+    assert len(rows) == 501
+    assert rpc.range.call_args_list[0].args == (0, 499)
+    assert rpc.range.call_args_list[1].args == (500, 999)
+
+
+def test_default_challenge_month_uses_eastern_not_utc(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 1, 3, 59, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr("src.services.member_bet_service.datetime", FixedDateTime)
+    database = Mock()
+    database._ensure_client.return_value.rpc.return_value.range.return_value.execute.return_value.data = []
+    day, _ = MemberBetService(database=database).standings(400, 300)
+    assert day == date(2026, 10, 1)
+
+
+def test_challenge_command_shows_ties_and_rules_privately():
+    async def run():
+        service = Mock()
+        service.standings.return_value = (date(2026, 10, 1), [
+            {"owner_id": str(owner), "wins": 5, "losses": owner, "unresolved": 0, "position": 1}
+            for owner in (10, 20)
+        ])
+        vault = MemberBetVault(Mock(), 300, service)
+        interaction = SimpleNamespace(
+            channel_id=300, guild_id=400, response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        await vault.challenge.callback(vault, interaction, "2026-10")
+        kwargs = interaction.followup.send.call_args.kwargs
+        assert kwargs["ephemeral"] is True
+        assert kwargs["embed"].description.count("Leader") == 2
+        assert "ALL tied" in str(kwargs["embed"].to_dict())
+        assert "Positive ticket odds" in str(kwargs["embed"].to_dict())
+
+    asyncio.run(run())
+
+
+def test_challenge_command_registration_and_complete_standings_attachment():
+    async def run():
+        service = Mock()
+        service.standings.return_value = (date(2026, 10, 1), [
+            {"owner_id": str(owner), "wins": 1, "losses": 0, "unresolved": 0, "position": 1}
+            for owner in range(25)
+        ])
+        bot = discord.ext.commands.Bot(command_prefix="!", intents=discord.Intents.none())
+        vault = MemberBetVault(bot, 300, service)
+        await bot.add_cog(vault)
+        try:
+            assert bot.tree.get_command("vault_challenge") is not None
+            interaction = SimpleNamespace(
+                channel_id=300, guild_id=400, response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=AsyncMock()),
+            )
+            await vault.challenge.callback(vault, interaction)
+            kwargs = interaction.followup.send.call_args.kwargs
+            assert kwargs["embed"].description.count("Leader") == 20
+            attachment = kwargs["file"]
+            assert attachment.fp.read().decode("utf-8").count("Leader") == 25
+            attachment.close()
+        finally:
+            await bot.close()
+
+    asyncio.run(run())
+
+
+def test_challenge_command_rejects_other_channels_without_querying():
+    async def run():
+        vault = MemberBetVault(Mock(), 300, Mock())
+        interaction = SimpleNamespace(
+            channel_id=301, guild_id=400, response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        await vault.challenge.callback(vault, interaction)
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+        vault.service.standings.assert_not_called()
+
+    asyncio.run(run())

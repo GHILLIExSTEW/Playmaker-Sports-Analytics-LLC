@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:access": "node --test tests/member-picks-access.test.mjs tests/official-play-cleanup.test.mjs tests/team-api-cache.test.mjs tests/mma-event-cache.test.mjs tests/api-daily-budget.test.mjs tests/research-access.test.mjs tests/research-workspace.test.mjs tests/member-stats.test.mjs",
+    "test:access": "node --test tests/member-picks-access.test.mjs tests/official-play-cleanup.test.mjs tests/team-api-cache.test.mjs tests/mma-event-cache.test.mjs tests/api-daily-budget.test.mjs tests/research-access.test.mjs tests/research-workspace.test.mjs tests/member-stats.test.mjs tests/member-vault-challenge.test.mjs",
     "test:capper-api": "node --test tests/capper-api.test.mjs tests/capper-api-handler.test.mjs",
     "test:capper-tools": "node --test tests/capper-tools.test.mjs tests/capper-research-handler.test.mjs tests/capper-team-pull.test.mjs",
     "test:picks": "playwright test",
