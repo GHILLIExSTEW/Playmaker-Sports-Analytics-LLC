@@ -294,3 +294,21 @@ def test_recap_builder_keeps_empty_month_without_mixing_member_vault_stats():
     assert embed.title == "📊 Monthly Recap"
     assert embed.description == "**May 2026**\nNo settled plays this period."
     service.vault_bets.assert_not_called()
+
+
+def test_recap_uses_structured_sport_details_when_stored_sport_id_is_wrong():
+    settled_at = "2026-10-22T15:00:00+00:00"
+    play = {
+        "id": 1, "user_id": 1, "sport_id": 1, "units": 1, "odds": -110, "status": "loss",
+        "message_id": "500", "created_at": settled_at, "settled_at": settled_at,
+        "tracking_scope": "official",
+    }
+    service = Mock(
+        history=Mock(return_value=([play], [], {1: "basketball"})),
+        play_leg_details=Mock(return_value={1: [{"details": {"sport": "NCAAF"}}]}),
+    )
+    embed = build_recap_embed(
+        service, "weekly", datetime(2026, 10, 26, 10, tzinfo=TRACKER_TIMEZONE),
+    )
+    assert "**NCAAF** — 0-1" in embed.fields[0].value
+    service.play_leg_details.assert_called_once_with([1])

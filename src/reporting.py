@@ -18,12 +18,15 @@ from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
 from src.services.tracker_image_service import render_tracker_image
 from src.services.play_features_service import (
+    SETTLED_RESULTS,
     PlayFeaturesService,
     build_recap,
     format_record,
     previous_month,
     previous_week,
     SPORT_NAMES,
+    settled_time,
+    unique_published,
 )
 from src.services.team_ranking_service import TeamRankingService
 
@@ -245,6 +248,16 @@ def build_recap_embed(
     now = now or datetime.now(TRACKER_TIMEZONE)
     start, end = previous_week(now) if period == "weekly" else previous_month(now)
     plays, users, sports = service.history()
+    period_ids = [
+        int(play["id"]) for play in unique_published(plays)
+        if play.get("tracking_scope", "official") == "official"
+        and play.get("status") in SETTLED_RESULTS and start <= settled_time(play) < end
+    ]
+    leg_details = service.play_leg_details(period_ids) if period_ids else {}
+    plays = [
+        {**play, "leg_records": leg_details.get(int(play["id"]), [])}
+        for play in plays
+    ]
     recap = build_recap(scoped_plays(plays, "official"), users, sports, start, end)
     last_day = end - timedelta(days=1)
     label = (

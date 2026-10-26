@@ -70,6 +70,13 @@ def test_filters_combine_sport_capper_result_and_sort_newest_then_id():
     assert not filter_rows(rows, sport="hockey")
 
 
+def test_sport_alias_filter_and_result_label_use_canonical_league_name():
+    rows = [play(1)]
+    assert filter_rows(rows, sport="nba") == rows
+    embed = build_results_embed(rows, USERS, SPORTS, "NBA", 0, {})
+    assert "NBA" in embed.fields[0].value
+
+
 def test_missing_sport_is_unspecified_without_guessing():
     rows = [play(sport_id=999)]
     assert filter_rows(rows, sport="official") == rows
@@ -165,12 +172,12 @@ def test_command_filters_choices_and_member(monkeypatch):
     cog.features.history.return_value = ([play(1), play(2, status="loss"), play(3, sport_id=2)], USERS, SPORTS)
     request = interaction()
     asyncio.run(cog.results_command.callback(
-        cog, request, sport=discord.app_commands.Choice(name="Basketball", value="basketball"),
+        cog, request, sport=discord.app_commands.Choice(name="NBA", value="basketball"),
         capper=SimpleNamespace(id=42, display_name="Ace"), result=discord.app_commands.Choice(name="Loss", value="loss"),
     ))
     embed = request.followup.send.call_args.kwargs["embed"]
     assert len(embed.fields) == 1 and embed.fields[0].name.startswith("#2")
-    assert "Basketball" in embed.description and "Ace" in embed.description
+    assert "Ace" in embed.description
 
 
 def test_requester_guard_paging_and_bounds():

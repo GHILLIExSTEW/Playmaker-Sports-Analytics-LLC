@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from src.services.play_features_service import (
     EASTERN,
     build_recap,
@@ -34,6 +36,16 @@ def test_clean_leg_details_keeps_known_fields_and_rejects_unknown_sport():
     assert clean_leg_details({"selection": "x", "sport": "curling"}) is None
     assert clean_leg_details({"selection": "x"}) is None
     assert clean_leg_details({"sport": "nfl", "event_date": "soon", "line": True})["event_date"] is None
+
+
+@pytest.mark.parametrize(("sport", "expected"), [
+    ("NBA", "basketball"),
+    ("NHL", "hockey"),
+    ("NCAAF", "ncaa"),
+    ("College Football", "ncaa"),
+])
+def test_clean_leg_details_normalizes_league_names(sport, expected):
+    assert clean_leg_details({"sport": sport})["sport"] == expected
 
 
 def test_play_sport_slug():
@@ -127,6 +139,46 @@ def test_build_recap_dedupes_messages_and_ranks_cappers():
     assert recap["cappers"][1]["streak"] == "L1"
     assert recap["sports"][0]["sport"] == "NFL"
     assert recap["best_play"]["id"] == 1
+
+
+def test_build_recap_groups_league_aliases_into_correct_records():
+    plays = []
+    next_id = 1
+    for sport_id, statuses in (
+        (1, ["win", "win"]), (2, ["win", "win"]),
+        (3, ["win", "win"]), (4, ["win", "loss", "loss"]),
+        (5, ["loss"]), (6, ["win", "win"]),
+    ):
+        for status in statuses:
+            plays.append(play(
+                next_id, 1, status, settled="2026-10-19T15:00:00+00:00", sport_id=sport_id,
+            ))
+            next_id += 1
+
+    recap = build_recap(
+        plays, [], {1: "basketball", 2: "nba", 3: "hockey", 4: "nhl", 5: "ncaaf", 6: "nfl"},
+        datetime(2026, 10, 19, tzinfo=EASTERN), datetime(2026, 10, 26, tzinfo=EASTERN),
+    )
+
+    assert recap["count"] == 12
+    assert (recap["total"]["wins"], recap["total"]["losses"]) == (9, 3)
+    assert {
+        row["sport"]: (row["wins"], row["losses"])
+        for row in recap["sports"]
+    } == {
+        "NBA": (4, 0), "NHL": (3, 2), "NCAAF": (0, 1), "NFL": (2, 0),
+    }
+
+
+def test_build_recap_prefers_structured_leg_sport_to_stored_sport_id():
+    play_with_details = play(1, 1, "loss", settled="2026-10-22T15:00:00+00:00")
+    play_with_details["leg_records"] = [{"details": {"sport": "NCAAF"}}]
+    recap = build_recap(
+        [play_with_details], [], {1: "basketball"},
+        datetime(2026, 10, 19, tzinfo=EASTERN), datetime(2026, 10, 26, tzinfo=EASTERN),
+    )
+    assert recap["sports"][0]["sport"] == "NCAAF"
+    assert (recap["sports"][0]["wins"], recap["sports"][0]["losses"]) == (0, 1)
 
 
 def test_vault_leaderboard_filters_period_and_sorts():

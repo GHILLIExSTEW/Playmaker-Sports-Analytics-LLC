@@ -7,7 +7,8 @@ from datetime import date, datetime
 import discord
 
 from src.services.play_features_service import (
-    EASTERN, SETTLED_RESULTS, SPORT_NAMES, record_summary, settled_time, signed_units, unique_published,
+    EASTERN, SETTLED_RESULTS, SPORT_NAMES, normalize_sport_slug, record_summary, settled_time, signed_units,
+    unique_published,
 )
 
 PAGE_SIZE = 10
@@ -44,8 +45,8 @@ def filter_results(
             continue
         if play.get("status") not in SETTLED_RESULTS or (result and play["status"] != result):
             continue
-        slug = sports.get(play.get("sport_id"), "official")
-        if sport and slug != sport:
+        slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
+        if sport and slug != normalize_sport_slug(sport):
             continue
         when = settled_time(play)
         if when > now or (start and when.date() < start) or (end and when.date() > end):
@@ -66,7 +67,7 @@ def build_results_embed(rows: list[dict], users: list[dict], sports: dict, label
     for play in rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
         play_id = int(play["id"])
         name = discord.utils.escape_markdown(str(names.get(str(play["user_id"]), "Unknown")))[:70]
-        slug = sports.get(play.get("sport_id"), "official")
+        slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
         sport = SPORT_NAMES.get(slug, "Unspecified")
         value = (
             f"{settled_time(play).strftime('%Y-%m-%d %H:%M')} ET · {sport}\n"

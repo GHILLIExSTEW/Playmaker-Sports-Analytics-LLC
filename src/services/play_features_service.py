@@ -11,9 +11,15 @@ from src.services.supabase_service import supabase_service
 
 EASTERN = ZoneInfo("America/New_York")
 SPORT_NAMES = {
-    "nfl": "NFL", "ncaa": "College Football", "basketball": "Basketball", "baseball": "Baseball",
-    "hockey": "Hockey", "football": "Soccer", "mma": "MMA", "other": "Other", "mixed": "Mixed",
+    "nfl": "NFL", "ncaa": "NCAAF", "basketball": "NBA", "baseball": "Baseball",
+    "hockey": "NHL", "football": "Soccer", "mma": "MMA", "other": "Other", "mixed": "Mixed",
     "official": "Unspecified",
+}
+SPORT_ALIASES = {
+    "nba": "basketball",
+    "nhl": "hockey",
+    "ncaaf": "ncaa",
+    "college football": "ncaa",
 }
 # Sports whose cached API-Sports events carry final full-game scores we can grade against.
 GRADABLE_SPORTS = {"nfl", "ncaa", "basketball", "baseball", "hockey"}
@@ -21,6 +27,13 @@ FINAL_CODES = {"FT", "AOT", "AP"}
 LEG_TEXT_FIELDS = ("sport", "home_name", "away_name", "event_date", "market", "side", "scope")
 SETTLED_RESULTS = {"win", "loss", "void", "partial"}
 SUGGEST_LOOKBACK = timedelta(days=14)
+
+
+def normalize_sport_slug(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    slug = value.strip().lower()
+    return SPORT_ALIASES.get(slug, slug) or None
 
 
 def _clean_text(value, limit: int = 120) -> str | None:
@@ -33,7 +46,7 @@ def _clean_text(value, limit: int = 120) -> str | None:
 def clean_leg_details(leg: dict) -> dict | None:
     """Keep only the structured game fields the grader understands; drop anything malformed."""
     details = {field: _clean_text(leg.get(field)) for field in LEG_TEXT_FIELDS}
-    sport = (details["sport"] or "").lower()
+    sport = normalize_sport_slug(details["sport"])
     details["sport"] = sport if sport in SPORT_NAMES and sport not in {"mixed", "official"} else None
     for field in ("market", "side", "scope"):
         details[field] = details[field].lower() if details[field] else None
@@ -53,7 +66,7 @@ def clean_leg_details(leg: dict) -> dict | None:
 
 def play_sport_slug(leg_records: list[dict] | None) -> str | None:
     sports = {
-        (leg.get("details") or {}).get("sport")
+        normalize_sport_slug((leg.get("details") or {}).get("sport"))
         for leg in leg_records or []
     } - {None}
     if not sports:
@@ -209,7 +222,8 @@ def build_recap(plays: list[dict], users: list[dict], sports: dict, start: datet
 
     by_sport = {}
     for play in period:
-        slug = sports.get(play.get("sport_id"), "official")
+        slug = play_sport_slug(play.get("leg_records"))
+        slug = slug or normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
         by_sport.setdefault(SPORT_NAMES.get(slug, slug.title()), []).append(play)
     sport_rows = sorted(
         ({"sport": sport, **record_summary(rows)} for sport, rows in by_sport.items()),
@@ -269,6 +283,7 @@ class PlayFeaturesService:
 
     # ---- Sports ---------------------------------------------------------
     def ensure_sport(self, slug: str) -> int:
+        slug = normalize_sport_slug(slug) or slug
         existing = self.db.select("sports", "id", {"api_slug": slug}).data
         if existing:
             return int(existing[0]["id"])
@@ -276,6 +291,19 @@ class PlayFeaturesService:
 
     def sport_slugs(self) -> dict:
         return {row["id"]: row["api_slug"] for row in self.db.select("sports", "id,api_slug").data or []}
+
+    def play_leg_details(self, play_ids: list[int]) -> dict[int, list[dict]]:
+        if not play_ids:
+            return {}
+        client = self._client()
+        rows = self._all(lambda: client.table("play_legs").select(
+            "play_id,details"
+        ).in_("play_id", play_ids).order("play_id"))
+        details = {}
+        for row in rows:
+            if isinstance(row.get("details"), dict):
+                details.setdefault(int(row["play_id"]), []).append({"details": row["details"]})
+        return details
 
     # ---- History --------------------------------------------------------
     def history(self) -> tuple[list[dict], list[dict], dict]:
@@ -315,7 +343,7 @@ class PlayFeaturesService:
         if mine:
             by_sport = {}
             for play in mine:
-                slug = sports.get(play.get("sport_id"), "official")
+                slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
                 by_sport.setdefault(SPORT_NAMES.get(slug, slug.title()), []).append(play)
             capper = {
                 "month": record_summary([play for play in mine if settled_time(play) >= month_start]),
