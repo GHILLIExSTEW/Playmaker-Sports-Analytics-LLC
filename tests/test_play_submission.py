@@ -149,6 +149,23 @@ def test_manual_modal_saves_first_leg_and_continues_or_records(legs):
         cog.official.clear_draft_legs.assert_not_called()
 
 
+def test_manual_modal_rejects_personal_stake_over_three_units():
+    cog = submission()
+    interaction = request()
+
+    async def check():
+        modal = PlayModal(cog)
+        for name, value in {
+            "units": "10", "legs": "1", "leg_one": "Home", "leg_one_odds": "+150", "team_name": "Home",
+        }.items():
+            getattr(modal, name)._value = value
+        await modal.on_submit(interaction)
+
+    asyncio.run(check())
+    assert interaction.response.send_message.call_args.args == ("Personal capper plays cannot exceed 3 units.",)
+    cog.official.save_draft_leg.assert_not_called()
+
+
 def test_final_leg_records_from_database_draft_and_clears():
     cog = submission()
     cog.record_modal_play = AsyncMock()
@@ -342,6 +359,21 @@ def test_image_edit_rejects_mismatched_selection_and_odds_counts():
     assert interaction.followup.edit_message.call_count == 0
 
 
+def test_image_edit_rejects_personal_stake_over_three_units():
+    cog = submission()
+    interaction = request()
+    modal = EditImageBetModal(cog, 42, parsed(), 8, SimpleNamespace(id=303))
+    modal.units._value = "10"
+    modal.team._value = "Home"
+    modal.selections._value = "Home ML"
+    modal.odds._value = "+150"
+
+    asyncio.run(modal.on_submit(interaction))
+
+    assert interaction.response.send_message.call_args.args == ("Personal capper plays cannot exceed 3 units.",)
+    interaction.followup.edit_message.assert_not_awaited()
+
+
 def test_image_review_carries_owner_through_units_entry():
     cog = submission()
     values = parsed()
@@ -360,6 +392,18 @@ def test_image_review_carries_owner_through_units_entry():
         assert confirmation.owner_id == 42 and confirmation.submission is cog
 
     asyncio.run(check())
+
+
+def test_auto_units_modal_rejects_personal_stake_over_three_units():
+    cog = submission()
+    interaction = request()
+    modal = AutoUnitsModal(cog, 42, parsed(), 8, SimpleNamespace(id=303))
+    modal.units._value = "10"
+
+    asyncio.run(modal.on_submit(interaction))
+
+    assert interaction.response.send_message.call_args.args == ("Personal capper plays cannot exceed 3 units.",)
+    interaction.followup.edit_message.assert_not_awaited()
 
 
 def test_bot_routes_submission_once_then_prefix_commands(monkeypatch):

@@ -3,7 +3,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 
-type TrendPoint = { date: string; cumulative_units: number }
+type TrendPoint = { date: string; cumulative_net_units: number }
 type SportPoint = { sport: string; plays: number; wins: number; losses: number; net_units: number }
 
 function formatUnits(value: number): string {
@@ -13,7 +13,7 @@ function formatUnits(value: number): string {
 export default function CapperAnalyticsCharts({ trend, bySport }: { trend: TrendPoint[]; bySport: SportPoint[] }) {
   return <>
     <section className="capper-chart-panel">
-      <div className="profile-section-heading"><p className="eyebrow">Cumulative performance</p><h2>Results over time.</h2></div>
+      <div className="profile-section-heading"><p className="eyebrow">Cumulative net units</p><h2>Results over time.</h2></div>
       <div className="capper-chart">
         {trend.length ? <ResponsiveContainer width="100%" height="100%">
           <LineChart data={trend} margin={{ top: 12, right: 12, bottom: 4, left: 4 }}>
@@ -22,13 +22,13 @@ export default function CapperAnalyticsCharts({ trend, bySport }: { trend: Trend
             <YAxis tickFormatter={(value) => formatUnits(Number(value))} tick={{ fill: 'var(--muted)', fontSize: 11 }} tickLine={false} axisLine={false} width={56} />
             <Tooltip formatter={(value) => [formatUnits(Number(value)), 'Net units']} />
             <ReferenceLine y={0} stroke="var(--muted)" />
-            <Line type="monotone" dataKey="cumulative_units" name="Cumulative net" stroke="var(--green)" strokeWidth={3} dot={{ r: 3, fill: 'var(--green)' }} activeDot={{ r: 5 }} />
+            <Line type="monotone" dataKey="cumulative_net_units" name="Cumulative net units" stroke="var(--green)" strokeWidth={3} dot={{ r: 3, fill: 'var(--green)' }} activeDot={{ r: 5 }} />
           </LineChart>
         </ResponsiveContainer> : <p className="results-empty">Performance graph appears when this capper has settled results.</p>}
       </div>
     </section>
     <section className="capper-chart-panel">
-      <div className="profile-section-heading"><p className="eyebrow">Sport breakdown</p><h2>Net units by sport.</h2></div>
+      <div className="profile-section-heading"><p className="eyebrow">Net units by sport</p><h2>Record by sport.</h2></div>
       <div className="capper-chart">
         {bySport.length ? <ResponsiveContainer width="100%" height="100%">
           <BarChart data={bySport} margin={{ top: 12, right: 12, bottom: 4, left: 4 }}>

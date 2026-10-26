@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import math
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+
+MAX_CAPPER_UNITS = 3
 
 
 class PlayService:
@@ -39,6 +43,8 @@ class PlayService:
             units_value = float(units)
         except (TypeError, ValueError, InvalidOperation):
             return {"message": "Units must be a valid number."}
+        if not math.isfinite(units_value):
+            return {"message": "Units must be a valid number."}
 
         try:
             legs_value = int(legs)
@@ -57,6 +63,18 @@ class PlayService:
         if odds_value == 0:
             return {"message": "Odds cannot be zero."}
 
+        return None
+
+    @staticmethod
+    def validate_capper_units(units: Any) -> str | None:
+        try:
+            units_value = float(units)
+        except (TypeError, ValueError, InvalidOperation):
+            return "Units must be a valid number."
+        if not math.isfinite(units_value):
+            return "Units must be a valid number."
+        if units_value > MAX_CAPPER_UNITS:
+            return f"Personal capper plays cannot exceed {MAX_CAPPER_UNITS} units."
         return None
 
     @staticmethod

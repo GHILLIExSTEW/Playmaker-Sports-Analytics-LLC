@@ -267,7 +267,7 @@ class LegEntryView(discord.ui.View):
 
 
 class PlayModal(discord.ui.Modal, title="Record Capper Play"):
-    units = discord.ui.TextInput(label="Units risked", placeholder="Example: 2", required=True, max_length=20)
+    units = discord.ui.TextInput(label="Units risked (max 3)", placeholder="Example: 2", required=True, max_length=20)
     legs = discord.ui.TextInput(label="Number of legs", placeholder="Example: 3", required=True, max_length=10)
     leg_one = discord.ui.TextInput(label="Leg 1 selection", placeholder="Enter the first pick or selection", required=True, max_length=1000)
     leg_one_odds = discord.ui.TextInput(label="Leg 1 odds", placeholder="Example: -110 or +150", required=True, max_length=20)
@@ -282,6 +282,10 @@ class PlayModal(discord.ui.Modal, title="Record Capper Play"):
             units, legs = float(self.units.value), int(self.legs.value)
         except ValueError:
             await interaction.response.send_message("Units must be a number and legs must be a whole number.", ephemeral=True)
+            return
+        units_error = PlayService.validate_capper_units(units)
+        if units_error:
+            await interaction.response.send_message(units_error, ephemeral=True)
             return
         if legs < 1 or legs > 10:
             await interaction.response.send_message("Legs must be between 1 and 10.", ephemeral=True)
@@ -407,7 +411,7 @@ class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
         self.source_message_id, self.review_message = source_message_id, review_message
         legs = parsed["legs"]
         self.units = discord.ui.TextInput(
-            label="Units", default=str(parsed.get("units") or ""), required=True, max_length=20,
+            label="Units (max 3)", default=str(parsed.get("units") or ""), required=True, max_length=20,
         )
         self.team = discord.ui.TextInput(
             label="Team", default=parsed.get("team_name") or "", required=False, max_length=100,
@@ -439,6 +443,9 @@ class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
             units = float(self.units.value)
             if not math.isfinite(units) or units <= 0:
                 raise ValueError("Units must be greater than zero.")
+            units_error = PlayService.validate_capper_units(units)
+            if units_error:
+                raise ValueError(units_error)
             odds = [PlayService.normalize_odds(value) for value in odds_lines]
             validation_error = PlayService.validate_play(
                 units, len(selections), PlayService.combine_american_odds(odds),
@@ -475,7 +482,7 @@ class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
 
 
 class AutoUnitsModal(discord.ui.Modal, title="Enter Units"):
-    units = discord.ui.TextInput(label="Units risked", placeholder="Example: 2", required=True, max_length=20)
+    units = discord.ui.TextInput(label="Units risked (max 3)", placeholder="Example: 2", required=True, max_length=20)
 
     def __init__(
         self, submission: PlaySubmission, owner_id: int, parsed: dict,
@@ -495,6 +502,10 @@ class AutoUnitsModal(discord.ui.Modal, title="Enter Units"):
                 raise ValueError
         except ValueError:
             await interaction.response.send_message("Units must be greater than zero.", ephemeral=True)
+            return
+        units_error = PlayService.validate_capper_units(units)
+        if units_error:
+            await interaction.response.send_message(units_error, ephemeral=True)
             return
         self.parsed["units"] = units
         await interaction.response.defer()

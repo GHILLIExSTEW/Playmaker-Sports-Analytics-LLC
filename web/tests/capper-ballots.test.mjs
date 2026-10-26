@@ -77,12 +77,20 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   await db.exec(`
     update public.plays set created_at='2026-10-14T03:59:59Z' where id in (1,5);
     update public.plays set created_at='2026-10-14T04:00:00Z' where id in (2,3,4,6);
+    insert into public.plays(id,user_id,sport_id,units,legs,odds,status,message_id,settled_at,created_at,tracking_scope)
+    values (7,1,1,10,2,235125,'win','107',now(),'2026-10-14T04:00:00Z','capper');
     select set_config('test.access','active',false);
   `)
-  assert.equal((await db.query('select count(*)::int as count from public.plays')).rows[0].count, 6)
-  assert.deepEqual((await db.query('select id from public.display_plays order by id')).rows.map((r) => r.id), [2,3,4,6])
-  assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 2)
+  assert.equal((await db.query('select count(*)::int as count from public.plays')).rows[0].count, 7)
+  assert.deepEqual((await db.query('select id from public.display_plays order by id')).rows.map((r) => r.id), [2,3,4,6,7])
+  assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 3)
   assert.deepEqual((await db.query('select id from public.member_current_picks()')).rows, [{ id: 6 }])
+  await load('../../supabase/migrations/20261025000000_capper_units_limit.sql')
+  assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 2)
+  await assert.rejects(db.exec(`
+    insert into public.plays(id,user_id,sport_id,units,legs,odds,status,message_id,tracking_scope)
+    values (8,1,1,10,2,100,'open','108','capper')
+  `), /plays_capper_units_limit/)
   await db.exec('set role anon')
   await assert.rejects(db.query('select * from public.archived_settled_results()'), /permission denied/)
   await assert.rejects(db.query('select * from public.display_plays'), /permission denied/)

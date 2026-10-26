@@ -54,6 +54,21 @@ def test_ballot_metadata_is_on_play_and_response_not_legs(monkeypatch, recover):
     assert set(upsert.call_args.args[1][0]) == {"play_id", "leg_number", "selection", "odds", "details"}
 
 
+def test_personal_capper_play_over_three_units_is_rejected():
+    service = OfficialPlayService()
+
+    result = service.create_play_record(
+    "900", "Ace", 10, 2, "+235125",
+    tracking_scope="capper",
+    leg_records=[
+        {"selection": "L. James over 0.5 points", "odds": 100},
+        {"selection": "P. Pritchard 2+ rebounds", "odds": 100},
+    ],
+    )
+
+    assert result == {"error": "Personal capper plays cannot exceed 3 units."}
+
+
 def test_team_approval_is_persisted_and_must_match_official_stake(monkeypatch):
     service = OfficialPlayService()
     monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)

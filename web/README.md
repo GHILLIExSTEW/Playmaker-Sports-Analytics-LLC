@@ -302,7 +302,10 @@ each owner can manage only their own avatar folder. HTTPS image URLs remain
 an alternative. Clearing the upload and image URL restores the default avatar.
 
 Each capper has a URL at `/cappers/<slug>` with their settled record, cumulative
-net-unit graph, sport-by-sport net graph, and full results ledger. To show a
+net-unit graph, sport-by-sport net graph, and full results ledger. Capper net
+units are calculated from posted stake and odds; personal capper plays over 3u
+are excluded from public history. New capper submissions are limited to 3u.
+To show a
 capper's own image instead of the generated initials avatar, set their approved
 HTTPS image URL in `public.users.public_avatar_url`. Only this dedicated avatar
 field is returned by the public results function.

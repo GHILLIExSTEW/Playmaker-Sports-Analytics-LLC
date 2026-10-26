@@ -32,6 +32,7 @@ type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
 type CapperSummary = { name: string; slug: string; avatar_url?: string | null; plays: number; wins: number; losses: number; net_units: number }
 
 const resultsPageSize = 1000
+const maxCapperUnits = 3
 const localBrandLogoUrl = '/playmaker-mark-transparent.webp'
 const brandLogoUrl = import.meta.env.VITE_BRAND_LOGO_URL || 'https://lhsevzucmmzetpshpffv.supabase.co/storage/v1/object/public/website-assets/brand/playmaker-mark-transparent-512.webp'
 const localHeroArtUrl = '/playmaker-arch-transparent.webp'
@@ -98,7 +99,7 @@ function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]):
     const summary = summaries.get(result.capper)
     if (!summary) continue
     summary.plays += 1
-    summary.net_units += Number(result.net_units)
+    summary.net_units += capperNetUnits(result)
     summary.avatar_url ??= result.avatar_url ?? getCapperAvatarUrl(result.capper)
     if (result.status === 'win') summary.wins += 1
     if (result.status === 'loss') summary.losses += 1
@@ -161,8 +162,8 @@ function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalo
           <h3>{capper.name}</h3>
           {loadState === 'ready' && <>
             <strong>{capper.plays} settled plays · {capper.wins}-{capper.losses}</strong>
-            <p>Verified net: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
-            <span className="capper-record-label">Calculated from the public settled record</span>
+            <p>Net units: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
+            <span className="capper-record-label">Calculated from posted stake and odds; plays over 3u excluded</span>
           </>}
           <Link to={`/cappers/${capper.slug}`}>Open capper homepage <ArrowRight size={16} /></Link>
         </article>
@@ -199,13 +200,13 @@ function HeroArtwork() {
 
 function buildCapperAnalytics(results: Result[]) {
   const chronological = [...results].sort((first, second) => Date.parse(first.settled_at) - Date.parse(second.settled_at))
-  const daily = new Map<string, { date: string; daily_units: number }>()
+  const daily = new Map<string, { date: string; daily_net_units: number }>()
   const bySport = new Map<string, { sport: string; plays: number; wins: number; losses: number; net_units: number }>()
 
   for (const result of chronological) {
     const date = formatDate(result.settled_at)
-    const day = daily.get(date) ?? { date, daily_units: 0 }
-    day.daily_units += Number(result.net_units)
+    const day = daily.get(date) ?? { date, daily_net_units: 0 }
+    day.daily_net_units += Number(result.net_units)
     daily.set(date, day)
 
     const sport = bySport.get(result.sport) ?? { sport: result.sport, plays: 0, wins: 0, losses: 0, net_units: 0 }
@@ -218,10 +219,14 @@ function buildCapperAnalytics(results: Result[]) {
 
   let cumulative = 0
   const trend = [...daily.values()].map((day) => {
-    cumulative += day.daily_units
-    return { ...day, cumulative_units: Math.round(cumulative * 100) / 100 }
+    cumulative += day.daily_net_units
+    return { date: day.date, cumulative_net_units: Math.round(cumulative * 100) / 100 }
   })
   return { trend, bySport: [...bySport.values()].sort((first, second) => second.net_units - first.net_units) }
+}
+
+function capperNetUnits(result: Result): number {
+  return Number(result.net_units)
 }
 
 function formatDate(value: string): string {
@@ -238,6 +243,11 @@ function formatNetUnits(value: number): string {
   const amount = Number(value)
   const sign = amount > 0 ? '+' : amount < 0 ? '-' : ''
   return `${sign}${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Math.abs(amount))}u`
+}
+
+function isPublicCapperResult(result: Result): boolean {
+  const units = Number(result.units)
+  return result.tracking_scope !== 'capper' || Number.isFinite(units) && units > 0 && units <= maxCapperUnits
 }
 
 function App() {
@@ -293,10 +303,11 @@ function Website() {
     if (sectionId) requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView())
   }, [location.hash, location.pathname])
 
-  const sports: string[] = ['All', ...Array.from(new Set(results.map((result) => result.sport)))]
-  const officialResults = results.filter((result) => result.tracking_scope === 'official')
+  const publicResults = results.filter(isPublicCapperResult)
+  const sports: string[] = ['All', ...Array.from(new Set(publicResults.map((result) => result.sport)))]
+  const officialResults = publicResults.filter((result) => result.tracking_scope === 'official')
   const visibleResults = officialResults.filter((result) => sport === 'All' || result.sport === sport)
-  const cappers = summarizeCappers(results, directoryState === 'ready' ? directory : [])
+  const cappers = summarizeCappers(publicResults, directoryState === 'ready' ? directory : [])
   const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
   const memberHandle = routePath.startsWith('/members/') ? decodeURIComponent(routePath.slice('/members/'.length)) : null
   const selectedCapper = cappers.find((capper) => capper.slug === profileSlug)
@@ -342,7 +353,7 @@ function Website() {
         : 'Verified sports analysis, transparent play tracking, and the Playmaker Picks community.',
     )
   }, [routePath, selectedCapperName, sportRouteSlug, policyKind])
-  const capperResults = selectedCapper ? results.filter((result) => result.tracking_scope === 'capper' && result.capper === selectedCapper.name) : []
+  const capperResults = selectedCapper ? publicResults.filter((result) => result.tracking_scope === 'capper' && result.capper === selectedCapper.name) : []
   const capperAnalytics = buildCapperAnalytics(capperResults)
   const capperWins = capperResults.filter((result) => result.status === 'win').length
   const capperLosses = capperResults.filter((result) => result.status === 'loss').length
@@ -467,7 +478,7 @@ function Website() {
               </Suspense>
             </div>,
             results: <section className="capper-profile-results" id="capper-results">
-              <div className="profile-section-heading"><p className="eyebrow">Verified history</p><h2>Every settled play.</h2></div>
+              <div className="profile-section-heading"><p className="eyebrow">Verified history</p><h2>Every settled play.</h2><p>Net units are calculated from posted stake and American odds. Personal plays over 3u are excluded from the public capper record.</p></div>
               <div className="results-toolbar">
                 <div className="filter-group" aria-label="Filter this capper's results by sport">
                   {capperSports.map((item) => <button className={sport === item ? 'active' : ''} type="button" key={item} onClick={() => setSport(item)}>{item}</button>)}
@@ -482,7 +493,7 @@ function Website() {
                     <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small></span>
                     <span>{result.capper}</span><span>{formatUnits(result.units)}</span>
                     <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
-                    <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(result.net_units)}</span>
+                    <span className={capperNetUnits(result) > 0 ? 'net-positive' : capperNetUnits(result) < 0 ? 'net-negative' : ''}>{formatNetUnits(capperNetUnits(result))}</span>
                   </div>
                 ))}
                 {loadState === 'loading' && <div className="results-empty">Loading this capper's record…</div>}
@@ -511,7 +522,7 @@ function Website() {
         </section>
 
         <Suspense fallback={<section className="personalized-feed"><p className="account-state">Loading your board…</p></section>}>
-          <MemberHomeFeed results={results} />
+          <MemberHomeFeed results={publicResults} />
         </Suspense>
         <section className="membership-promo">
           <div><p className="eyebrow">The current board</p><h2>See the latest calls.</h2><p>HIGHROLLER members can browse published open picks by sport and capper. Settled records remain public.</p></div>

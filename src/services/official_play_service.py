@@ -83,6 +83,10 @@ class OfficialPlayService:
             raise ValueError("Unsupported play tracking scope.")
         if stars is not None and (tracking_scope != "official" or stars not in {3, 4, 5}):
             raise ValueError("Only official plays can have 3, 4, or 5 stars.")
+        if tracking_scope == "capper":
+            capper_units_error = self.play_service.validate_capper_units(units)
+            if capper_units_error:
+                return {"error": capper_units_error}
         if team_approval is not None:
             if tracking_scope != "official" or not ballot_message_id:
                 raise ValueError("Team approval requires an official ballot.")

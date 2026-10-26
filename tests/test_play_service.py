@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from src.services.play_service import PlayService
 
 
@@ -35,6 +37,16 @@ def test_validate_play_accepts_five_units():
 def test_combine_american_odds_for_multiple_legs():
     service = PlayService()
     assert service.combine_american_odds([-110, -110]) == 264
+
+
+@pytest.mark.parametrize("units", [3.01, 10, float("nan"), float("inf")])
+def test_personal_capper_stake_limit_rejects_invalid_or_over_three_units(units):
+    assert PlayService.validate_capper_units(units) is not None
+
+
+@pytest.mark.parametrize("units", [0.1, 1.25, 3])
+def test_personal_capper_stake_limit_allows_up_to_three_units(units):
+    assert PlayService.validate_capper_units(units) is None
 
 
 def test_normalize_decimal_odds_to_american():

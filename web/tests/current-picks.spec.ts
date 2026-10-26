@@ -207,8 +207,12 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     } else if (rpc === 'public_capper_directory') {
       await route.fulfill({ json: picks.map((pick) => ({ name: pick.capper, avatar_url: profiles.get(pick.capper)?.avatar_url ?? null })) })
     } else if (rpc === 'public_settled_results') {
-      await route.fulfill({ json: [{ created_at: '2026-10-06T19:00:00Z', settled_at: '2026-10-06T23:00:00Z',
-        sport: 'NFL', capper: 'First Capper', selection: 'Past selection', odds: 100, units: 1, status: 'win', net_units: 1, avatar_url: null }] })
+      await route.fulfill({ json: [
+        { created_at: '2026-10-06T19:00:00Z', settled_at: '2026-10-06T23:00:00Z',
+          sport: 'NFL', capper: 'First Capper', selection: 'Past selection', odds: 150, units: 1.25, status: 'win', net_units: 1.88, tracking_scope: 'capper', avatar_url: null },
+        { created_at: '2026-10-06T19:00:00Z', settled_at: '2026-10-06T23:00:00Z',
+          sport: 'NFL', capper: 'First Capper', selection: 'Invalid 10u play', odds: 235125, units: 10, status: 'win', net_units: 23512.5, tracking_scope: 'capper', avatar_url: null },
+      ] })
     } else if (rpc === 'member_profiles') {
       await route.fulfill({ json: [{ age_verified_at: '2026-10-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z',
         display_name: 'Saved Member', public_handle: 'saved-member', avatar_url: null, public_profile_enabled: true,
@@ -284,9 +288,14 @@ for (const mobile of [false, true]) {
     await page.reload()
     const firstCapper = page.locator('.capper-card').filter({ hasText: 'First Capper' })
     await expect(firstCapper).toContainText('1 settled plays · 1-0')
-    await expect(firstCapper).toContainText('Verified net: +1u')
-    await firstCapper.getByRole('link', { name: 'Open capper homepage' }).click()
+    await expect(firstCapper).toContainText('Net units: +1.88u')
+    const homepageLink = firstCapper.getByRole('link', { name: 'Open capper homepage' })
+    await homepageLink.click()
     await expect(page).toHaveURL(/\/cappers\/first-capper$/)
+    await expect(page.locator('.capper-profile-metrics')).toContainText('Net units+1.88u')
+    await expect(page.locator('.capper-profile-results')).toContainText('1 settled plays')
+    await expect(page.locator('.capper-profile-results')).not.toContainText('Invalid 10u play')
+    await expect(page.locator('.capper-profile-results .result-row:not(.result-head) > span').nth(5)).toHaveText('+1.88u')
     await page.getByRole('link', { name: 'All cappers', exact: true }).click()
     await expect(page).toHaveURL(/\/cappers$/)
     await page.goto('/cappers/missing-capper')
@@ -323,10 +332,10 @@ test('capper directory keeps profiles accessible when performance records fail',
   await page.goto('/cappers')
   await expect(page.locator('.capper-card')).toHaveCount(2)
   await expect(page.getByRole('alert')).toContainText('Capper performance records could not be loaded.')
-  await expect(page.locator('.capper-card').filter({ hasText: 'Verified net:' })).toHaveCount(0)
+  await expect(page.locator('.capper-card').filter({ hasText: 'Net units:' })).toHaveCount(0)
   await page.unroute('**/rest/v1/rpc/public_settled_results*')
   await page.getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect(page.locator('.capper-card').filter({ hasText: 'First Capper' })).toContainText('Verified net: +1u')
+  await expect(page.locator('.capper-card').filter({ hasText: 'First Capper' })).toContainText('Net units: +1.88u')
   await expect(page.getByRole('alert')).toHaveCount(0)
 })
 
