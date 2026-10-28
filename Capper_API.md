@@ -2,9 +2,11 @@
 
 ## Phone-friendly research tools
 
-Approved cappers can use `/tools` on the website without an API key or terminal.
-Owners approve or block Discord IDs in `/integrations`. An active integration
-key also qualifies unless the Owner explicitly blocks website research access.
+Verified Owners can use `/tools` directly, without capper approval, an API key,
+or a terminal. Other approved cappers can use the tools without an API key or
+terminal. Owners approve or block capper Discord IDs in `/integrations`. An
+active integration key also qualifies unless the Owner explicitly blocks
+website research access.
 Website-only approval does not issue an API key or grant staff administration.
 Approved cappers can see the selected matchup's existing Playmaker projected
 scores, total and two-sided win estimates when an eligible pregame projection

@@ -22,7 +22,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
       insert into auth.users values('${owner}'),('${capper}');
       insert into auth.identities values('${owner}','discord','111'),('${capper}','discord','222');
       insert into member_profiles values('${owner}',now()),('${capper}',now());
-      select set_config('test.access','{"state":"active"}',false);
+      select set_config('test.access','{"state":"active","kind":"paid"}',false);
     `)
     await load('20260930260000_api_sports_nfl.sql')
     await load('20260930300000_api_sports_multi_event_cache.sql')
@@ -32,6 +32,7 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
     await load('20261017020000_capper_research_workspace.sql')
     await load('20261017050000_member_stats_workspace.sql')
     await load('20261017070000_capper_research_tools.sql')
+    await load('20261027000000_owner_capper_research_access.sql')
     await load('20261017080000_capper_research_ai_limits.sql')
     await load('20261003050000_api_request_budget.sql')
     await load('20261011193500_shared_api_daily_budget.sql')
@@ -46,6 +47,14 @@ test('capper tools approval, scoped cache, revocation and atomic AI quotas', asy
       ('nfl','3','p2','Other team','Out','Knee',current_date,now()),
       ('nfl','1','p3','Old injury','Out','Knee',current_date-30,now());`)
     const uid = value => db.query("select set_config('request.jwt.claim.sub',$1,false)", [value])
+    await uid(owner)
+    await db.exec(`select set_config('test.access','{"state":"active","kind":"owner"}',false);
+      select set_config('test.roster','stale',false);`)
+    assert.equal(await rpc('capper_tools_access'), true, 'verified Owner access does not require capper roster approval or API credentials')
+    assert.equal((await rpc('capper_tools_game', ['nfl', '1'])).weather.temperature_f, 65)
+    await db.exec(`select set_config('test.access','{"state":"active","kind":"paid"}',false);
+      select set_config('test.roster','fresh',false);`)
+    assert.equal(await rpc('capper_tools_access'), false, 'paid members still need capper approval')
     await uid(capper)
     assert.equal(await rpc('capper_tools_access'), false)
     await assert.rejects(rpc('capper_tools_game', ['nfl', '1']), /Approved capper/)

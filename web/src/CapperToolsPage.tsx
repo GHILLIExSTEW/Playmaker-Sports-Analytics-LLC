@@ -304,7 +304,7 @@ export default function CapperToolsPage() {
   }, [access, revision])
   return <main className="capper-tools">
     <header className="tools-hero"><div><span className="tools-kicker">PLAYMAKER RESEARCH</span><h1>Your next matchup.<br /><em>A clearer picture.</em></h1><p>Pick a game. Check the facts. Get a grounded breakdown.</p></div><span className="tools-hero-icon" aria-hidden="true"><Sparkles size={44} /></span></header>
-    <div className="tools-toplinks"><span>Private tools · Approved cappers</span><Link to="/account">Account</Link></div>
+    <div className="tools-toplinks"><span>Private research tools · Owners and approved cappers</span><Link to="/account">Account</Link></div>
     {access && access.state !== 'active' ? <MemberAccessNotice /> : error ? <p role="alert">{error} <button onClick={() => { setError(''); setRevision(v => v + 1) }}>Retry access check</button></p>
       : !access || allowed === null ? <p role="status">Checking your access…</p> : !allowed ? <section className="tools-card"><h2>Invitation required</h2><p>Ask Playmaker to approve your capper account. Sign in with Discord and complete age verification first. No API key is needed on your phone.</p></section> : <Tools />}
   </main>
