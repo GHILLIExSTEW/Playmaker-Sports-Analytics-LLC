@@ -109,6 +109,17 @@ sudo systemctl status discord-bot --no-pager
 sudo journalctl -u discord-bot -n 50 --no-pager
 ```
 
+For repeated `Slip intake failed: Use YYYY-MM-DDTHH:MM ...` alerts, check
+the journal for the failing call before editing any submission. Intake scan
+cursors are database timestamps, not author-entered event times. PostgreSQL
+can trim fractional seconds (for example, `.21968+00:00`), which Python 3.10
+cannot parse directly. Slip reviews use the shared timestamp normalizer to
+preserve these values; deploy the fix and restart the bot rather than resetting
+the scan cursor or republishing picks. Run `/bot_health` after restart and
+verify that intake resumes and the alert stops. A failed discovery scan no
+longer disables gateway intake when the privacy notice was verified; a failed
+notice check still pauses intake.
+
 Afterward, pull a team on `/tools`. Expect **Recalculating model...**, then the
 completion message and a model generation timestamp after the pull. Check logs
 for `capper_model_refreshed`; a job can validly produce zero projections.

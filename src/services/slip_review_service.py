@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.capper_ballots import BallotStore
+from src.datetime_utils import parse_iso_datetime
 from src.services.ballot_vote_service import SLIP_POLICY_VERSION
 from src.services.play_service import PlayService
 from src.services.supabase_service import supabase_service
@@ -25,7 +26,7 @@ TIME_HELP = "Try a time like 7:30 PM, tonight 8pm, tomorrow 1pm, or Oct 22 7:30 
 
 def review_time(value: str) -> datetime:
     try:
-        result = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        result = parse_iso_datetime(value.strip())
     except ValueError as exc:
         raise ValueError("Use YYYY-MM-DDTHH:MM with a timezone offset, for example 2026-10-22T19:00-04:00.") from exc
     if result.tzinfo is None:

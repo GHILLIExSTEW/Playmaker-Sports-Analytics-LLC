@@ -904,11 +904,14 @@ class CapperSlipReviews(commands.Cog):
             return
         try:
             async with self.scan_lock:
-                await self.ensure_submission_notice()
+                try:
+                    await self.ensure_submission_notice()
+                except Exception:
+                    self.submission_notice_ready = False
+                    raise
                 self.submission_notice_ready = True
                 await self.discover(await self.channel())
         except Exception as exc:
-            self.submission_notice_ready = False
             logger.exception("slip_intake_scan_failed")
             await self.publisher.staff_alert("slip_intake_scan", f"Slip intake failed: {str(exc)[:1500]}")
 

@@ -85,6 +85,23 @@ def test_cutoff_requires_timezone_and_converts_to_utc():
         review_time("tonight")
 
 
+@pytest.mark.parametrize("fraction", ["2", "21", "219", "2196", "21968", "219680"])
+@pytest.mark.parametrize("offset", ["Z", "+00:00", "-04:00"])
+def test_review_time_normalizes_postgres_fractions_for_python310(monkeypatch, fraction, offset):
+    import src.datetime_utils as datetime_utils
+
+    def python310_fromisoformat(value):
+        assert value == f"2026-10-29T04:49:59.{fraction.ljust(6, '0')}{'+00:00' if offset == 'Z' else offset}"
+        return datetime.fromisoformat(value)
+
+    parser = Mock(wraps=datetime)
+    parser.fromisoformat.side_effect = python310_fromisoformat
+    monkeypatch.setattr(datetime_utils, "datetime", parser)
+    value = f"2026-10-29T04:49:59.{fraction}{offset}"
+    assert review_time(value) == datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    parser.fromisoformat.assert_called_once()
+
+
 def test_confirmed_legs_preserve_only_matching_metadata():
     previous = [{"selection": "Wolves ML", "odds": 100, "home_name": "Minnesota"}]
     assert confirmed_legs("Wolves ML | +100", previous) == previous
@@ -426,6 +443,29 @@ def test_invalid_archived_post_is_rechecked_after_reconnect_cursor(monkeypatch):
     asyncio.run(check())
 
 
+def test_scan_failure_does_not_disable_gateway_intake_after_notice_verified(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.ensure_submission_notice = AsyncMock()
+        cog.discover = AsyncMock(side_effect=RuntimeError("database unavailable"))
+        await cog.scan_slips.coro(cog)
+        assert cog.submission_notice_ready
+        cog.publisher.staff_alert.assert_awaited_once()
+    asyncio.run(check())
+
+
+def test_notice_failure_disables_intake_and_skips_discovery(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.ensure_submission_notice = AsyncMock(side_effect=RuntimeError("notice unavailable"))
+        cog.discover = AsyncMock()
+        await cog.scan_slips.coro(cog)
+        assert not cog.submission_notice_ready
+        cog.discover.assert_not_awaited()
+        cog.publisher.staff_alert.assert_awaited_once()
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("kind", ["oversized", "gif", "invalid-bytes", "guild-limit"])
 def test_invalid_photos_never_reach_openai_or_register(monkeypatch, kind):
     async def check():
@@ -591,6 +631,49 @@ def test_forum_discovery_reads_only_new_starter_slips(monkeypatch):
     thread.fetch_message.assert_awaited_once_with(500)
     known.fetch_message.assert_not_awaited()
     cog.intake.assert_awaited_once_with(thread.fetch_message.return_value, thread.fetch_message.return_value.attachments)
+
+
+def test_scan_recovers_reported_postgres_cursor_without_alert_or_republishing(monkeypatch):
+    import src.datetime_utils as datetime_utils
+    import src.services.slip_review_service as slip_service
+
+    def python310_fromisoformat(value):
+        if value == "2026-10-29T04:49:59.21968+00:00":
+            raise ValueError("Invalid isoformat string")
+        return datetime.fromisoformat(value)
+
+    parser = Mock(wraps=datetime)
+    parser.fromisoformat.side_effect = python310_fromisoformat
+    monkeypatch.setattr(datetime_utils, "datetime", parser)
+    monkeypatch.setattr(slip_service, "datetime", parser)
+
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread, known = forum_channel(), review_thread(), review_thread(501)
+        cog.checked_forum.resolve = AsyncMock(return_value=forum)
+        cog.ensure_submission_notice = AsyncMock()
+        cog.store.scan_state.return_value = {
+            "started_at": "2026-10-22T03:29:29.619288+00:00",
+            "forum_scanned_at": "2026-10-29T04:49:59.21968+00:00",
+        }
+        cog.forum_threads = AsyncMock(return_value=[thread, known])
+        cog.store.known_ids.return_value = {501}
+        thread.fetch_message.return_value = SimpleNamespace(
+            created_at=datetime.now(timezone.utc), author=SimpleNamespace(id=42, bot=False),
+            attachments=[SimpleNamespace(content_type="image/png")],
+        )
+        cog.intake = AsyncMock()
+        await cog.scan_slips.coro(cog)
+        cog.forum_threads.assert_awaited_once_with(
+            forum, since=datetime(2026, 10, 29, 4, 49, 59, 219680, tzinfo=timezone.utc),
+        )
+        cog.intake.assert_awaited_once_with(thread.fetch_message.return_value, thread.fetch_message.return_value.attachments)
+        known.fetch_message.assert_not_awaited()
+        cog.store.advance_forum.assert_called_once()
+        cog.publisher.staff_alert.assert_not_awaited()
+        cog.publisher.publish_approved.assert_not_awaited()
+        assert cog.submission_notice_ready
+    asyncio.run(check())
 
 
 def test_forum_thread_listing_includes_archived_posts_and_filters_other_forums(monkeypatch):
