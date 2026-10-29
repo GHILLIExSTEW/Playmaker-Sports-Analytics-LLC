@@ -49,6 +49,50 @@ test('unapproved members cannot open private research data', async ({ page }) =>
   expect(h.calls).not.toContain('capper_tools_game')
   expect(h.calls).not.toContain('member_stats_games')
 })
+test('completed historical research explains missing predictions and empty prior history', async ({ page }) => {
+  await mock(page)
+  const historical = { ...game, status: 'FT', start_at: '2025-11-04T02:30:00Z', away_score: 66, home_score: 71 }
+  await page.route('**/rest/v1/rpc/member_stats_games', route => route.fulfill({ json: { games: [historical], total: 1 } }))
+  await page.route('**/rest/v1/rpc/capper_tools_game', route => route.fulfill({ json: {
+    game: historical, history: [], players: [], injuries: [], weather: null, odds: null, projection: null,
+    generated_at: '2026-10-29T02:04:39Z',
+  } }))
+  await page.goto('/tools')
+  await expect(page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ })).toContainText('Completed historical game')
+  await page.getByRole('button', { name: /Buffalo Bills.*Kansas City Chiefs/ }).click()
+  await expect(page.getByText(/Pulling data refreshes that matchup’s season/)).toBeVisible()
+  await expect(page.getByText(/This game is final/)).toBeVisible()
+  await expect(page.getByText(/No completed, scored games are cached before this matchup/)).toHaveCount(2)
+  await expect(page.getByText('Game results', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Projected score')).toHaveCount(0)
+})
+test('upcoming date range avoids unbounded historical search and survives league changes', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-28T16:00:00Z'))
+  await mock(page)
+  const searches: Record<string, unknown>[] = []
+  await page.route('**/rest/v1/rpc/member_stats_games', route => {
+    searches.push(route.request().postDataJSON())
+    return route.fulfill({ json: { games: [game], total: 1 } })
+  })
+  await page.goto('/tools')
+  await page.getByRole('button', { name: 'Search all cached dates', exact: true }).click()
+  await expect.poll(() => searches.at(-1)?.p_start).toBeNull()
+  await page.getByRole('button', { name: 'Upcoming 14 days', exact: true }).click()
+  await expect(page.getByText('Dates: 2026-10-28 through 2026-11-10', { exact: true })).toBeVisible()
+  const boundaries = await page.evaluate(() => ({
+    start: new Date('2026-10-28T00:00:00').toISOString(),
+    end: new Date('2026-11-11T00:00:00').toISOString(),
+  }))
+  await expect.poll(() => searches.at(-1)?.p_start).toBe(boundaries.start)
+  expect(searches.at(-1)?.p_end).toBe(boundaries.end)
+  await page.getByRole('button', { name: 'College hoops', exact: true }).click()
+  await expect.poll(() => searches.at(-1)?.p_competition).toBe('basketball:116')
+  expect(searches.at(-1)?.p_start).toBe(boundaries.start)
+  expect(searches.at(-1)?.p_end).toBe(boundaries.end)
+  await page.getByLabel('Game date', { exact: true }).fill('2026-11-01')
+  await page.getByRole('button', { name: 'Find games', exact: true }).click()
+  await expect(page.getByText('Dates: 2026-11-01', { exact: true })).toBeVisible()
+})
 test('mobile research has team/date search, missing coverage, weather and grounded analysis', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const h = await mock(page)

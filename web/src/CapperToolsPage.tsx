@@ -17,6 +17,7 @@ type Projection = {
 type Report = GameStats & { injuries: Record<string, unknown>[]; weather: Record<string, unknown> | null; odds: Record<string, unknown> | null; projection: Projection | null }
 const text = (value: unknown) => value === null || value === undefined ? 'Unavailable' : String(value)
 const when = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : 'Unknown date'
+const isCompleted = (status: string) => ['FT', 'AOT', 'AP', 'COMPLETED', 'FINISHED'].includes(status.toUpperCase())
 const errorText = (error: unknown) => error instanceof Error ? error.message : object(error) && typeof error.message === 'string' ? error.message : 'Research request failed.'
 function parseReport(value: unknown): Report {
   if (!object(value) || typeof value.generated_at !== 'string' || !Array.isArray(value.injuries) || !value.injuries.every(object)
@@ -53,6 +54,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
   const pullController = useRef<AbortController | null>(null)
   useEffect(() => () => pullController.current?.abort(), [])
   const { game, weather, odds, projection } = report
+  const completed = isCompleted(game.status)
   const logs = report.players.filter(row => row.playerId === player && Date.parse(row.date) < Date.parse(game.start_at))
   const players = [...new Map(report.players.map(row => [row.playerId, row])).values()]
   const stats = [...new Set(logs.flatMap(row => Object.keys(row.stats)))].sort()
@@ -141,6 +143,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
       <h2>{game.away_name}<span>at</span>{game.home_name}</h2>
       <p>{when(game.start_at)} · {game.status}</p>
       <p>Score: {score(game.away_score) ?? '—'} – {score(game.home_score) ?? '—'}</p>
+      {completed && <p className="tools-disclosure">Completed historical game · This is the matchup played on {when(game.start_at)}, not an upcoming fixture. Pulling data refreshes that matchup’s season; it does not switch to the next game.</p>}
       <Freshness at={game.synced_at} hours={24} />
       <label>Team to refresh<select value={pullTeam} disabled={busy} onChange={event => setPullTeam(event.target.value)}>
         {[{ id: game.away_id, name: game.away_name }, { id: game.home_id, name: game.home_name }].filter(team => team.id).map(team =>
@@ -170,7 +173,8 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
           <Freshness at={projection.data_updated_at} hours={6} />
           {Date.parse(game.synced_at) > Date.parse(projection.generated_at) && <p className="tools-freshness is-stale">Team data was pulled after this projection. The model has not been recalculated from that pull.</p>}
           <p className="tools-muted">Stored Playmaker projection, not an AI-generated prediction. A successful team pull queues a model recalculation before this report reloads. Unchanged inputs can produce the same scores. Small or incomplete samples reduce reliability. No outcome is guaranteed.</p>
-        </> : <p>No eligible pregame projection is available for this matchup. It may be outside model coverage, already started, or awaiting a model run. AI will not invent a score or probability.</p>}
+        </> : completed ? <p>This game is final. No new pregame prediction is generated for a completed game, and this report has no eligible stored pregame projection. The final score above is the actual result. Go back to games and choose Upcoming 14 days to research a future matchup.</p>
+          : <p>No eligible pregame projection is available for this matchup. It may be outside model coverage, already started, or awaiting a model run. AI will not invent a score or probability.</p>}
       </section>
       {game.competition === 'hockey:57' && <section className="tools-card"><h3>NHL starting goalies</h3>
         <p>Unknown · Confirmed goalie feed is not connected.</p>
@@ -187,8 +191,8 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
               return home === null || away === null ? [] : [{ ...row, own: row.home_id === team.id ? home : away, opponent: row.home_id === team.id ? away : home }]
             }).slice(0, 5)
           return <div className="tools-form-team" key={team.name}><strong>{team.name}</strong>
-            <p>{games.length ? `${games.filter(row => row.own > row.opponent).length}W · ${games.filter(row => row.own < row.opponent).length}L · ${games.filter(row => row.own === row.opponent).length}T · ${(games.reduce((sum, row) => sum + row.own, 0) / games.length).toFixed(1)} scored/game` : 'No scored history available.'}</p>
-            <details><summary>Game results</summary><ul>{games.map(row => <li key={row.game_id}>{when(row.start_at)} · {row.away_name} {score(row.away_score)} at {row.home_name} {score(row.home_score)}</li>)}</ul></details>
+            <p>{games.length ? `${games.filter(row => row.own > row.opponent).length}W · ${games.filter(row => row.own < row.opponent).length}L · ${games.filter(row => row.own === row.opponent).length}T · ${(games.reduce((sum, row) => sum + row.own, 0) / games.length).toFixed(1)} scored/game` : `No completed, scored games are cached before this matchup (${when(game.start_at)}). This is not a claim that the team has no history.`}</p>
+            {games.length > 0 && <details><summary>Game results</summary><ul>{games.map(row => <li key={row.game_id}>{when(row.start_at)} · {row.away_name} {score(row.away_score)} at {row.home_name} {score(row.home_score)}</li>)}</ul></details>}
           </div>
         })}
       </section>
@@ -242,7 +246,7 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
 
 function Tools() {
   const [competition, setCompetition] = useState('nfl'), [query, setQuery] = useState(''), [date, setDate] = useState(localDay())
-  const [search, setSearch] = useState({ competition: 'nfl', query: '', date: localDay(), offset: 0 })
+  const [search, setSearch] = useState({ competition: 'nfl', query: '', date: localDay(), through: localDay(), offset: 0 })
   const [results, setResults] = useState<Awaited<ReturnType<typeof findMemberGames>> | null>(null)
   const [report, setReport] = useState<Report | null>(null), [selected, setSelected] = useState('')
   const [error, setError] = useState('')
@@ -250,7 +254,7 @@ function Tools() {
   const openGame = (id: string) => { setReport(null); setError(''); setSelected(id) }
   useEffect(() => {
     let active = true
-    findMemberGames(search.competition, search.query, search.date, search.date, search.offset)
+    findMemberGames(search.competition, search.query, search.date, search.through, search.offset)
       .then(value => { if (active) setResults(value) }).catch(reason => { if (active) setError(errorText(reason)) })
     return () => { active = false }
   }, [search])
@@ -264,21 +268,24 @@ function Tools() {
   }, [selected, search.competition])
   return <>
     {!selected ? <>
-      <form className="tools-card tools-search" onSubmit={event => { event.preventDefault(); updateSearch({ competition, query, date, offset: 0 }) }}>
+      <form className="tools-card tools-search" onSubmit={event => { event.preventDefault(); updateSearch({ competition, query, date, through: date, offset: 0 }) }}>
         <div className="tools-leagues" aria-label="Sport">{modelCompetitions.map(league => <button key={league.key} type="button" aria-pressed={competition === league.engineKey}
-          onClick={() => { setCompetition(league.engineKey); updateSearch({ competition: league.engineKey, query, date, offset: 0 }) }}>{league.name.replace("NCAA Men's Basketball", 'College hoops').replace('NCAA Football', 'College football')}</button>)}</div>
+          onClick={() => { setCompetition(league.engineKey); updateSearch({ ...search, competition: league.engineKey, query, offset: 0 }) }}>{league.name.replace("NCAA Men's Basketball", 'College hoops').replace('NCAA Football', 'College football')}</button>)}</div>
         <div className="tools-fields"><label>Team or matchup<input type="search" maxLength={100} placeholder="Search a team…" value={query} onChange={event => setQuery(event.target.value)} /></label>
           <label>Game date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
           <button className="tools-primary" type="submit"><Search size={18} /> Find games</button></div>
-        <button type="button" className="tools-text-button" onClick={() => { setDate(''); updateSearch({ competition, query, date: '', offset: 0 }) }}>Search all cached dates</button>
+        <button type="button" className="tools-text-button" onClick={() => { setDate(localDay()); updateSearch({ competition, query, date: localDay(), through: localDay(13), offset: 0 }) }}>Upcoming 14 days</button>
+        <button type="button" className="tools-text-button" onClick={() => { setDate(''); updateSearch({ competition, query, date: '', through: '', offset: 0 }) }}>Search all cached dates</button>
+        <p className="tools-muted">All cached dates includes completed games from previous seasons. Upcoming 14 days searches today through the next 13 days, including games already played today.</p>
       </form>
       {!results && !error && <p role="status">Finding matchups…</p>}
       {results && <section><div className="tools-results-heading"><h2>Pick your matchup</h2><span>{results.total} games</span></div>
         <p className="tools-muted">Only matchups with both teams identified are shown. Unannounced-team schedule placeholders are excluded.</p>
+        <p className="tools-muted">Dates: {search.date ? `${search.date}${search.through !== search.date ? ` through ${search.through}` : ''}` : 'All cached dates, including historical games'}</p>
         {!results.games.length && <div className="tools-card"><p>No named matchups found in the cache. Try another date or search all cached dates.</p></div>}
         <div className="tools-game-list">{results.games.map(game => <button className="tools-game" key={game.game_id} onClick={() => openGame(game.game_id)}>
           <span><strong>{game.away_name}</strong><span className="tools-muted"> at </span><strong>{game.home_name}</strong></span>
-          <span className="tools-muted">{when(game.start_at)} · {game.status}</span><span className="tools-game-open">Research matchup →</span>
+          <span className="tools-muted">{when(game.start_at)} · {game.status}{isCompleted(game.status) ? ' · Completed historical game' : ''}</span><span className="tools-game-open">Research matchup →</span>
         </button>)}</div>
         <div className="tools-pagination"><button disabled={search.offset === 0} onClick={() => updateSearch({ ...search, offset: Math.max(0, search.offset - 20) })}>Previous</button>
           <span>{results.total ? search.offset + 1 : 0}–{Math.min(search.offset + 20, results.total)} of {results.total}</span>
