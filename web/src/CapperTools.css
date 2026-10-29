@@ -21,6 +21,8 @@
 .capper-tools .tools-primary{background:#d3b16b;color:#17221c;border-color:#d3b16b;font-weight:800}
 .tools-fields{display:grid;grid-template-columns:2fr 1fr auto;gap:14px;align-items:end;margin:18px 0}
 .tools-leagues{display:flex;gap:8px;flex-wrap:wrap}
+.tools-search-scopes{display:flex;gap:12px;flex-wrap:wrap}
+.tools-search-scopes button[aria-pressed=true]{background:#183b2a;color:#fff;border-color:#183b2a}
 .tools-leagues button[aria-pressed=true]{background:#183b2a;color:#fff;border-color:#183b2a}
 .capper-tools .tools-text-button{border:0;padding:4px 0;text-decoration:underline;color:var(--muted)}
 .tools-game-list{display:grid;gap:10px;max-height:620px;overflow:auto;padding:3px}

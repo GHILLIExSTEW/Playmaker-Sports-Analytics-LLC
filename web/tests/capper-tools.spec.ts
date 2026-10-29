@@ -93,6 +93,39 @@ test('upcoming date range avoids unbounded historical search and survives league
   await page.getByRole('button', { name: 'Find games', exact: true }).click()
   await expect(page.getByText('Dates: 2026-11-01', { exact: true })).toBeVisible()
 })
+test('team upcoming-season search has no date cutoff and persists across every league and pagination', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mock(page)
+  const searches: Record<string, unknown>[] = []
+  await page.route('**/rest/v1/rpc/member_stats_games', route => {
+    searches.push(route.request().postDataJSON())
+    return route.fulfill({ json: { games: [game], total: 25 } })
+  })
+  await page.goto('/tools')
+  await page.getByLabel('Team or matchup').fill('Villanova')
+  await page.getByRole('button', { name: 'Upcoming season', exact: true }).click()
+  await expect.poll(() => searches.at(-1)?.p_upcoming_only).toBe(true)
+  expect(searches.at(-1)).toMatchObject({ p_query: 'Villanova', p_start: null, p_end: null, p_offset: 0 })
+  await expect(page.getByRole('button', { name: 'Upcoming season', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const leagues = { NBA: 'basketball:12', MLB: 'baseball:1', NHL: 'hockey:57', 'College football': 'ncaa:2', 'College hoops': 'basketball:116', NFL: 'nfl' }
+  for (const [label, key] of Object.entries(leagues)) {
+    await page.getByRole('button', { name: label, exact: true }).click()
+    await expect.poll(() => searches.at(-1)?.p_competition).toBe(key)
+    expect(searches.at(-1)).toMatchObject({ p_query: 'Villanova', p_start: null, p_end: null, p_upcoming_only: true })
+  }
+  await page.getByLabel('Team or matchup').fill('Chiefs')
+  await page.getByRole('button', { name: 'Find games', exact: true }).click()
+  await expect.poll(() => searches.at(-1)?.p_query).toBe('Chiefs')
+  expect(searches.at(-1)?.p_upcoming_only).toBe(true)
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect.poll(() => searches.at(-1)?.p_offset).toBe(20)
+  expect(searches.at(-1)).toMatchObject({ p_query: 'Chiefs', p_start: null, p_end: null, p_upcoming_only: true })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.getByLabel('Game date', { exact: true }).fill('2026-11-01')
+  await page.getByRole('button', { name: 'Find games', exact: true }).click()
+  await expect(page.getByText('Dates: 2026-11-01', { exact: true })).toBeVisible()
+  expect(searches.at(-1)).not.toHaveProperty('p_upcoming_only')
+})
 test('mobile research has team/date search, missing coverage, weather and grounded analysis', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const h = await mock(page)

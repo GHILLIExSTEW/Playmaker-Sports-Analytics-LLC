@@ -14,10 +14,11 @@ const boundary = (day: string, next = false) => {
   if (next) value.setDate(value.getDate() + 1)
   return value.toISOString()
 }
-export async function findMemberGames(competition: string, query: string, from: string, through: string, offset: number) {
+export async function findMemberGames(competition: string, query: string, from: string, through: string, offset: number, upcomingOnly = false) {
   const { data, error } = await supabase.rpc('member_stats_games', {
     p_competition: competition, p_query: query.trim(), p_start: boundary(from),
     p_end: boundary(through, true), p_offset: offset,
+    ...(upcomingOnly ? { p_upcoming_only: true } : {}),
   })
   if (error) throw error
   const value: unknown = data

@@ -246,15 +246,23 @@ function Matchup({ report, onReport }: { report: Report; onReport: (value: Repor
 
 function Tools() {
   const [competition, setCompetition] = useState('nfl'), [query, setQuery] = useState(''), [date, setDate] = useState(localDay())
-  const [search, setSearch] = useState({ competition: 'nfl', query: '', date: localDay(), through: localDay(), offset: 0 })
+  const [scope, setScope] = useState<'date' | 'fortnight' | 'upcoming' | 'all'>('date')
+  const [search, setSearch] = useState({ competition: 'nfl', query: '', date: localDay(), through: localDay(), upcomingOnly: false, offset: 0 })
   const [results, setResults] = useState<Awaited<ReturnType<typeof findMemberGames>> | null>(null)
   const [report, setReport] = useState<Report | null>(null), [selected, setSelected] = useState('')
   const [error, setError] = useState('')
   const updateSearch = (next: typeof search) => { setResults(null); setReport(null); setSelected(''); setError(''); setSearch(next) }
+  const searchScope = (next: typeof scope, league = competition) => {
+    setScope(next)
+    const from = next === 'date' ? date : next === 'fortnight' ? localDay() : ''
+    const through = next === 'fortnight' ? localDay(13) : from
+    if (next !== 'date') setDate(from)
+    updateSearch({ competition: league, query, date: from, through, upcomingOnly: next === 'upcoming', offset: 0 })
+  }
   const openGame = (id: string) => { setReport(null); setError(''); setSelected(id) }
   useEffect(() => {
     let active = true
-    findMemberGames(search.competition, search.query, search.date, search.through, search.offset)
+    findMemberGames(search.competition, search.query, search.date, search.through, search.offset, search.upcomingOnly)
       .then(value => { if (active) setResults(value) }).catch(reason => { if (active) setError(errorText(reason)) })
     return () => { active = false }
   }, [search])
@@ -268,21 +276,24 @@ function Tools() {
   }, [selected, search.competition])
   return <>
     {!selected ? <>
-      <form className="tools-card tools-search" onSubmit={event => { event.preventDefault(); updateSearch({ competition, query, date, through: date, offset: 0 }) }}>
+      <form className="tools-card tools-search" onSubmit={event => { event.preventDefault(); searchScope(scope) }}>
         <div className="tools-leagues" aria-label="Sport">{modelCompetitions.map(league => <button key={league.key} type="button" aria-pressed={competition === league.engineKey}
-          onClick={() => { setCompetition(league.engineKey); updateSearch({ ...search, competition: league.engineKey, query, offset: 0 }) }}>{league.name.replace("NCAA Men's Basketball", 'College hoops').replace('NCAA Football', 'College football')}</button>)}</div>
+          onClick={() => { setCompetition(league.engineKey); searchScope(scope, league.engineKey) }}>{league.name.replace("NCAA Men's Basketball", 'College hoops').replace('NCAA Football', 'College football')}</button>)}</div>
         <div className="tools-fields"><label>Team or matchup<input type="search" maxLength={100} placeholder="Search a team…" value={query} onChange={event => setQuery(event.target.value)} /></label>
-          <label>Game date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
+          <label>Game date<input type="date" value={date} onChange={event => { setDate(event.target.value); setScope('date') }} /></label>
           <button className="tools-primary" type="submit"><Search size={18} /> Find games</button></div>
-        <button type="button" className="tools-text-button" onClick={() => { setDate(localDay()); updateSearch({ competition, query, date: localDay(), through: localDay(13), offset: 0 }) }}>Upcoming 14 days</button>
-        <button type="button" className="tools-text-button" onClick={() => { setDate(''); updateSearch({ competition, query, date: '', through: '', offset: 0 }) }}>Search all cached dates</button>
-        <p className="tools-muted">All cached dates includes completed games from previous seasons. Upcoming 14 days searches today through the next 13 days, including games already played today.</p>
+        <div className="tools-search-scopes" aria-label="Search scope">
+          <button type="button" aria-pressed={scope === 'upcoming'} onClick={() => searchScope('upcoming')}>Upcoming season</button>
+          <button type="button" aria-pressed={scope === 'fortnight'} onClick={() => searchScope('fortnight')}>Upcoming 14 days</button>
+          <button type="button" aria-pressed={scope === 'all'} onClick={() => searchScope('all')}>Search all cached dates</button>
+        </div>
+        <p className="tools-muted">Upcoming season searches all remaining scheduled games for your team, including the current and any cached next season, with no end-date cutoff. Completed, live, postponed and canceled games are excluded. All cached dates includes past seasons. Upcoming 14 days includes games already played today. Only cached schedules are searched; unpublished or uncached fixtures are not fetched.</p>
       </form>
       {!results && !error && <p role="status">Finding matchups…</p>}
       {results && <section><div className="tools-results-heading"><h2>Pick your matchup</h2><span>{results.total} games</span></div>
         <p className="tools-muted">Only matchups with both teams identified are shown. Unannounced-team schedule placeholders are excluded.</p>
-        <p className="tools-muted">Dates: {search.date ? `${search.date}${search.through !== search.date ? ` through ${search.through}` : ''}` : 'All cached dates, including historical games'}</p>
-        {!results.games.length && <div className="tools-card"><p>No named matchups found in the cache. Try another date or search all cached dates.</p></div>}
+        <p className="tools-muted">Dates: {search.upcomingOnly ? 'Upcoming season · All future scheduled games, no end-date cutoff' : search.date ? `${search.date}${search.through !== search.date ? ` through ${search.through}` : ''}` : 'All cached dates, including historical games'}</p>
+        {!results.games.length && <div className="tools-card"><p>{search.upcomingOnly ? 'No upcoming named matchups for this search are cached. The schedule may not be published or synced yet. This search does not fetch new provider data.' : 'No named matchups found in the cache. Try another date or search all cached dates.'}</p></div>}
         <div className="tools-game-list">{results.games.map(game => <button className="tools-game" key={game.game_id} onClick={() => openGame(game.game_id)}>
           <span><strong>{game.away_name}</strong><span className="tools-muted"> at </span><strong>{game.home_name}</strong></span>
           <span className="tools-muted">{when(game.start_at)} · {game.status}{isCompleted(game.status) ? ' · Completed historical game' : ''}</span><span className="tools-game-open">Research matchup →</span>

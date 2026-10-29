@@ -258,6 +258,7 @@ test('member stats: cached search, pregame workspace, member access and isolated
         ('ncaa','null-id','2','2026','Missing ID','2026-10-17 04:00Z',null,'Named','2','Opponent','NS');`)
     assert.equal((await call("member_stats_games('ncaa:2','','2026-10-17 00:00Z','2026-10-18 00:00Z')")).total, 54)
     await load('20261017100000_research_named_matchups.sql')
+    await load('20261029020000_upcoming_season_search.sql')
     const named = await call("member_stats_games('ncaa:2','','2026-10-17 00:00Z','2026-10-18 00:00Z')")
     assert.equal(named.total, 25)
     assert.equal(named.games.length, 20, 'placeholders do not crowd out a page of real matchups')
