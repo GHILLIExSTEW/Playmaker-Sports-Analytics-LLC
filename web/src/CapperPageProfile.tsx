@@ -4,7 +4,13 @@ import { parseAppearance, safeImageUrl, sectionLabels, type CapperAppearance, ty
 
 const socialLabels = { website: 'Website', x: 'X', instagram: 'Instagram', discord: 'Discord' }
 type SocialKey = keyof typeof socialLabels
-type Profile = CapperTheme & { name: string; bio: string; avatar_url: string | null; social_links: Partial<Record<SocialKey, string>> }
+type Profile = CapperTheme & {
+  name: string
+  bio: string
+  avatar_url: string | null
+  play_card_frame_path: string | null
+  social_links: Partial<Record<SocialKey, string>>
+}
 
 function parseProfile(value: unknown): Profile {
   if (!value || typeof value !== 'object'
@@ -13,6 +19,9 @@ function parseProfile(value: unknown): Profile {
     || !('background_color' in value) || typeof value.background_color !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.background_color)
     || !('bio' in value) || typeof value.bio !== 'string'
     || !('avatar_url' in value) || (value.avatar_url !== null && (typeof value.avatar_url !== 'string' || !safeImageUrl(value.avatar_url)))
+    || !('play_card_frame_path' in value) || (value.play_card_frame_path !== null
+      && (typeof value.play_card_frame_path !== 'string'
+        || !/^capper-frames\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.webp$/.test(value.play_card_frame_path)))
     || !('social_links' in value) || !value.social_links || typeof value.social_links !== 'object' || Array.isArray(value.social_links)) {
     throw new Error('Unexpected capper page settings.')
   }
@@ -25,7 +34,8 @@ function parseProfile(value: unknown): Profile {
     }
   }
   return { name: value.name, accent_color: value.accent_color, background_color: value.background_color,
-    appearance: parseAppearance(Reflect.get(value, 'appearance')), bio: value.bio, avatar_url: value.avatar_url, social_links: links }
+    appearance: parseAppearance(Reflect.get(value, 'appearance')), bio: value.bio, avatar_url: value.avatar_url,
+    play_card_frame_path: value.play_card_frame_path, social_links: links }
 }
 
 function errorMessage(error: unknown) {
@@ -47,9 +57,50 @@ async function imageBlob(file: File, maxSize: number): Promise<Blob> {
     if (!context) throw new Error('Your browser could not prepare the image.')
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.85))
-    if (!blob || blob.type !== 'image/webp') throw new Error('Your browser could not create a WebP avatar.')
+    if (!blob || blob.type !== 'image/webp') throw new Error('Your browser could not prepare a WebP image.')
     return blob
   } finally { image.close() }
+}
+
+async function playCardFrameBlob(file: File): Promise<Blob> {
+  if (!['image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+    throw new Error('Choose a transparent PNG or WebP image under 10 MB.')
+  }
+  return imageBlob(file, 1600)
+}
+
+async function exampleCardBlob(file: File): Promise<Blob> {
+  const prepared = await playCardFrameBlob(file)
+  const frame = await createImageBitmap(prepared)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1200
+    canvas.height = 900
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Your browser could not prepare the example card.')
+    context.fillStyle = '#101925'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.fillStyle = '#182737'
+    context.fillRect(0, 400, canvas.width, 436)
+    context.fillStyle = '#b9cadb'
+    context.font = '600 30px Arial'
+    context.fillText('SAMPLE BET SLIP', 48, 80)
+    context.fillText('Example matchup - demonstration only', 48, 140)
+    context.fillStyle = '#f5f7fb'
+    context.font = '700 44px Arial'
+    context.fillText('SAMPLE PREVIEW - NOT A TRACKED PLAY', 48, 472)
+    context.font = '32px Arial'
+    context.fillText('Stake: 1u    Odds: +110', 48, 538)
+    context.fillText('To win: 1.1u', 48, 594)
+    context.fillText('Example selection: Home team moneyline', 48, 662)
+    context.fillStyle = '#b9cadb'
+    context.font = '24px Arial'
+    context.fillText('Capper card frame preview', 48, 796)
+    context.drawImage(frame, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob || blob.type !== 'image/png') throw new Error('Your browser could not create the example PNG.')
+    return blob
+  } finally { frame.close() }
 }
 
 export default function CapperPageProfile({ name, onSaved, onAppearance }: { name: string; onSaved: () => void; onAppearance: (name: string, theme: CapperTheme) => void }) {
@@ -63,6 +114,14 @@ export default function CapperPageProfile({ name, onSaved, onAppearance }: { nam
   const [version, setVersion] = useState(0)
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [bannerFile, setBannerFile] = useState<File | null>(null)
+  const [frameFile, setFrameFile] = useState<File | null>(null)
+  const [removeFrame, setRemoveFrame] = useState(false)
+  const [exampleUrl, setExampleUrl] = useState('')
+  const [frameError, setFrameError] = useState('')
+  const [generatingExample, setGeneratingExample] = useState(false)
+  useEffect(() => {
+    if (exampleUrl) return () => URL.revokeObjectURL(exampleUrl)
+  }, [exampleUrl])
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
       setOwner(false)
@@ -169,6 +228,62 @@ export default function CapperPageProfile({ name, onSaved, onAppearance }: { nam
     finally { setBusy(false) }
   }
 
+  async function saveFrame() {
+    if (!profile || busy || (!frameFile && !removeFrame)) return
+    setBusy(true)
+    setError('')
+    setMessage('')
+    setFrameError('')
+    let uploadedPath: string | null = null
+    let saved = false
+    try {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      const userId = sessionData.session?.user.id
+      if (!userId) throw new Error('Sign in through Discord before editing your page.')
+      const bucket = supabase.storage.from('website-assets')
+      let framePath = profile.play_card_frame_path
+      if (frameFile) {
+        const blob = await playCardFrameBlob(frameFile)
+        uploadedPath = `capper-frames/${userId}/${crypto.randomUUID()}.webp`
+        const { error: uploadError } = await bucket.upload(uploadedPath, blob, { contentType: 'image/webp', upsert: false })
+        if (uploadError) throw uploadError
+        framePath = uploadedPath
+      }
+      const { data, error: saveError } = await supabase.rpc('save_capper_play_card_frame', {
+        p_capper: name, p_frame_path: removeFrame ? null : framePath,
+      })
+      if (saveError) throw saveError
+      saved = true
+      const next = parseProfile(data)
+      setProfile(next)
+      setDraft(next)
+      setFrameFile(null)
+      setRemoveFrame(false)
+      setExampleUrl('')
+      setMessage('Play-card frame saved. It will be used for new capper plays.')
+    } catch (failure) {
+      let detail = errorMessage(failure)
+      if (uploadedPath && !saved) {
+        const { error: cleanupError } = await supabase.storage.from('website-assets').remove([uploadedPath])
+        if (cleanupError) detail += ` The unused upload could not be removed: ${cleanupError.message}`
+      }
+      setError(`Play-card frame was not saved. ${detail}`)
+    } finally { setBusy(false) }
+  }
+
+  async function generateExample() {
+    if (!frameFile || generatingExample) return
+    setGeneratingExample(true)
+    setFrameError('')
+    try {
+      const blob = await exampleCardBlob(frameFile)
+      setExampleUrl(URL.createObjectURL(blob))
+    } catch (failure) {
+      setFrameError(`Example card could not be generated. ${errorMessage(failure)}`)
+    } finally { setGeneratingExample(false) }
+  }
+
   return <div className="capper-custom-profile" style={{ borderColor: profile?.accent_color }}>
     {error && <p role="alert">{error} <button type="button" onClick={() => setVersion((current) => current + 1)}>Retry page settings</button></p>}
     {message && <p role="status">{message}</p>}
@@ -198,6 +313,34 @@ export default function CapperPageProfile({ name, onSaved, onAppearance }: { nam
       <label>Upload banner image<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => setBannerFile(event.target.files?.[0] ?? null)} /></label>
       <label>Banner image URL<input type="url" maxLength={2048} value={draft.appearance.banner_url ?? ''} onChange={(event) => setDraft({ ...draft, appearance: { ...draft.appearance, banner_url: event.target.value || null } })} /></label>
       <p>Optional banner: PNG/JPEG/WebP up to 10 MB, resized to at most 1600px. Clear its upload and URL to remove it.</p>
+      <fieldset>
+        <legend>Capper play-card frame</legend>
+        <label>Upload transparent PNG or WebP frame<input type="file" accept="image/png,image/webp" disabled={busy}
+          onChange={(event) => { setFrameFile(event.target.files?.[0] ?? null); setRemoveFrame(false); setExampleUrl(''); setFrameError('') }} /></label>
+        <p>Use a see-through center so play details remain readable. The frame is scaled over the full generated card. Your preview uses sample details only; it does not create or publish a tracked play.</p>
+        {draft.play_card_frame_path && !removeFrame && <p role="status">A saved frame is active for new capper plays. It is retained for plays already recorded with it.</p>}
+        {frameFile && <div>
+          <button type="button" className="account-secondary-button" disabled={generatingExample || busy} onClick={() => void generateExample()}>
+            {generatingExample ? 'Generating example...' : 'Generate example card'}
+          </button>
+          {exampleUrl && <div className="capper-frame-example">
+            <img src={exampleUrl} alt="Sample capper play card preview, not a tracked play" />
+            <a href={exampleUrl} download="capper-play-card-example.png">Download example card PNG</a>
+          </div>}
+          {frameError && <p role="alert">{frameError}</p>}
+        </div>}
+        {frameFile && <button type="button" className="account-secondary-button" disabled={busy}
+          onClick={() => { setFrameFile(null); setExampleUrl(''); setFrameError('') }}>Clear selected image</button>}
+        {draft.play_card_frame_path && <button type="button" className="account-secondary-button" disabled={busy}
+          onClick={() => { setRemoveFrame(!removeFrame); if (!removeFrame) setFrameFile(null); setExampleUrl('') }}>
+          {removeFrame ? 'Frame will be removed' : 'Remove saved frame'}
+        </button>}
+        {removeFrame && <button type="button" className="account-secondary-button" disabled={busy}
+          onClick={() => setRemoveFrame(false)}>Undo removal</button>}
+        <button type="button" className="account-primary-button" disabled={busy || (!frameFile && !removeFrame)} onClick={() => void saveFrame()}>
+          {busy ? 'Saving...' : 'Save play-card frame'}
+        </button>
+      </fieldset>
       <fieldset><legend>Page section order</legend>
         {draft.appearance.section_order.map((section, index) => <div className="capper-section-order" key={section}>
           <span>{sectionLabels[section]}</span>

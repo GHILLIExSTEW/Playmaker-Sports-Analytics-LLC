@@ -69,6 +69,25 @@ def test_personal_capper_play_over_three_units_is_rejected():
     assert result == {"error": "Personal capper plays cannot exceed 3 units."}
 
 
+def test_new_capper_play_snapshots_selected_frame_path(monkeypatch):
+    service = OfficialPlayService()
+    path = "capper-frames/11111111-1111-1111-1111-111111111111/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp"
+    monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(
+        official_play_module.supabase_service, "select",
+        Mock(return_value=SimpleNamespace(data=[{"play_card_frame_path": path}])),
+    )
+    insert = Mock(return_value=SimpleNamespace(data=[{"id": 7}]))
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", insert)
+    monkeypatch.setattr(official_play_module.supabase_service, "upsert", Mock())
+
+    result = service.create_play_record("900", "Ace", 1, 1, "-110", tracking_scope="capper")
+
+    assert result["capper_frame_path"] == path
+    assert insert.call_args.args[1]["capper_frame_path"] == path
+
+
 def test_team_approval_is_persisted_and_must_match_official_stake(monkeypatch):
     service = OfficialPlayService()
     monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)

@@ -73,6 +73,9 @@
 .capper-page-editor input, .capper-page-editor textarea { max-width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); color: var(--ink); background: var(--white); }
 .capper-page-editor input[type=color] { width: 80px; height: 48px; padding: 4px; }
 .capper-page-editor textarea { min-height: 140px; resize: vertical; }
+.capper-frame-example { display: grid; gap: 10px; max-width: 600px; margin-top: 16px; }
+.capper-frame-example img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
+.capper-frame-example a { width: fit-content; }
 .pick-insight-editor { margin: 16px 0; }
 .pick-insight-editor form { display: grid; gap: 12px; margin-top: 16px; }
 .pick-insight-editor textarea { min-height: 120px; max-width: 100%; padding: 12px; color: var(--ink); background: var(--white); border: 1px solid var(--line); resize: vertical; }

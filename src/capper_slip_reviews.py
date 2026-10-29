@@ -793,6 +793,17 @@ class CapperSlipReviews(commands.Cog):
                 inline=False,
             )
             await self.edit_prompt(channel, prompt, embed=embed, view=None)
+            if not isinstance(channel, discord.Thread) or channel.parent_id != CAPPER_BALLOT_CHANNEL_ID:
+                raise RuntimeError("Rejected capper reviews must remain in their verified submission thread.")
+            rejected_row = await asyncio.to_thread(self.store.get, message_id)
+            if rejected_row["state"] != "rejected":
+                raise RuntimeError("The rejected capper review could not be verified before thread deletion.")
+            await self.records.save(channel, rejected_row)
+            try:
+                await channel.delete(reason="Archived rejected capper review; no official play was published")
+            except discord.NotFound:
+                logger.info("rejected_capper_review_thread_already_deleted thread=%s", channel.id)
+            await asyncio.to_thread(self.records.store.source_deleted, str(message_id))
         else:
             embed.title = "Review locked - publishing"
             await self.edit_prompt(channel, prompt, final=False, embed=embed, view=None)

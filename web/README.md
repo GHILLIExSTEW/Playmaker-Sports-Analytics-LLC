@@ -398,6 +398,14 @@ result. The public directory exposes only author names and approved avatars;
 performance metrics and the public ledger still use settled results only.
 The homepage and primary navigation link to the board.
 
+Apply `20261029040000_capper_play_card_frames.sql` to enable capper play-card
+frames. Cappers can upload a transparent PNG/WebP frame from their page editor,
+preview and download a sample card, then save it for new personal plays.
+Generated cards keep the frame selected when each play was recorded, including
+settlement refreshes; changing or removing a frame does not change older cards
+or official team picks. Superseded frame files are retained because existing
+plays may still reference them.
+
 Website premium access was **disabled by default** in the initial schema. The database-owner/service
 configuration is `public.website_membership_config`; clients cannot read or
 change it. Copy the seller and the **complete** bot `WHOP_PAID_PLAN_IDS` and

@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 import logging
 import math
+import re
 import unicodedata
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ import discord
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, UnidentifiedImageError
 import requests
 
+from src.config import SUPABASE_URL
 from src.services.play_features_service import GRADABLE_SPORTS, PlayFeaturesService, clean_leg_details
 from src.services.play_service import PlayService
 from src.services.settlement_service import SettlementService
@@ -64,6 +66,25 @@ def download_artwork(url: str) -> bytes:
             data.extend(chunk)
             if len(data) > MAX_ASSET_BYTES:
                 raise ValueError("Play-card artwork exceeds the 12 MB limit.")
+    return image_bytes(bytes(data))
+
+
+def download_capper_frame(path: str) -> bytes:
+    if not re.fullmatch(r"capper-frames/[0-9a-f-]{36}/[0-9a-f-]{36}\.webp", path):
+        raise ValueError("The saved capper play-card frame path is invalid.")
+    base = urlparse(SUPABASE_URL)
+    if base.scheme != "https" or not base.hostname or base.username or base.password or base.port not in {None, 443}:
+        raise RuntimeError("SUPABASE_URL must be a valid HTTPS URL to load capper play-card frames.")
+    url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/public/website-assets/{path}"
+    with requests.get(url, stream=True, timeout=(5, 15), allow_redirects=False) as response:
+        response.raise_for_status()
+        if response.status_code != 200:
+            raise ValueError("The capper play-card frame returned an unexpected HTTP status.")
+        data = bytearray()
+        for chunk in response.iter_content(65536):
+            data.extend(chunk)
+            if len(data) > MAX_ASSET_BYTES:
+                raise ValueError("Capper play-card frames must be under 12 MB.")
     return image_bytes(bytes(data))
 
 
@@ -131,7 +152,9 @@ def render_matchup_badge(away: bytes, home: bytes, size: int = 480) -> bytes:
     return output.getvalue()
 
 
-def render_play_card(play: dict, slip: bytes | None, badge: bytes | None, badge_label: str) -> BytesIO:
+def render_play_card(
+    play: dict, slip: bytes | None, badge: bytes | None, badge_label: str, frame: bytes | None = None,
+) -> BytesIO:
     width, padding, text_width = 1200, 40, 790
     background, panel, white, muted = "#101925", "#182737", "#f5f7fb", "#b9cadb"
     status = str(play["status"])
@@ -202,6 +225,12 @@ def render_play_card(play: dict, slip: bytes | None, badge: bytes | None, badge_
         draw.text((920, slip_height + 290 + index * 30), line, font=small_font, fill=muted)
     branding = "CAPPER PLAYS  |  CAPPER TRACKING" if play.get("tracking_scope") == "capper" else "PLAYMAKER PICKS  |  OFFICIAL TEAM TRACKING"
     draw.text((padding, canvas.height - 46), branding, font=small_font, fill=muted)
+    if frame:
+        with Image.open(BytesIO(frame)) as image:
+            overlay = ImageOps.exif_transpose(image).convert("RGBA").resize(canvas.size, Image.Resampling.LANCZOS)
+        composed = canvas.convert("RGBA")
+        composed.alpha_composite(overlay)
+        canvas = composed.convert("RGB")
     result = BytesIO()
     canvas.save(result, format="PNG", optimize=True)
     result.seek(0)
@@ -391,10 +420,15 @@ class PlayCardService:
             assets = await asyncio.to_thread(self.load, int(play["id"]))
             if assets is None:
                 raise RuntimeError("Saved play-card artwork could not be read back.")
+        frame = (
+            await asyncio.to_thread(download_capper_frame, play["capper_frame_path"])
+            if play.get("tracking_scope") == "capper" and play.get("capper_frame_path")
+            else None
+        )
         output = await asyncio.to_thread(
             render_play_card, play,
             base64.b64decode(assets["slip_base64"], validate=True) if assets["slip_base64"] else None,
-            base64.b64decode(assets["badge_base64"], validate=True), assets["badge_label"],
+            base64.b64decode(assets["badge_base64"], validate=True), assets["badge_label"], frame,
         )
         if output.getbuffer().nbytes > guild.filesize_limit:
             output.close()

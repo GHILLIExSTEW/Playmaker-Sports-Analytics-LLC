@@ -169,7 +169,7 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     }))
   })
   const control = { state: options.state ?? 'active', feedRequests: 0, offsets: [] as number[], failAccess: options.accessError ?? false }
-  const profiles = new Map<string, { name: string; accent_color: string; background_color: string; appearance: typeof defaultAppearance; bio: string; avatar_url: string | null; social_links: Record<string, string> }>()
+  const profiles = new Map<string, { name: string; accent_color: string; background_color: string; appearance: typeof defaultAppearance; bio: string; avatar_url: string | null; play_card_frame_path: string | null; social_links: Record<string, string> }>()
   await page.route('https://lhsevzucmmzetpshpffv.supabase.co/**', async (route) => {
     const rpc = new URL(route.request().url()).pathname.split('/').at(-1)
     if (rpc === 'website_member_access') {
@@ -190,7 +190,7 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
         json: options.feedError ? { message: 'Feed unavailable' } : matching.slice(offset, offset + limit) })
     } else if (rpc === 'capper_page_profile') {
       const name = route.request().postDataJSON().p_capper
-      await route.fulfill({ json: profiles.get(name) ?? { name, accent_color: '#96d38d', background_color: '#040916', appearance: defaultAppearance, bio: '', avatar_url: null, social_links: {} } })
+      await route.fulfill({ json: profiles.get(name) ?? { name, accent_color: '#96d38d', background_color: '#040916', appearance: defaultAppearance, bio: '', avatar_url: null, play_card_frame_path: null, social_links: {} } })
     } else if (rpc === 'owned_capper_page') {
       await route.fulfill({ json: options.pageOwner ?? null })
     } else if (rpc === 'website_can_edit_all_cappers') {
@@ -200,10 +200,20 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     } else if (rpc === 'save_capper_page') {
       const body = route.request().postDataJSON()
       const next = { name: body.p_capper, accent_color: body.p_accent_color,
-        background_color: body.p_background_color, appearance: body.p_appearance, bio: body.p_bio, avatar_url: body.p_avatar_url || null, social_links: body.p_social_links }
+        background_color: body.p_background_color, appearance: body.p_appearance, bio: body.p_bio, avatar_url: body.p_avatar_url || null,
+        play_card_frame_path: profiles.get(body.p_capper)?.play_card_frame_path ?? null, social_links: body.p_social_links }
       if (!options.pageSaveError) profiles.set(next.name, next)
       await route.fulfill({ status: options.pageSaveError ? 403 : 200,
         json: options.pageSaveError ? { message: 'Verified original OPERATOR page owner required.' } : next })
+    } else if (rpc === 'save_capper_play_card_frame') {
+      const body = route.request().postDataJSON()
+      const previous = profiles.get(body.p_capper) ?? {
+        name: body.p_capper, accent_color: '#96d38d', background_color: '#040916',
+        appearance: defaultAppearance, bio: '', avatar_url: null, social_links: {},
+      }
+      const next = { ...previous, play_card_frame_path: body.p_frame_path }
+      profiles.set(body.p_capper, next)
+      await route.fulfill({ json: next })
     } else if (rpc === 'public_capper_directory') {
       await route.fulfill({ json: picks.map((pick) => ({ name: pick.capper, avatar_url: profiles.get(pick.capper)?.avatar_url ?? null })) })
     } else if (rpc === 'public_settled_results') {
@@ -471,6 +481,40 @@ test('banner upload is resized to 1600px and displayed from the saved public URL
   }, body.subarray(start, start + size).toString('base64'))
   expect(dimensions).toEqual([1600, 600])
   await expect(page.getByRole('img', { name: 'New Capper banner' })).toHaveAttribute('src', /\/object\/public\/website-assets\/capper-avatars\/.*\.webp$/)
+})
+
+test('capper can preview and download a sample card, then save a transparent frame for new plays', async ({ page }) => {
+  await mockApi(page, { pageOwner: 'New Capper' })
+  const uploads: { path: string; body: Buffer }[] = []
+  await page.route('**/storage/v1/object/website-assets/**', async (route) => {
+    uploads.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataBuffer()! })
+    await route.fulfill({ json: { Key: 'uploaded' } })
+  })
+  await page.goto('/cappers/new-capper')
+  await page.getByRole('button', { name: 'Edit your capper page' }).click()
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1200
+    canvas.height = 900
+    const context = canvas.getContext('2d')!
+    context.strokeStyle = '#b8ff3d'
+    context.lineWidth = 40
+    context.strokeRect(20, 20, canvas.width - 40, canvas.height - 40)
+    return canvas.toDataURL('image/png').split(',')[1]
+  })
+  await page.getByLabel('Upload transparent PNG or WebP frame').setInputFiles({
+    name: 'frame.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64'),
+  })
+  await page.getByRole('button', { name: 'Generate example card' }).click()
+  const preview = page.getByRole('img', { name: 'Sample capper play card preview, not a tracked play' })
+  await expect(preview).toBeVisible()
+  expect(await preview.evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight])).toEqual([1200, 900])
+  await expect(page.getByRole('link', { name: 'Download example card PNG' })).toHaveAttribute('download', 'capper-play-card-example.png')
+  await page.getByRole('button', { name: 'Save play-card frame' }).click()
+  await expect(page.getByText('Play-card frame saved. It will be used for new capper plays.')).toBeVisible()
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0].path).toMatch(/\/website-assets\/capper-frames\/11111111-1111-1111-1111-111111111111\/[0-9a-f-]{36}\.webp$/)
+  expect(uploads[0].body.toString('latin1')).toContain('Content-Type: image/webp')
 })
 
 test('capper can edit own pick insight on the board but not another authors pick', async ({ page }) => {

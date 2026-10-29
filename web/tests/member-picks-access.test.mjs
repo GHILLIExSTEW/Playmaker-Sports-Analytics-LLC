@@ -562,6 +562,32 @@ test(`website member access and current picks enforce server authorization (${ha
     await save({ ...appearance, banner_url: null }, 'First Capper')
     await assert.rejects(call("select public.save_capper_page_before_appearance('#ffffff','','','{}','New Capper',null)"), /permission denied/)
   })
+  await t.test('capper play-card frames are owner-managed and remain attached to their capper', async () => {
+    await load('../../supabase/migrations/20261029040000_capper_play_card_frames.sql')
+    const path = `capper-frames/${memberId}/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp`
+    const profile = async () => (await call("select public.capper_page_profile('First Capper') as profile", 'anon', ''))[0].profile
+    assert.equal((await profile()).play_card_frame_path, null)
+    await assert.rejects(call(`select public.save_capper_play_card_frame('First Capper','${path}')`), /Upload the capper play-card frame/)
+    assert.equal((await call(`insert into storage.objects (bucket_id,name) values ('website-assets','${path}') returning name`)).length, 1)
+    const saved = (await call(`select public.save_capper_play_card_frame('First Capper','${path}') as profile`))[0].profile
+    assert.equal(saved.play_card_frame_path, path)
+    assert.equal((await call(`select public.can_manage_capper_play_card_frame('website-assets','${path}') as allowed`))[0].allowed, true)
+    const pageSave = (await call("select public.save_capper_page('#123abc','Page update','','{}','First Capper') as profile"))[0].profile
+    assert.equal(pageSave.play_card_frame_path, path)
+    await db.exec("create policy broad_legacy_frame_delete on storage.objects for delete to authenticated using (bucket_id='website-assets')")
+    await db.exec(`update public.plays set capper_frame_path='${path}' where id=1`)
+    assert.equal((await call(`delete from storage.objects where name='${path}' returning name`)).length, 0)
+    await assert.rejects(call(`select public.save_capper_play_card_frame('New Capper','${path}')`), /page owner|Owner role/)
+    await assert.rejects(call(`select public.save_capper_play_card_frame('First Capper','capper-frames/22222222-2222-2222-2222-222222222222/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp')`), /Invalid capper play-card frame path/)
+    await assert.rejects(call("select public.save_capper_play_card_frame('First Capper','https://evil.example/frame.webp')"), /Invalid capper play-card frame path/)
+    await call("select public.save_capper_play_card_frame('First Capper',null)")
+    assert.equal((await profile()).play_card_frame_path, null)
+    assert.equal((await db.query("select capper_frame_path from public.plays where id=1")).rows[0].capper_frame_path, path)
+    assert.equal((await call(`delete from storage.objects where name='${path}' returning name`)).length, 0)
+    await db.exec('update public.plays set capper_frame_path=null where id=1')
+    assert.equal((await call(`delete from storage.objects where name='${path}' returning name`)).length, 1)
+    await assert.rejects(call("select public.save_capper_play_card_frame('First Capper',null)", 'anon', ''), /permission denied/)
+  })
   await t.test('research exception grants picks and research without capper administration or age bypass', async () => {
     await load('../../supabase/migrations/20261017010000_website_research_exception.sql')
     await db.exec("update auth.identities set provider_id='1179625165332676632'; update public.website_membership_config set enabled=false")

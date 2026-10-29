@@ -82,6 +82,7 @@ create table if not exists public.plays (
   status text not null default 'open' check (status in ('open', 'win', 'loss', 'void', 'partial', 'regraded')),
   play_text text,
   message_id text,
+  capper_frame_path text,
   created_at timestamptz not null default now(),
   settled_at timestamptz,
   settled_by bigint references public.users(id) on delete set null,

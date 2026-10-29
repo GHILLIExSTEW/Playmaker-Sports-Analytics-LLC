@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
@@ -123,6 +124,17 @@ class OfficialPlayService:
         sport_slug = play_sport_slug(leg_rows)
         sport_id = self._ensure_sport(sport_slug) if sport_slug else self._ensure_default_sport()
         user_id = self._ensure_user(discord_user_id, username)
+        capper_frame_path = None
+        if tracking_scope == "capper":
+            settings = supabase_service.select(
+                "capper_page_settings", "play_card_frame_path", {"user_id": user_id},
+            ).data or []
+            capper_frame_path = settings[0].get("play_card_frame_path") if settings else None
+            if capper_frame_path is not None and (
+                not isinstance(capper_frame_path, str)
+                or not re.fullmatch(r"capper-frames/[0-9a-f-]{36}/[0-9a-f-]{36}\.webp", capper_frame_path)
+            ):
+                raise ValueError("The saved capper play-card frame path is invalid.")
 
         payload = {
             "user_id": user_id,
@@ -140,6 +152,7 @@ class OfficialPlayService:
             "stars": stars,
             "ballot_message_id": ballot_message_id,
             "team_approval": team_approval,
+            "capper_frame_path": capper_frame_path,
         }
 
         existing = (
@@ -190,6 +203,7 @@ class OfficialPlayService:
             "team_name": payload["team_name"],
             "play_text": play_text or "",
             "summary": f"{float(units):g}u • {int(legs)}-leg • {odds_value:+d}",
+            "capper_frame_path": capper_frame_path,
         }
 
     def attach_message_id(self, play_id: int, message_id: int) -> dict:

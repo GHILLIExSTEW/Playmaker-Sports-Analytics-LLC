@@ -250,6 +250,26 @@ def test_justification_request_failure_does_not_fail_or_republish_official_pick(
 @pytest.mark.parametrize("outcome", ["rejected", "expired"])
 def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
     cog, channel, prompt = make_cog(monkeypatch)
+    thread = review_thread() if outcome == "rejected" else None
+    if thread:
+        thread.fetch_message.return_value = prompt
+        channel = thread
+        rejected_row = saved_row()
+        rejected_row.update(state="rejected", votes={"yes": 1, "no": 1, "pass": 0})
+        cog.store.get.return_value = rejected_row
+        events = []
+
+        async def save_record(*_):
+            events.append("archive")
+
+        async def delete_thread(**_):
+            events.append("delete")
+
+        cog.records = Mock(
+            save=AsyncMock(side_effect=save_record),
+            store=SimpleNamespace(source_deleted=lambda _: events.append("mark-deleted")),
+        )
+        thread.delete.side_effect = delete_thread
     cog.store.finalize.return_value = {
         "outcome": outcome, "counts": {"yes": 1, "no": 1, "pass": 0}, "roster_size": 5,
     }
@@ -259,6 +279,9 @@ def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
     assert prompt.edit.call_args.kwargs["view"] is None
     if outcome == "expired":
         cog.store.fail.assert_called_once()
+    else:
+        cog.records.save.assert_awaited_once_with(thread, cog.store.get.return_value)
+        assert events == ["archive", "delete", "mark-deleted"]
 
 
 def test_changed_source_fails_closed(monkeypatch):

@@ -2,14 +2,15 @@ import asyncio
 import base64
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 from PIL import Image, ImageDraw
 import pytest
 import requests
 
 from src.services.play_card_service import (
-    PlayCardService, download_artwork, player_artwork, render_matchup_badge, render_play_card, wrap_card_text,
+    PlayCardService, download_artwork, download_capper_frame, player_artwork, render_matchup_badge,
+    render_play_card, wrap_card_text,
 )
 from src.services.tracker_image_service import _font
 
@@ -17,6 +18,14 @@ from src.services.tracker_image_service import _font
 def png(size=(600, 250), color="#ffffff"):
     output = BytesIO()
     Image.new("RGB", size, color).save(output, format="PNG")
+    return output.getvalue()
+
+
+def frame_png():
+    image = Image.new("RGBA", (120, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(image).rectangle((0, 0, 119, 99), outline="#ff00ff", width=10)
+    output = BytesIO()
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -43,6 +52,16 @@ def test_generated_card_preserves_whole_slip_above_details_and_badge(size):
         # Text and badge occupy the lower panel, not the original slip area.
         assert card.getpixel((600, 10)) == (255, 255, 255)
         assert card.crop((30, slip_height + 25, 850, card.height - 64)).getextrema()[0][0] < 30
+
+
+def test_capper_frame_overlays_generated_card_without_changing_default_cards():
+    frame = frame_png()
+    standard = render_play_card(play(), png(), png((120, 120), "#663399"), "Server")
+    branded = render_play_card(play(tracking_scope="capper", stars=None), png(), png((120, 120), "#663399"), "Server", frame)
+    with Image.open(standard) as standard_image, Image.open(branded) as branded_image:
+        assert standard_image.size == branded_image.size
+        assert branded_image.getpixel((600, 0)) == (255, 0, 255)
+        assert branded_image.getpixel((600, 500)) != (255, 0, 255)
 
 
 @pytest.mark.parametrize("status", ["open", "win", "loss", "void", "partial", "regraded", "not_official"])
@@ -145,6 +164,26 @@ def test_artwork_downloads_reject_non_provider_hosts_before_network(monkeypatch,
     get.assert_not_called()
 
 
+def test_capper_frame_download_is_limited_to_the_configured_storage_path(monkeypatch):
+    data = png((20, 20))
+    response = MagicMock(status_code=200)
+    response.__enter__.return_value = response
+    response.iter_content.return_value = [data]
+    monkeypatch.setattr("src.services.play_card_service.SUPABASE_URL", "https://project.supabase.co")
+    get = Mock(return_value=response)
+    monkeypatch.setattr("src.services.play_card_service.requests.get", get)
+    path = "capper-frames/11111111-1111-1111-1111-111111111111/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp"
+
+    assert download_capper_frame(path) == data
+    get.assert_called_once_with(
+        "https://project.supabase.co/storage/v1/object/public/website-assets/" + path,
+        stream=True, timeout=(5, 15), allow_redirects=False,
+    )
+    with pytest.raises(ValueError, match="path is invalid"):
+        download_capper_frame("https://evil.example/frame.webp")
+    get.assert_called_once()
+
+
 @pytest.fixture
 def cards():
     saved = {}
@@ -172,6 +211,20 @@ def test_original_slip_and_icon_are_saved_privately_and_reused_without_nesting(c
     assert Image.open(BytesIO(second.fp.getvalue())).size == Image.open(BytesIO(first_bytes)).size
     cards.guild.icon.read.assert_awaited_once()
     second.close()
+
+
+def test_saved_capper_frame_is_applied_when_card_is_generated_and_refreshed(cards, monkeypatch):
+    path = "capper-frames/11111111-1111-1111-1111-111111111111/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp"
+    monkeypatch.setattr("src.services.play_card_service.download_capper_frame", Mock(return_value=frame_png()))
+    branded_play = play(tracking_scope="capper", capper_frame_path=path, stars=None)
+    first = asyncio.run(cards.service.file(branded_play, cards.guild, slip=png()))
+    with Image.open(BytesIO(first.fp.getvalue())) as image:
+        assert image.getpixel((600, 0)) == (255, 0, 255)
+    first.close()
+    settled = asyncio.run(cards.service.file({**branded_play, "status": "win"}, cards.guild))
+    with Image.open(BytesIO(settled.fp.getvalue())) as image:
+        assert image.getpixel((600, 0)) == (255, 0, 255)
+    settled.close()
 
 
 def test_player_photo_failure_explicitly_logs_and_uses_server_icon(cards, monkeypatch, caplog):
