@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.config import GUILD_ID, TRACKER_ROLE_ID
+from src.interaction_views import PreparedModalView
 from src.services import capper_insight_service
 from src.services.website_capper_service import (
     WEBSITE_OWNER_ROLE_ID,
@@ -133,20 +134,25 @@ class WebsiteSync(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def handle_insight_click(self, interaction: discord.Interaction, play_id: int) -> None:
+        await interaction.response.defer(ephemeral=True)
         rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
         if not rows:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This pick is no longer open or its author is no longer a current OPERATOR.", ephemeral=True,
             )
             return
         context = rows[0]
         owner_id = int(context["discord_user_id"])
         if not can_submit_insight(interaction, owner_id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Only this pick's original author, while holding OPERATOR, can add or edit its insight.", ephemeral=True,
             )
             return
-        await interaction.response.send_modal(CapperInsightModal(play_id, owner_id, context["justification"]))
+        await interaction.followup.send(
+            "Your insight form is ready. This button expires in 3 minutes.",
+            view=PreparedModalView(owner_id, lambda: CapperInsightModal(play_id, owner_id, context["justification"])),
+            ephemeral=True,
+        )
 
     @commands.Cog.listener("on_interaction")
     async def on_insight_interaction(self, interaction: discord.Interaction) -> None:

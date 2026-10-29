@@ -188,6 +188,47 @@ class SlipReviewStore(BallotStore):
         rows = supabase_service.select("capper_ballots", columns, {"message_id": str(message_id)}).data or []
         return rows[0] if rows else None
 
+    def known_ids(self, message_ids: list[int]) -> set[int]:
+        known: set[int] = set()
+        for offset in range(0, len(message_ids), 100):
+            batch = [str(value) for value in message_ids[offset:offset + 100]]
+            rows = supabase_service._execute(
+                lambda: supabase_service._ensure_client().table("capper_ballots")
+                .select("message_id").in_("message_id", batch).execute(),
+            ).data or []
+            known.update(int(row["message_id"]) for row in rows)
+        return known
+
+    def claim_invalid(self, message_id: int, fingerprint: str, reason: str, forum_id: str | None) -> bool:
+        return self.rpc(
+            "claim_invalid_capper_slip", p_message_id=str(message_id),
+            p_fingerprint=fingerprint, p_reason=reason, p_forum_id=forum_id,
+        ) is True
+
+    def invalid_ids(self, forum_id: int) -> list[int]:
+        values: list[int] = []
+        offset = 0
+        while True:
+            batch = supabase_service._execute(
+                lambda: supabase_service._ensure_client().table("capper_invalid_slip_work")
+                .select("message_id").eq("forum_channel_id", str(forum_id))
+                .order("message_id").range(offset, offset + 99).execute(),
+            ).data or []
+            values.extend(int(row["message_id"]) for row in batch)
+            if len(batch) < 100:
+                return values
+            offset += 100
+
+    def advance_forum(self, scanned_at: datetime) -> None:
+        if not supabase_service.update(
+            "capper_ballot_scan", {"forum_scanned_at": scanned_at.isoformat()}, {"singleton": True},
+        ).data:
+            raise RuntimeError("The forum reconciliation cursor was not saved.")
+
+    def retire_invalid(self, message_id: int) -> None:
+        if not supabase_service.update("capper_invalid_slips", {"retired": True}, {"message_id": str(message_id)}).data:
+            raise RuntimeError("The deleted invalid-post marker was not saved.")
+
     def pending(self) -> list[dict]:
         return supabase_service.select(
             "capper_ballots", "*", {"state": "pending", "policy_version": SLIP_POLICY_VERSION},

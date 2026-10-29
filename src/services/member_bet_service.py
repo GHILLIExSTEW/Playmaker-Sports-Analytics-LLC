@@ -4,10 +4,7 @@ import base64
 import math
 import re
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO
 from zoneinfo import ZoneInfo
-
-from PIL import Image, UnidentifiedImageError
 
 from src.datetime_utils import parse_iso_datetime
 from src.services.api_sports_service import ApiSportsService, normalize_game
@@ -15,42 +12,17 @@ from src.services.api_sports_multi_service import ApiSportsMultiService, DATE_PR
 from src.services.image_play_service import ImagePlayService
 from src.services.play_service import PlayService
 from src.services.supabase_service import supabase_service
+from src.services.photo_service import (
+    MAX_PHOTO_BYTES as MAX_PHOTO_BYTES,
+    MAX_PHOTO_PIXELS as MAX_PHOTO_PIXELS,
+    accepted_photo as accepted_photo,
+    sanitize_photo as sanitize_photo,
+)
 
-MAX_PHOTO_BYTES = 10 * 1024 * 1024
-MAX_PHOTO_PIXELS = 16_000_000
 SETTLED = {"win", "loss", "void"}
 AUTO_SPORTS = {"nfl", "ncaa", "basketball"}
 BUCKET = "member-bet-vault"
 EASTERN = ZoneInfo("America/New_York")
-
-
-def accepted_photo(attachment) -> bool:
-    return (
-        (attachment.content_type or "").lower() in {"image/jpeg", "image/png", "image/webp"}
-        and 0 < attachment.size <= MAX_PHOTO_BYTES
-    )
-
-
-def sanitize_photo(data: bytes) -> bytes:
-    if not data or len(data) > MAX_PHOTO_BYTES:
-        raise ValueError("The photo must be no larger than 10 MB.")
-    try:
-        with Image.open(BytesIO(data)) as image:
-            if image.format not in {"JPEG", "PNG", "WEBP"} or getattr(image, "n_frames", 1) != 1:
-                raise ValueError("Upload a static JPEG, PNG, or WebP photo.")
-            if image.width * image.height > MAX_PHOTO_PIXELS:
-                raise ValueError("The photo is too large. Use an image under 16 megapixels.")
-            image.load()
-            output = BytesIO()
-            normalized = image.convert("RGB")
-            normalized.info.clear()
-            normalized.save(output, format="PNG")
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
-        raise ValueError("The attachment is not a readable photo.") from exc
-    result = output.getvalue()
-    if len(result) > MAX_PHOTO_BYTES:
-        raise ValueError("The photo is too large after processing. Upload a smaller screenshot.")
-    return result
 
 
 def number(value, label: str) -> float:

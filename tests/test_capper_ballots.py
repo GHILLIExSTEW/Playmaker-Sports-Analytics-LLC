@@ -59,7 +59,7 @@ def make_cog():
             "summary": "2u", "stars": 4, "tracking_scope": "official",
         })),
         resolve_channel=AsyncMock(return_value=SimpleNamespace(
-            guild=SimpleNamespace(id=123), send=AsyncMock(return_value=SimpleNamespace(id=800)),
+            id=100, guild=SimpleNamespace(id=123), send=AsyncMock(return_value=SimpleNamespace(id=800)),
         )),
         is_tracked_operator=Mock(return_value=True), staff_alert=AsyncMock(),
         get_testing=Mock(return_value=False),
@@ -134,6 +134,7 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     assert embed.footer.text is None
     cog.official.attach_message_id.assert_called_once_with(7, 800)
     assert cog.store.finish.call_args.kwargs["official_message_id"] == "800"
+    assert cog.store.finish.call_args.kwargs["official_channel_id"] == "100"
     cog.staff_alert.assert_not_awaited()
 
 

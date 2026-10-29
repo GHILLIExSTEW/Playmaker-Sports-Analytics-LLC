@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -6,6 +7,7 @@ import discord
 import pytest
 
 import src.capper_review_records as module
+import src.forum_health as health
 from src.capper_review_records import ReviewRecords, record_content, record_text
 
 
@@ -27,10 +29,15 @@ def play(status="open"):
 
 def make_records(monkeypatch):
     monkeypatch.setattr(module, "GUILD_ID", 123)
+    monkeypatch.setattr(health, "GUILD_ID", 123)
     forum = Mock(spec=discord.ForumChannel)
     forum.id = module.CAPPER_RECORD_CHANNEL_ID
-    forum.guild = SimpleNamespace(id=123, default_role=Mock())
-    forum.permissions_for.return_value = SimpleNamespace(view_channel=False)
+    default = SimpleNamespace(id=0, permissions=discord.Permissions.none(), is_bot_managed=lambda: False)
+    forum.guild = SimpleNamespace(id=123, default_role=default, me=SimpleNamespace(id=1), roles=[default],
+                                  owner_id=99, filesize_limit=10 * 1024 * 1024, chunked=False)
+    forum.permissions_for.return_value = discord.Permissions.none()
+    forum.permissions_for.side_effect = lambda target: forum.permissions_for.return_value if target is default else discord.Permissions.all()
+    forum.overwrites = {}
     forum.flags = SimpleNamespace(require_tag=False)
     thread = Mock(spec=discord.Thread)
     thread.id, thread.parent_id = 700, forum.id
@@ -92,7 +99,7 @@ def test_interrupted_record_send_blocks_deletion_without_resending(monkeypatch):
 def test_public_records_forum_is_rejected(monkeypatch):
     records, forum, thread, _, _ = make_records(monkeypatch)
     forum.permissions_for.return_value.view_channel = True
-    with pytest.raises(RuntimeError, match="@everyone"):
+    with pytest.raises(RuntimeError, match="Unexpected role"):
         asyncio.run(records.save(SimpleNamespace(id=500), ballot()))
     thread.send.assert_not_awaited()
 
@@ -166,3 +173,109 @@ def test_lost_day_claim_never_creates_a_second_dated_post(monkeypatch):
         asyncio.run(records.save(SimpleNamespace(id=500), ballot()))
     forum.create_thread.assert_not_awaited()
     thread.send.assert_not_awaited()
+
+
+def expired_record(forum):
+    row = ballot()
+    row["review"]["source_text"] = "private original note"
+    return {
+        "message_id": "500", "thread_id": "700", "forum_channel_id": str(forum.id), "record_message_id": "900",
+        "rendered_content": "old record", "ballot": row, "play": None, "revision": 3,
+        "source_deleted_at": datetime.now(timezone.utc).isoformat(),
+        "evidence_eligible_at": (datetime.now(timezone.utc) - timedelta(days=366)).isoformat(),
+        "evidence_removed_at": None,
+    }
+
+
+def test_retention_replaces_attachments_with_bet_summary_before_scrubbing_database(monkeypatch):
+    records, forum, thread, message, store = make_records(monkeypatch)
+    record = expired_record(forum)
+    store.snapshots.return_value = [record]
+    store.snapshot.return_value = record
+    store.begin_expiry.return_value = True
+    sequence = []
+
+    async def edit(**kwargs):
+        sequence.append("discord")
+        message.content = kwargs["content"]
+        message.attachments = [SimpleNamespace(filename=file.filename) for file in kwargs["attachments"]]
+        text = kwargs["attachments"][0].fp.read().decode("utf-8")
+        assert "Wolves ML" in text and "private original note" not in text
+        assert message.attachments[0].filename == "bet-summary-500.txt"
+
+    message.edit.side_effect = edit
+    store.complete.side_effect = lambda *args, **kwargs: sequence.append("database") or True
+    asyncio.run(records.refresh())
+    assert sequence == ["discord", "database"]
+    assert "private original note" not in message.content
+    assert "365-day policy" in message.content
+    store.complete.assert_called_once_with(record, message.content, remove_evidence=True)
+    thread.send.assert_not_awaited()
+
+
+def test_reopened_record_and_failed_expiry_claim_never_delete_attachments(monkeypatch):
+    records, forum, _, message, store = make_records(monkeypatch)
+    record = expired_record(forum)
+    store.snapshots.return_value = [record]
+    store.snapshot.return_value = {**record, "evidence_eligible_at": None}
+    asyncio.run(records.refresh())
+    store.begin_expiry.assert_not_called()
+    assert "attachments" not in message.edit.call_args.kwargs
+    message.edit.reset_mock()
+    store.snapshot.return_value = record
+    store.begin_expiry.return_value = False
+    asyncio.run(records.refresh())
+    message.edit.assert_not_awaited()
+
+
+def test_failed_retention_readback_never_scrubs_database_originals(monkeypatch):
+    records, forum, _, message, store = make_records(monkeypatch)
+    record = expired_record(forum)
+    store.snapshots.return_value = [record]
+    store.snapshot.return_value = record
+    store.begin_expiry.return_value = True
+    with pytest.raises(RuntimeError, match="Could not update records"):
+        asyncio.run(records.refresh())
+    store.complete.assert_not_called()
+
+
+def test_expiry_removes_bot_owned_published_cards_without_deleting_bet_messages(monkeypatch):
+    records, forum, _, _, store = make_records(monkeypatch)
+    record = expired_record(forum)
+    record["play"] = play("win")
+    store.deliveries.return_value = [{"channel_id": "1234", "message_id": "5678"}]
+    published = SimpleNamespace(id=800, author=SimpleNamespace(id=1), attachments=[Mock()], embeds=[])
+
+    async def edit(**kwargs):
+        assert kwargs["attachments"] == []
+        published.attachments, published.embeds = [], [kwargs["embed"]]
+
+    published.edit = AsyncMock(side_effect=edit)
+    channel = SimpleNamespace(guild=forum.guild, fetch_message=AsyncMock(return_value=published))
+    records.resolve_channel = AsyncMock(return_value=channel)
+    asyncio.run(records.remove_published_evidence(record))
+    assert published.edit.await_count == 2
+    assert len(published.embeds) == 1 and published.attachments == []
+    assert "Wolves ML" in published.embeds[0].description
+    assert "Capper" not in published.embeds[0].description
+    assert "private original note" not in published.embeds[0].description
+    assert "Discord 42" not in published.embeds[0].description
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_old_source_deletion_recovery_requires_not_found_not_forbidden(monkeypatch, missing):
+    records, forum, _, _, store = make_records(monkeypatch)
+    record = expired_record(forum)
+    record["source_deleted_at"] = None
+    response = SimpleNamespace(status=404 if missing else 403, reason="test")
+    error = discord.NotFound(response, "missing") if missing else discord.Forbidden(response, "denied")
+    guild = SimpleNamespace(fetch_channel=AsyncMock(side_effect=error))
+    records.bot.get_guild = lambda _: guild
+    if missing:
+        asyncio.run(records.check_source_deleted(record))
+        store.source_deleted.assert_called_once_with("500")
+        assert record["source_deleted_at"] is not None
+    else:
+        with pytest.raises(discord.Forbidden):
+            asyncio.run(records.check_source_deleted(record))
+        store.source_deleted.assert_not_called()

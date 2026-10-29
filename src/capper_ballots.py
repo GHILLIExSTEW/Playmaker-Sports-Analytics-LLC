@@ -306,7 +306,10 @@ class CapperBallots(commands.Cog):
             if file is not None:
                 file.close()
         await asyncio.to_thread(self.official.attach_message_id, payload["play_id"], published.id)
-        await asyncio.to_thread(self.store.finish, message.id, "published", official_message_id=str(published.id))
+        await asyncio.to_thread(
+            self.store.finish, message.id, "published", official_message_id=str(published.id),
+            official_channel_id=str(channel.id),
+        )
         return payload
 
     @tasks.loop(minutes=1)

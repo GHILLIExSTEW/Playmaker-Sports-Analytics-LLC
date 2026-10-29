@@ -141,6 +141,27 @@ def test_insight_lookup_failure_uses_followup_after_response():
     assert request.followup.send.call_args.kwargs["ephemeral"]
 
 
+def test_insight_preparation_defers_before_lookup_and_uses_a_fresh_modal_interaction(monkeypatch):
+    async def check():
+        website, request = cog(), click()
+        request.response.defer = AsyncMock()
+        request.guild = SimpleNamespace(id=module.GUILD_ID)
+        request.user.roles = [SimpleNamespace(id=module.TRACKER_ROLE_ID)]
+
+        def context(play_id):
+            request.response.defer.assert_awaited_once_with(ephemeral=True)
+            return [{"discord_user_id": "42", "justification": "Existing insight"}]
+
+        monkeypatch.setattr(module.capper_insight_service, "insight_context", context)
+        await website.handle_insight_click(request, 7)
+        view = request.followup.send.call_args.kwargs["view"]
+        second = SimpleNamespace(user=request.user, response=SimpleNamespace(send_modal=AsyncMock()))
+        await view.open_form.callback(second)
+        modal = second.response.send_modal.call_args.args[0]
+        assert modal.play_id == 7 and modal.justification.default == "Existing insight"
+    asyncio.run(check())
+
+
 def test_concurrent_requests_share_one_cog_lock_and_deduplicate(monkeypatch):
     stored = {
         "play_id": 7, "discord_user_id": "42", "selection": "Home ML",

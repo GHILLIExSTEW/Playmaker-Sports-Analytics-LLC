@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -9,13 +11,18 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
 from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
+from src.interaction_views import PreparedModalView
+from src.forum_health import CheckedForum
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
+from src.services.photo_service import accepted_photo, sanitize_photo
+from src.services.supabase_service import supabase_service
 from src.capper_review_records import ReviewRecords
 from src.services.slip_review_service import (
     SlipReviewStore, confirmed_legs, friendly_time, parse_cutoff, parse_event_start, response_choices, review_time,
@@ -24,6 +31,19 @@ from src.services.slip_review_service import (
 logger = logging.getLogger("official_play_bot")
 SUPPORT = "\N{THUMBS UP SIGN}"
 OPPOSE = "\N{THUMBS DOWN SIGN}"
+SUBMISSION_NOTICE = (
+    "Before submitting a capper slip\n\n"
+    "Use one static JPEG, PNG or WebP (10 MB maximum) per post, with the matchup in its title. "
+    "Crop/redact names, account IDs, balances and barcodes BEFORE uploading; metadata removal cannot hide visible details.\n\n"
+    "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
+    "not training on Discord content. Check and correct the extracted details before confirming. "
+    "Confirmation, voting and discussion stay in your post.\n\n"
+    "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
+    "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
+    "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
+    "Discord and processors handle data under their own policies; this does not erase their backups or other people's copies.\n\n"
+    "For access, corrections or deletion requests, contact the server owner or support@playmakersportsanalytics.com."
+)
 
 
 def review_view(message_id: int, *, draft: bool = False) -> discord.ui.View:
@@ -158,6 +178,12 @@ class CapperSlipReviews(commands.Cog):
         self.prompt_edits: dict[int, tuple] = {}
         self.needs_reconciliation = True
         self.records = ReviewRecords(bot, resolve_channel)
+        self.intake_queue: asyncio.Queue[int] = asyncio.Queue(maxsize=100)
+        self.queued_ids: set[int] = set()
+        self.scan_lock = asyncio.Lock()
+        self.processing_slots = asyncio.Semaphore(4)
+        self.checked_forum = CheckedForum(resolve_channel, CAPPER_BALLOT_CHANNEL_ID, "CAPPER_BALLOT_CHANNEL_ID", records=False)
+        self.submission_notice_ready = False
 
     def review_lock(self, message_id: int) -> asyncio.Lock:
         return self.review_locks.setdefault(message_id, asyncio.Lock())
@@ -171,10 +197,21 @@ class CapperSlipReviews(commands.Cog):
         self.scan_slips.cancel()
         self.daily_cleanup.cancel()
         self.refresh_records.cancel()
+        self.intake_worker.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         self.needs_reconciliation = True
+        report = await self.health_report(starting=True)
+        if any(line.startswith("FAIL") for line in report):
+            await self.publisher.staff_alert("bot_health", "\n".join(report)[:1800])
+        try:
+            await self.ensure_submission_notice()
+            self.submission_notice_ready = True
+        except Exception as exc:
+            self.submission_notice_ready = False
+            logger.exception("capper_submission_notice_failed")
+            await self.publisher.staff_alert("capper_submission_notice", f"Submission notice needs attention: {str(exc)[:1500]}")
         if not self.process_reviews.is_running():
             self.process_reviews.start()
         if not self.scan_slips.is_running():
@@ -183,6 +220,45 @@ class CapperSlipReviews(commands.Cog):
             self.daily_cleanup.start()
         if not self.refresh_records.is_running():
             self.refresh_records.start()
+        if not self.intake_worker.is_running():
+            self.intake_worker.start()
+    async def ensure_submission_notice(self) -> None:
+        forum = await self.channel()
+        if not isinstance(forum, discord.ForumChannel):
+            return
+        store = self.records.store
+        rows = await asyncio.to_thread(
+            supabase_service.select, "capper_forum_notices", "*", {"forum_channel_id": str(forum.id)},
+        )
+        notice = (rows.data or [None])[0]
+        if notice is None:
+            if not await asyncio.to_thread(store.claim, "capper_forum_notices", {
+                "forum_channel_id": str(forum.id), "thread_id": "sending",
+            }, "forum_channel_id"):
+                raise RuntimeError("Notice creation is already claimed; inspect Discord before retrying.")
+            created = await forum.create_thread(
+                name="READ FIRST - Slip privacy and submission rules", content=SUBMISSION_NOTICE,
+                auto_archive_duration=10080,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            thread = created.thread
+            await asyncio.to_thread(store.update, "capper_forum_notices", {"thread_id": str(thread.id)},
+                                    {"forum_channel_id": str(forum.id)})
+        else:
+            if notice["thread_id"] == "sending":
+                raise RuntimeError("Submission notice delivery is uncertain. Link its verified thread ID before retrying.")
+            thread = await self.publisher.resolve_channel(int(notice["thread_id"]), "submission notice", required=True)
+            if not isinstance(thread, discord.Thread) or thread.parent_id != forum.id:
+                raise RuntimeError("Saved submission notice is outside the configured forum.")
+            message = await thread.fetch_message(thread.id)
+            if message.author.id != self.bot.user.id:
+                raise RuntimeError("Submission notice is not bot-owned.")
+            if thread.archived:
+                thread = await thread.edit(archived=False, reason="Maintain capper submission notice")
+            if message.content != SUBMISSION_NOTICE:
+                await message.edit(content=SUBMISSION_NOTICE, allowed_mentions=discord.AllowedMentions.none())
+        if not thread.flags.pinned:
+            await thread.edit(pinned=True, reason="Keep privacy and submission rules visible before upload")
 
     @commands.Cog.listener()
     async def on_disconnect(self) -> None:
@@ -191,6 +267,73 @@ class CapperSlipReviews(commands.Cog):
     @commands.Cog.listener()
     async def on_resumed(self) -> None:
         self.needs_reconciliation = True
+        await self.scan_slips.coro(self)
+
+    async def queue_intake(self, thread_id: int) -> None:
+        if thread_id in self.queued_ids or thread_id in self.intake_ids or self.publisher.get_testing():
+            return
+        try:
+            self.intake_queue.put_nowait(thread_id)
+            self.queued_ids.add(thread_id)
+        except asyncio.QueueFull:
+            logger.error("slip_intake_queue_full thread=%s", thread_id)
+            await self.publisher.staff_alert(
+                "slip_intake_queue", "Slip intake queue is full. Five-minute reconciliation will recover missed posts.",
+            )
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread) -> None:
+        if thread.guild.id == GUILD_ID and thread.parent_id == CAPPER_BALLOT_CHANNEL_ID:
+            await self.queue_intake(thread.id)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if (not message.author.bot and isinstance(message.channel, discord.Thread)
+                and message.guild is not None and message.guild.id == GUILD_ID
+                and message.channel.parent_id == CAPPER_BALLOT_CHANNEL_ID
+                and message.id == message.channel.id):
+            await self.queue_intake(message.id)
+
+    @commands.Cog.listener()
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        if payload.guild_id == GUILD_ID and payload.message_id == payload.channel_id:
+            channel = self.bot.get_channel(payload.channel_id)
+            if isinstance(channel, discord.Thread) and channel.parent_id == CAPPER_BALLOT_CHANNEL_ID:
+                await self.queue_intake(channel.id)
+
+    @tasks.loop(seconds=1)
+    async def intake_worker(self) -> None:
+        async def consume(thread_id: int) -> None:
+            try:
+                if self.publisher.get_testing() or not self.submission_notice_ready:
+                    return
+                if await asyncio.to_thread(self.store.find, thread_id, columns="message_id"):
+                    return
+                thread = await self.publisher.resolve_channel(thread_id, "capper intake thread", required=True)
+                if (not isinstance(thread, discord.Thread) or thread.guild.id != GUILD_ID
+                        or thread.parent_id != CAPPER_BALLOT_CHANNEL_ID):
+                    raise RuntimeError("Queued slip is outside the configured forum.")
+                await self.discover_thread(await self.channel(), thread)
+            except discord.NotFound:
+                logger.info("slip_intake_thread_deleted thread=%s", thread_id)
+            except Exception as exc:
+                logger.exception("slip_event_intake_failed thread=%s", thread_id)
+                await self.publisher.staff_alert("slip_event_intake", f"Slip intake failed: {str(exc)[:1500]}")
+            finally:
+                self.queued_ids.discard(thread_id)
+                self.intake_queue.task_done()
+
+        batch = []
+        for _ in range(2):
+            try:
+                batch.append(self.intake_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        await asyncio.gather(*(consume(thread_id) for thread_id in batch))
+
+    @intake_worker.before_loop
+    async def before_intake_worker(self) -> None:
+        await self.bot.wait_until_ready()
 
     @staticmethod
     def source_channel_id(row: dict) -> int:
@@ -202,7 +345,7 @@ class CapperSlipReviews(commands.Cog):
 
     async def channel(self, row: dict | None = None):
         channel_id = self.source_channel_id(row) if row is not None else CAPPER_BALLOT_CHANNEL_ID
-        channel = await self.publisher.resolve_channel(
+        channel = await self.checked_forum.resolve() if channel_id == CAPPER_BALLOT_CHANNEL_ID else await self.publisher.resolve_channel(
             channel_id, "CAPPER_BALLOT_CHANNEL_ID", required=True,
         )
         if channel.guild.id != GUILD_ID:
@@ -218,10 +361,58 @@ class CapperSlipReviews(commands.Cog):
                 channel = await channel.edit(archived=False, reason="Resume saved capper slip review")
         return channel
 
-    async def forum_threads(self, forum: discord.ForumChannel) -> list[discord.Thread]:
-        active = await forum.guild.active_threads()
+    async def health_report(self, *, starting: bool = False) -> list[str]:
+        report = []
+        for name in ("message_content", "members", "guilds", "guild_messages", "guild_reactions"):
+            enabled = getattr(self.bot.intents, name)
+            report.append(f"{'OK' if enabled else 'FAIL'} Gateway intent: {name}")
+        for label, checker in (("Ballot forum", self.checked_forum), ("Private records forum", self.records.checked_forum)):
+            try:
+                await checker.resolve(force=True)
+                report.append(f"OK {label}: access and permissions")
+            except Exception:
+                logger.exception("bot_health_forum_failed target=%s", label)
+                report.append(f"FAIL {label}: check bot logs for permission/privacy details")
+        try:
+            state = await asyncio.to_thread(self.store.rpc, "capper_review_health")
+            report.append(f"OK DB compatibility schema v{state['version']}; pending={state['pending']}, "
+                          f"interrupted={state['interrupted']}, record jobs={state['record_jobs']}")
+            if state["interrupted"] or state["uncertain_records"]:
+                report.append(f"FAIL Staff reconciliation required: interrupted={state['interrupted']}; "
+                              f"uncertain records/notices={state['uncertain_records']}")
+        except Exception:
+            logger.exception("bot_health_database_failed")
+            report.append("FAIL Database/schema readiness: apply the compatibility migration and check bot logs")
+        for name in ("scan_slips", "process_reviews", "intake_worker", "daily_cleanup", "refresh_records"):
+            loop = getattr(self, name)
+            report.append(f"{'FAIL' if loop.failed() else 'OK' if loop.is_running() else 'WAIT' if starting else 'FAIL'} Worker {name}")
+        if not starting:
+            report.append(f"{'OK' if self.submission_notice_ready else 'FAIL'} Submission privacy notice")
+        report.append(f"Testing mode: {'enabled (intake/publication paused)' if self.publisher.get_testing() else 'disabled'}")
+        report.append(f"Intake queue: {self.intake_queue.qsize()}/100; in-flight={len(self.intake_ids)}")
+        report.append("Portal privileged-intent toggles require manual verification; this reports requested intents only.")
+        return report
+
+    @app_commands.command(name="bot_health", description="Staff: inspect Discord permissions, database and review workers")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    async def health_command(self, interaction: discord.Interaction) -> None:
+        if (interaction.guild_id != GUILD_ID or interaction.guild is None or not isinstance(interaction.user, discord.Member)
+                or not (interaction.user.id == interaction.guild.owner_id or interaction.user.guild_permissions.manage_guild)):
+            await interaction.response.send_message("Only server management can inspect bot health.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        report = await self.health_report()
+        await interaction.followup.send("\n".join(report)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    async def forum_threads(
+        self, forum: discord.ForumChannel, *, since: datetime | None = None,
+    ) -> list[discord.Thread]:
+        active = forum.threads
         threads = {thread.id: thread for thread in active if thread.parent_id == forum.id}
         async for thread in forum.archived_threads(limit=None):
+            if since is not None and thread.archive_timestamp is not None and thread.archive_timestamp < since:
+                break
             threads[thread.id] = thread
         return list(threads.values())
 
@@ -273,24 +464,45 @@ class CapperSlipReviews(commands.Cog):
 
     async def discover(self, channel) -> None:
         if isinstance(channel, discord.ForumChannel):
+            scanned_at = datetime.now(timezone.utc)
             scan = await asyncio.to_thread(self.store.scan_state)
-            for thread in await self.forum_threads(channel):
-                if thread.id in self.intake_ids or await asyncio.to_thread(self.store.find, thread.id, columns="message_id"):
+            threads = await self.forum_threads(channel, since=review_time(scan.get("forum_scanned_at") or scan["started_at"]))
+            listed = {thread.id for thread in threads}
+            failed = False
+            for thread_id in await asyncio.to_thread(self.store.invalid_ids, channel.id):
+                if thread_id in listed:
                     continue
-                message = await thread.fetch_message(thread.id)
-                if message.created_at < review_time(scan["started_at"]) or message.author.bot:
+                try:
+                    thread = await channel.guild.fetch_channel(thread_id)
+                except discord.NotFound:
+                    logger.info("invalid_slip_thread_deleted thread=%s", thread_id)
+                    await asyncio.to_thread(self.store.retire_invalid, thread_id)
                     continue
-                member = channel.guild.get_member(message.author.id) or await channel.guild.fetch_member(message.author.id)
-                if not self.publisher.is_tracked_operator(member):
+                except discord.HTTPException:
+                    failed = True
+                    logger.exception("invalid_slip_thread_inaccessible thread=%s", thread_id)
+                    await self.publisher.staff_alert(
+                        f"slip_discovery:{thread_id}", f"Cannot access invalid slip post {thread_id}; check its permissions and bot logs.",
+                    )
                     continue
-                images = [item for item in message.attachments if (item.content_type or "").startswith("image/")]
-                if not images:
+                if isinstance(thread, discord.Thread) and thread.parent_id == channel.id:
+                    threads.append(thread)
+            known = await asyncio.to_thread(self.store.known_ids, [thread.id for thread in threads])
+            for thread in threads:
+                if thread.id in self.intake_ids or thread.id in known:
                     continue
-                if thread.locked:
-                    raise RuntimeError(f"New slip thread {thread.id} is locked; staff must unlock it.")
-                if thread.archived:
-                    await thread.edit(archived=False, reason="Prepare capper slip confirmation")
-                await self.intake(message, images)
+                try:
+                    await self.discover_thread(channel, thread, since=review_time(scan["started_at"]))
+                except discord.NotFound:
+                    logger.info("slip_discovery_thread_deleted thread=%s", thread.id)
+                except Exception as exc:
+                    failed = True
+                    logger.exception("slip_discovery_post_failed thread=%s", thread.id)
+                    await self.publisher.staff_alert(
+                        f"slip_discovery:{thread.id}", f"Slip post {thread.id} could not be reconciled: {str(exc)[:1500]}",
+                    )
+            if not failed:
+                await asyncio.to_thread(self.store.advance_forum, scanned_at)
             return
         scan = await asyncio.to_thread(self.store.scan_state)
         after = discord.Object(id=int(scan["last_message_id"])) if scan["last_message_id"] else review_time(scan["started_at"])
@@ -307,17 +519,60 @@ class CapperSlipReviews(commands.Cog):
                     await self.intake(message, images)
             await asyncio.to_thread(self.store.advance, message.id)
 
+    async def discover_thread(self, forum, thread, *, since: datetime | None = None) -> None:
+        if since is None:
+            scan = await asyncio.to_thread(self.store.scan_state)
+            since = review_time(scan["started_at"])
+        message = await thread.fetch_message(thread.id)
+        if message.created_at < since or message.author.bot:
+            return
+        member = forum.guild.get_member(message.author.id) or await forum.guild.fetch_member(message.author.id)
+        if not self.publisher.is_tracked_operator(member):
+            return
+        images = [item for item in message.attachments if (item.content_type or "").startswith("image/")]
+        if not images:
+            await self.reject_intake(message, "Attach one readable slip image to the opening post.")
+            return
+        if thread.locked:
+            raise RuntimeError(f"New slip thread {thread.id} is locked; staff must unlock it.")
+        if thread.archived:
+            await thread.edit(archived=False, reason="Prepare capper slip confirmation")
+        await self.intake(message, images)
+
+    async def reject_intake(self, message, reason: str) -> None:
+        fingerprint = hashlib.sha256(json.dumps({
+            "text": message.content,
+            "edited": message.edited_at.isoformat() if message.edited_at else None,
+            "attachments": [str(item.id) for item in message.attachments],
+        }, sort_keys=True).encode("utf-8")).hexdigest()
+        forum_id = str(message.channel.parent_id) if isinstance(message.channel, discord.Thread) else None
+        if await asyncio.to_thread(self.store.claim_invalid, message.id, fingerprint, reason, forum_id):
+            await message.channel.send(
+                f"<@{message.author.id}>, {reason} Edit this opening post to correct it, or submit a fresh post.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
     async def intake(self, message, images) -> None:
+        if message.id in self.intake_ids:
+            return
         self.intake_ids.add(message.id)
         try:
+            if await asyncio.to_thread(self.store.find, message.id, columns="message_id"):
+                return
             if len(images) != 1:
-                await message.channel.send(
-                    f"<@{message.author.id}>, submit one slip image per message so responses refer to one exact play.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+                await self.reject_intake(message, "Submit one slip image per post so responses refer to one exact play.")
                 return
             image = images[0]
-            suffix = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(image.content_type, "png")
+            try:
+                if not accepted_photo(image):
+                    raise ValueError("Upload one static JPEG, PNG, or WebP of at most 10 MB.")
+                sanitized = await asyncio.to_thread(sanitize_photo, await image.read())
+                if len(sanitized) > message.guild.filesize_limit:
+                    raise ValueError("The processed slip exceeds this server's upload limit. Upload a smaller image.")
+            except ValueError as exc:
+                await self.reject_intake(message, str(exc))
+                return
+            encoded = base64.b64encode(sanitized).decode("ascii")
             review = {
                 "author_id": str(message.author.id), "source_text": message.content,
                 "author_name": str(message.author),
@@ -327,13 +582,13 @@ class CapperSlipReviews(commands.Cog):
                 "source_created_at": message.created_at.isoformat(),
                 "source_edited_at": message.edited_at.isoformat() if message.edited_at else None,
                 "attachment_ids": [str(item.id) for item in message.attachments],
-                "slip_base64": base64.b64encode(await image.read()).decode("ascii"),
-                "image_filename": f"slip-{message.id}.{suffix}",
+                "slip_base64": encoded,
+                "image_filename": f"slip-{message.id}.png",
             }
             if not await asyncio.to_thread(self.store.register, message.id, review):
                 return
             parsed = await asyncio.to_thread(
-                self.publisher.images.extract_play, image.url, message.content,
+                self.publisher.images.extract_play, f"data:image/png;base64,{encoded}", message.content,
                 require_readable=True, allow_missing_odds=True,
             )
             review["parsed"] = parsed
@@ -345,7 +600,11 @@ class CapperSlipReviews(commands.Cog):
             try:
                 async with self.lock:
                     prompt = await message.channel.send(
-                        f"<@{message.author.id}>, confirm [your slip]({message.jump_url}) and set its cutoff.",
+                        f"<@{message.author.id}>, confirm [your slip]({message.jump_url}) and set its cutoff.\n"
+                        "OpenAI reads this slip for inference, not model training by this bot. "
+                        "Crop names, account IDs, balances and barcodes before submitting. Private review evidence "
+                        "expires 365 days after review and bet resolution; bet/result summaries remain. "
+                        "Contact the server owner for deletion requests.",
                         embed=review_embed(row), view=review_view(message.id, draft=True), file=file,
                         allowed_mentions=discord.AllowedMentions(users=[message.author], roles=False, everyone=False),
                     )
@@ -594,6 +853,7 @@ class CapperSlipReviews(commands.Cog):
                 or interaction.user.bot or self.publisher.get_testing()
             ):
                 raise ValueError("This review control is not available here.")
+            await interaction.response.defer(ephemeral=True)
             message_id, action = int(match[1]), match[2]
             row = await asyncio.to_thread(self.store.get, message_id)
             self.check_review_channel(interaction.channel_id, row)
@@ -604,9 +864,12 @@ class CapperSlipReviews(commands.Cog):
             if action == "confirm":
                 if str(interaction.user.id) != row["review"]["author_id"] or row["cutoff_at"] is not None:
                     raise ValueError("Only the author can confirm an unopened review.")
-                await interaction.response.send_modal(SlipConfirmation(self, row))
+                await interaction.followup.send(
+                    "Your confirmation form is ready. This button expires in 3 minutes.",
+                    view=PreparedModalView(interaction.user.id, lambda: SlipConfirmation(self, row)),
+                    ephemeral=True,
+                )
                 return
-            await interaction.response.defer(ephemeral=True)
             async with self.review_lock(message_id):
                 row = await asyncio.to_thread(self.store.get, message_id)
                 if row["state"] != "pending":
@@ -635,13 +898,17 @@ class CapperSlipReviews(commands.Cog):
             send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
             await send(f"Review action not accepted: {str(exc)[:1000]}", ephemeral=True)
 
-    @tasks.loop(seconds=15)
+    @tasks.loop(minutes=5)
     async def scan_slips(self) -> None:
         if self.publisher.get_testing() or not self.bot.is_ready():
             return
         try:
-            await self.discover(await self.channel())
+            async with self.scan_lock:
+                await self.ensure_submission_notice()
+                self.submission_notice_ready = True
+                await self.discover(await self.channel())
         except Exception as exc:
+            self.submission_notice_ready = False
             logger.exception("slip_intake_scan_failed")
             await self.publisher.staff_alert("slip_intake_scan", f"Slip intake failed: {str(exc)[:1500]}")
 
@@ -664,6 +931,10 @@ class CapperSlipReviews(commands.Cog):
             except Exception as exc:
                 await self.fail(message_id, str(exc))
 
+    async def bounded_process_row(self, channel, row: dict) -> None:
+        async with self.processing_slots:
+            await self.process_row(channel, row)
+
     @tasks.loop(seconds=15)
     async def process_reviews(self) -> None:
         if self.publisher.get_testing():
@@ -678,7 +949,7 @@ class CapperSlipReviews(commands.Cog):
                     await self.process_row(channel, row, reconcile=True)
                 self.needs_reconciliation = False
             results = await asyncio.gather(*(
-                self.process_row(channel, row) for row in await asyncio.to_thread(self.store.pending)
+                self.bounded_process_row(channel, row) for row in await asyncio.to_thread(self.store.pending)
             ), return_exceptions=True)
             for result in results:
                 if isinstance(result, BaseException):
@@ -731,6 +1002,7 @@ class CapperSlipReviews(commands.Cog):
                                     continue
                                 await self.records.save(thread, row)
                                 await thread.delete(reason="Recorded completed capper review; daily 3 AM Eastern cleanup")
+                                await asyncio.to_thread(self.records.store.source_deleted, str(row["message_id"]))
                             except Exception as exc:
                                 logger.exception("capper_forum_cleanup_failed thread=%s", thread.id)
                                 await self.publisher.staff_alert(

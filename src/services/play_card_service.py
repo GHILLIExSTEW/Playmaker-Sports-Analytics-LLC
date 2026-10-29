@@ -348,6 +348,9 @@ class PlayCardService:
             if badge is not None:
                 assets = {**assets, "badge_base64": base64.b64encode(badge).decode("ascii"), "badge_label": label}
                 await asyncio.to_thread(self.db.upsert, "play_card_assets", assets, ["play_id"])
+                assets = await asyncio.to_thread(self.load, int(play["id"]))
+                if assets is None:
+                    raise RuntimeError("Updated play-card artwork could not be read back.")
         if assets is None:
             if slip is None and source is not None:
                 attachment = next((item for item in source.attachments if (item.content_type or "").startswith("image/")), None)
@@ -385,6 +388,9 @@ class PlayCardService:
                 "badge_base64": base64.b64encode(badge).decode("ascii"), "badge_label": label,
             }
             await asyncio.to_thread(self.db.upsert, "play_card_assets", assets, ["play_id"])
+            assets = await asyncio.to_thread(self.load, int(play["id"]))
+            if assets is None:
+                raise RuntimeError("Saved play-card artwork could not be read back.")
         output = await asyncio.to_thread(
             render_play_card, play,
             base64.b64decode(assets["slip_base64"], validate=True) if assets["slip_base64"] else None,

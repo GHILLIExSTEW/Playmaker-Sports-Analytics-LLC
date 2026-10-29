@@ -83,6 +83,100 @@ test('forum record mappings are private, preserve legacy channel context, and ex
   await db.exec('reset role')
 })
 
+async function compatibilitySetup(t) {
+  const db = await setup(t)
+  await db.exec(`alter table public.plays add column ballot_message_id text unique,
+    add column status text, add column odds integer, add column message_id text;
+    create table public.play_card_assets(play_id bigint primary key, slip_base64 text);
+    create table public.operator_user_guide_content(html text);
+    insert into public.operator_user_guide_content values('<html><body>Existing guide</body></html>');
+    update capper_ballots set state='rejected' where message_id='500';`)
+  for (const name of ['20261028000000_capper_forum_records.sql', '20261029000000_discord_compatibility.sql']) {
+    await db.exec(await readFile(new URL(`../../supabase/migrations/${name}`, import.meta.url), 'utf8'))
+  }
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261029010000_discord_compatibility_guide.sql', import.meta.url), 'utf8'))
+  assert.match((await db.query('select html from operator_user_guide_content')).rows[0].html, /365 days/)
+  await db.exec(`insert into capper_review_record_days values('2026-10-28','1565170427851047053','700');
+    insert into capper_review_records(message_id,record_date,record_message_id,source_checked_at)
+      values('500','2026-10-28','900',now());`)
+  return db
+}
+
+test('invalid intake is durably claimed once per source fingerprint and stays private', async (t) => {
+  const db = await compatibilitySetup(t)
+  const claim = async (fingerprint) => (await db.query(
+    "select claim_invalid_capper_slip('600',$1,'One image only','1565167115726618686') as claimed", [fingerprint],
+  )).rows[0].claimed
+  assert.equal(await claim('original'), true)
+  assert.equal(await claim('original'), false)
+  assert.equal(await claim('edited'), true)
+  assert.equal(await claim('edited'), false)
+  for (const role of ['anon', 'authenticated']) {
+    await db.exec(`set role ${role}`)
+    await assert.rejects(claim('private'), /permission denied/)
+    for (const table of ['capper_invalid_slips', 'capper_invalid_slip_work', 'capper_forum_notices', 'capper_review_record_work']) {
+      await assert.rejects(db.query(`select * from ${table}`), /permission denied/)
+    }
+    await assert.rejects(db.query('select capper_review_health()'), /permission denied/)
+    await db.exec('reset role')
+  }
+  await db.exec('set role service_role')
+  assert.equal((await db.query('select capper_review_health() as health')).rows[0].health.version, 1)
+  await db.exec('reset role')
+})
+
+test('record refresh is revision-driven, corrections/reopens requeue, and stale acknowledgments never lose work', async (t) => {
+  const db = await compatibilitySetup(t)
+  const work = async () => (await db.query('select * from capper_review_record_work')).rows
+  const complete = async (revision) => (await db.query(
+    "select complete_capper_record_refresh('500',$1,'Summary',false) as saved", [revision],
+  )).rows[0].saved
+  assert.equal((await work()).length, 1)
+  assert.equal(await complete(0), true)
+  assert.equal((await work()).length, 0)
+  await db.exec("update plays set ballot_message_id='500',status='open',odds=100,message_id='800' where id=1")
+  assert.equal((await work())[0].evidence_eligible_at, null)
+  assert.equal(await complete(0), false)
+  assert.equal(await complete(1), true)
+  assert.equal((await work()).length, 0)
+  await db.exec("update plays set status='win' where id=1")
+  assert.notEqual((await work())[0].evidence_eligible_at, null)
+  assert.equal(await complete(2), true)
+  await db.exec("update plays set status='loss' where id=1")
+  assert.equal((await work())[0].play.status, 'loss')
+  assert.equal(await complete(2), false)
+  assert.equal(await complete(3), true)
+  await db.exec("update plays set status='open' where id=1")
+  assert.equal((await work())[0].evidence_eligible_at, null)
+})
+
+test('365-day expiry preserves summaries, protects unresolved/unverified sources, and scrubs only evidence', async (t) => {
+  const db = await compatibilitySetup(t)
+  const expire = async () => {
+    await db.query("select begin_capper_evidence_expiry('500',0)")
+    return db.query("select complete_capper_record_refresh('500',0,'Bet summary',true)")
+  }
+  await assert.rejects(expire(), /must be preserved/)
+  await db.exec(`update capper_review_records set source_deleted_at=now(),
+    evidence_eligible_at=now() - interval '365 days' + interval '1 minute'`)
+  await assert.rejects(expire(), /must be preserved/)
+  await db.exec("update capper_review_records set evidence_eligible_at=now() - interval '366 days'")
+  await expire()
+  const row = (await db.query("select * from capper_ballots where message_id='500'")).rows[0]
+  assert.equal(row.review.slip_base64, undefined)
+  assert.equal(row.review.source_text, undefined)
+  assert.equal(row.review.author_id, '42')
+  assert.equal(row.review.parsed.legs[0].selection, 'Wolves ML')
+  assert.notEqual((await db.query('select evidence_removed_at from capper_review_records')).rows[0].evidence_removed_at, null)
+  assert.equal((await db.query('select * from capper_review_record_work')).rows.length, 0)
+  await db.exec("update plays set ballot_message_id='500',status='win',odds=100,message_id='800' where id=1")
+  await db.exec("insert into play_card_assets values(1,'must not be restored')")
+  assert.equal((await db.query('select slip_base64 from play_card_assets')).rows[0].slip_base64, null)
+  await db.exec("update plays set ballot_message_id='500',status='open',odds=100,message_id='800' where id=1")
+  await db.exec("update capper_review_records set evidence_removed_at=null, evidence_eligible_at=now() - interval '366 days'")
+  await assert.rejects(db.query("select complete_capper_record_refresh('500',2,'Summary',true)"), /must be preserved/)
+})
+
 test('author plus one supporter qualifies despite three missing responses, at 1u only at cutoff', async (t) => {
   const db = await setup(t)
   assert.equal(await respond(db, 43, 'yes_add'), 'saved')

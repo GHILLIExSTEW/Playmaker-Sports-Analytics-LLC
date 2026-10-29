@@ -1,13 +1,18 @@
 import asyncio
+import base64
+import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from io import BytesIO
+from PIL import Image
 
 import pytest
 import discord
 
 import src.capper_slip_reviews as module
+import src.forum_health as health
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.slip_review_service import (
@@ -33,6 +38,7 @@ def saved_row():
 
 def make_cog(monkeypatch):
     monkeypatch.setattr(module, "GUILD_ID", 123)
+    monkeypatch.setattr(health, "GUILD_ID", 123)
     channel = SimpleNamespace(
         id=module.CAPPER_BALLOT_CHANNEL_ID, guild=SimpleNamespace(id=123),
         fetch_message=AsyncMock(), send=AsyncMock(), purge=AsyncMock(),
@@ -41,7 +47,8 @@ def make_cog(monkeypatch):
                              edit=AsyncMock(), add_reaction=AsyncMock(), clear_reactions=AsyncMock())
     channel.fetch_message.return_value = prompt
     store = Mock(get=Mock(return_value=saved_row()), finalize=Mock(return_value=None),
-                 pending=Mock(return_value=[]), interrupted=Mock(return_value=[]))
+                 pending=Mock(return_value=[]), interrupted=Mock(return_value=[]),
+                 find=Mock(return_value=None), known_ids=Mock(return_value=set()), invalid_ids=Mock(return_value=[]))
     cog = CapperSlipReviews(
         Mock(user=SimpleNamespace(id=1), is_ready=Mock(return_value=True)), store=store,
         official=Mock(), resolve_channel=AsyncMock(return_value=channel), is_tracked_operator=Mock(return_value=True),
@@ -50,6 +57,7 @@ def make_cog(monkeypatch):
         request_insight=AsyncMock(return_value=True),
     )
     cog.needs_reconciliation = False
+    cog.submission_notice_ready = True
     cog.valid_source = AsyncMock(return_value=True)
     cog.publisher.publish_approved = AsyncMock(return_value={"play_id": 7})
     return cog, channel, prompt
@@ -288,21 +296,224 @@ def test_cleanup_preserves_active_and_interrupted_messages(monkeypatch):
 def test_intake_keeps_private_original_and_displays_slip_on_review_message(monkeypatch):
     async def check():
         cog, channel, _ = make_cog(monkeypatch)
-        image = SimpleNamespace(id=700, content_type="image/jpeg", url="https://cdn/slip", read=AsyncMock(return_value=b"slip"))
+        raw = BytesIO()
+        Image.new("RGB", (10, 10), "white").save(raw, format="JPEG")
+        image = SimpleNamespace(id=700, size=len(raw.getvalue()), content_type="image/jpeg",
+                                url="https://cdn/slip", read=AsyncMock(return_value=raw.getvalue()))
         source = SimpleNamespace(
             id=500, author=SimpleNamespace(id=42), content="Wolves ML", attachments=[image],
             edited_at=None, channel=channel, jump_url="https://discord.com/channels/123/100/500",
             created_at=datetime.now(timezone.utc),
+            guild=SimpleNamespace(filesize_limit=10 * 1024 * 1024),
         )
         cog.publisher.images.extract_play.return_value = {"legs": [{"selection": "Wolves ML", "odds": 100}]}
         channel.send.return_value = SimpleNamespace(id=900)
         await cog.intake(source, [image])
         review = cog.store.register.call_args.args[1]
-        assert review["slip_base64"] == "c2xpcA=="
+        assert base64.b64decode(review["slip_base64"]).startswith(b"\x89PNG")
+        assert cog.publisher.images.extract_play.call_args.args[0] == "data:image/png;base64," + review["slip_base64"]
         sent = channel.send.call_args.kwargs
-        assert sent["file"].filename == "slip-500.jpg"
-        assert sent["embed"].image.url == "attachment://slip-500.jpg"
+        assert sent["file"].filename == "slip-500.png"
+        assert sent["embed"].image.url == "attachment://slip-500.png"
         cog.store.update_review.assert_called_with(500, review_message_id="900")
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("action", ["pass", "cancel", "confirm"])
+def test_controls_acknowledge_before_slow_database_and_prepare_modal_safely(monkeypatch, action):
+    async def check():
+        cog, _, prompt = make_cog(monkeypatch)
+        row = saved_row()
+        if action == "confirm":
+            row["cutoff_at"] = None
+        acknowledged = []
+        started = time.monotonic()
+        request = SimpleNamespace(
+            data={"custom_id": f"pm:sr:500:{action}"}, guild_id=123,
+            channel_id=module.CAPPER_BALLOT_CHANNEL_ID, message=prompt,
+            user=SimpleNamespace(id=42, bot=False),
+            response=SimpleNamespace(defer=AsyncMock(side_effect=lambda **_: acknowledged.append(time.monotonic())),
+                                     is_done=lambda: bool(acknowledged)),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        def lookup(_):
+            assert acknowledged, "Database work must never precede the initial response"
+            if cog.store.get.call_count == 1:
+                time.sleep(3.1)
+            return row
+
+        cog.store.get.side_effect = lookup
+        cog.store.respond.return_value = "saved"
+        cog.evaluate = AsyncMock()
+        prompt.remove_reaction = AsyncMock()
+        await cog.on_interaction(request)
+        assert acknowledged[0] - started < 1
+        request.response.defer.assert_awaited_once_with(ephemeral=True)
+        if action == "confirm":
+            view = request.followup.send.call_args.kwargs["view"]
+            fresh = SimpleNamespace(user=request.user, response=SimpleNamespace(send_modal=AsyncMock()))
+            await view.open_form.callback(fresh)
+            assert isinstance(fresh.response.send_modal.call_args.args[0], SlipConfirmation)
+    asyncio.run(check())
+
+
+def test_invalid_intake_warns_once_across_restart_but_reconsiders_edits(monkeypatch):
+    async def check():
+        cog, channel, _ = make_cog(monkeypatch)
+        saved = {}
+
+        def claim(message_id, fingerprint, reason, forum_id):
+            changed = saved.get(message_id) != fingerprint
+            saved[message_id] = fingerprint
+            return changed
+
+        cog.store.claim_invalid.side_effect = claim
+        images = [SimpleNamespace(id=700), SimpleNamespace(id=701)]
+        source = SimpleNamespace(id=500, author=SimpleNamespace(id=42), content="", edited_at=None,
+                                 attachments=images, channel=channel)
+        await cog.intake(source, images)
+        await cog.intake(source, images)
+        assert channel.send.await_count == 1
+        restarted, restarted_channel, _ = make_cog(monkeypatch)
+        restarted.store.claim_invalid.side_effect = claim
+        source.channel = restarted_channel
+        await restarted.intake(source, images)
+        restarted_channel.send.assert_not_awaited()
+        source.content = "edited submission"
+        source.edited_at = datetime.now(timezone.utc)
+        await restarted.intake(source, images)
+        restarted_channel.send.assert_awaited_once()
+        cog.store.register.assert_not_called()
+    asyncio.run(check())
+
+
+def test_gateway_queue_is_bounded_deduplicated_and_reconciliation_is_slower(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread()
+        cog.checked_forum.resolve = AsyncMock(return_value=forum)
+        cog.publisher.resolve_channel.return_value = thread
+        cog.discover_thread = AsyncMock()
+        await cog.on_thread_create(thread)
+        await cog.on_thread_create(thread)
+        assert cog.intake_queue.qsize() == 1
+        await cog.intake_worker.coro(cog)
+        cog.discover_thread.assert_awaited_once_with(forum, thread)
+        assert not cog.queued_ids and cog.intake_queue.empty()
+        for value in range(1000, 1101):
+            await cog.queue_intake(value)
+        assert cog.intake_queue.qsize() == 100
+        cog.publisher.staff_alert.assert_awaited_once()
+        assert cog.scan_slips.minutes == 5
+    asyncio.run(check())
+
+
+def test_invalid_archived_post_is_rechecked_after_reconnect_cursor(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread()
+        forum.guild.fetch_channel = AsyncMock(return_value=thread)
+        cog.store.scan_state.return_value = {
+            "started_at": "2026-01-01T00:00:00+00:00", "forum_scanned_at": "2026-10-28T00:00:00+00:00",
+        }
+        cog.store.invalid_ids.return_value = [500]
+        cog.forum_threads = AsyncMock(return_value=[])
+        cog.discover_thread = AsyncMock()
+        await cog.discover(forum)
+        cog.discover_thread.assert_awaited_once()
+        cog.store.advance_forum.assert_called_once()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("kind", ["oversized", "gif", "invalid-bytes", "guild-limit"])
+def test_invalid_photos_never_reach_openai_or_register(monkeypatch, kind):
+    async def check():
+        cog, channel, _ = make_cog(monkeypatch)
+        raw = BytesIO()
+        Image.new("RGB", (10, 10), "white").save(raw, format="PNG")
+        image = SimpleNamespace(
+            id=700, size=11 * 1024 * 1024 if kind == "oversized" else len(raw.getvalue()),
+            content_type="image/gif" if kind == "gif" else "image/png",
+            read=AsyncMock(return_value=b"not an image" if kind == "invalid-bytes" else raw.getvalue()),
+        )
+        source = SimpleNamespace(id=500, author=SimpleNamespace(id=42), content="", edited_at=None,
+                                 attachments=[image], channel=channel,
+                                 guild=SimpleNamespace(filesize_limit=1 if kind == "guild-limit" else 10 * 1024 * 1024))
+        await cog.intake(source, [image])
+        cog.store.register.assert_not_called()
+        cog.publisher.images.extract_play.assert_not_called()
+        cog.store.claim_invalid.assert_called_once()
+        channel.send.assert_awaited_once()
+    asyncio.run(check())
+
+
+def test_submission_notice_uncertainty_never_creates_a_duplicate(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum = forum_channel()
+        cog.checked_forum.resolve = AsyncMock(return_value=forum)
+        select = Mock(return_value=SimpleNamespace(data=[{"thread_id": "sending"}]))
+        monkeypatch.setattr(module.supabase_service, "select", select)
+        forum.create_thread = AsyncMock()
+        with pytest.raises(RuntimeError, match="uncertain"):
+            await cog.ensure_submission_notice()
+        forum.create_thread.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_health_is_staff_only_and_reports_failures_without_sends_or_mutation(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        request = SimpleNamespace(guild_id=123, guild=SimpleNamespace(owner_id=99),
+                                  user=SimpleNamespace(id=42),
+                                  response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+                                  followup=SimpleNamespace(send=AsyncMock()))
+        cog.health_report = AsyncMock(return_value=["FAIL Database readiness"])
+        await cog.health_command.callback(cog, request)
+        cog.health_report.assert_not_awaited()
+        request.response.send_message.assert_awaited_once()
+        member = Mock(spec=discord.Member)
+        member.id, member.guild_permissions = 99, discord.Permissions.all()
+        request.user = member
+        await cog.health_command.callback(cog, request)
+        request.response.defer.assert_awaited_once_with(ephemeral=True)
+        assert request.followup.send.call_args.args[0] == "FAIL Database readiness"
+        cog.store.register.assert_not_called()
+        cog.publisher.publish_approved.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_one_failed_post_never_blocks_other_posts_or_advances_recovery_cursor(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, first, second = forum_channel(), review_thread(), review_thread(501)
+        cog.store.scan_state.return_value = {"started_at": "2026-01-01T00:00:00+00:00"}
+        cog.forum_threads = AsyncMock(return_value=[first, second])
+        cog.discover_thread = AsyncMock(side_effect=[RuntimeError("locked post"), None])
+        await cog.discover(forum)
+        assert cog.discover_thread.await_count == 2
+        cog.store.advance_forum.assert_not_called()
+        cog.publisher.staff_alert.assert_awaited_once()
+    asyncio.run(check())
+
+
+def test_health_report_distinguishes_database_and_stopped_workers_without_side_effects(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.bot.intents = discord.Intents.all()
+        cog.checked_forum.resolve = AsyncMock()
+        cog.records.checked_forum.resolve = AsyncMock()
+        cog.store.rpc.return_value = {
+            "version": 1, "pending": 2, "interrupted": 0, "record_jobs": 3, "uncertain_records": 1,
+        }
+        report = await cog.health_report()
+        assert any("schema v1; pending=2" in line for line in report)
+        assert any(line.startswith("FAIL Staff reconciliation") for line in report)
+        assert "FAIL Worker intake_worker" in report
+        assert any("Portal" in line for line in report)
+        cog.store.register.assert_not_called()
+        cog.publisher.staff_alert.assert_not_awaited()
     asyncio.run(check())
 
 
@@ -341,8 +552,15 @@ def test_review_reactions_do_not_dispatch_settlement_and_ignore_other_channels(m
 def forum_channel():
     forum = Mock(spec=discord.ForumChannel)
     forum.id = module.CAPPER_BALLOT_CHANNEL_ID
-    forum.guild = SimpleNamespace(id=123, default_role=Mock(), get_member=Mock(return_value=SimpleNamespace(id=42)))
-    forum.permissions_for.return_value = SimpleNamespace(view_channel=False)
+    default = SimpleNamespace(id=0, permissions=discord.Permissions.none(), is_bot_managed=lambda: False)
+    capper = SimpleNamespace(id=module.TRACKER_ROLE_ID, permissions=discord.Permissions.none(), is_bot_managed=lambda: False)
+    forum.guild = SimpleNamespace(id=123, default_role=default, me=SimpleNamespace(id=1), owner_id=99,
+                                  roles=[default, capper], get_role=lambda _: capper, chunked=False,
+                                  get_member=Mock(return_value=SimpleNamespace(id=42)))
+    forum.permissions_for.return_value = discord.Permissions.none()
+    forum.permissions_for.side_effect = lambda target: forum.permissions_for.return_value if target is default else discord.Permissions.all()
+    forum.flags = SimpleNamespace(require_tag=False)
+    forum.overwrites = {}
     return forum
 
 
@@ -366,6 +584,7 @@ def test_forum_discovery_reads_only_new_starter_slips(monkeypatch):
     )
     cog.store.scan_state.return_value = {"started_at": "2026-01-01T00:00:00+00:00"}
     cog.store.find.side_effect = lambda value, **kwargs: saved_row() if value == 501 else None
+    cog.store.known_ids.return_value = {501}
     cog.forum_threads = AsyncMock(return_value=[thread, known])
     cog.intake = AsyncMock()
     asyncio.run(cog.discover(forum))
@@ -379,7 +598,7 @@ def test_forum_thread_listing_includes_archived_posts_and_filters_other_forums(m
     forum = forum_channel()
     active, archived, other = review_thread(500), review_thread(501), review_thread(502)
     other.parent_id = 999
-    forum.guild.active_threads = AsyncMock(return_value=[active, other])
+    forum.threads = [active, other]
 
     async def history(**kwargs):
         yield archived

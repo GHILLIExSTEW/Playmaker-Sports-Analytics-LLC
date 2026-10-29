@@ -109,6 +109,7 @@ class ImagePlayService:
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": model,
+                "store": False,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": f"{prompt}\nDiscord message text, which may contain units: {message_text or '<none>'}"},
