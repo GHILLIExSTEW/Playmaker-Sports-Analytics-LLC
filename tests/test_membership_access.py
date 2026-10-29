@@ -117,13 +117,58 @@ def test_manual_removal_is_not_undone_by_grandfather_access_or_restart(grandfath
     sync.service.highroller_role_entitlements.assert_called()
 
 
-def test_verified_whop_membership_can_restore_manually_removed_role(grandfather_sync):
+def test_unblocked_new_whop_membership_can_receive_role(grandfather_sync):
     sync, _, members, _ = grandfather_sync
     sync.service.grandfather_captured.return_value = True
     sync.service.highroller_role_entitlements.return_value = ({456}, {123, 456, 789})
     asyncio.run(sync.sync())
     members[1].add_roles.assert_awaited_once()
     members[2].add_roles.assert_not_awaited()
+
+
+def test_sync_publishes_current_roles_before_checking_whop_entitlements(grandfather_sync):
+    sync, _, members, _ = grandfather_sync
+    sync.service.grandfather_captured.return_value = True
+    def entitlements():
+        sync.service.sync_highroller_access.assert_called_once()
+        roster = sync.service.sync_highroller_access.call_args.args[0]
+        assert roster[1] == {"discord_user_id": "456", "has_role": False, "exempt": False}
+        return set(), {123}
+    sync.service.highroller_role_entitlements.side_effect = entitlements
+    asyncio.run(sync.sync())
+    members[1].add_roles.assert_not_awaited()
+    assert sync.service.sync_highroller_access.call_count == 2
+
+
+@pytest.mark.parametrize("has_role,exempt", [(False, False), (True, False), (False, True)])
+def test_live_role_changes_publish_current_state_not_stale_event(grandfather_sync, has_role, exempt):
+    sync, guild, members, _ = grandfather_sync
+    current = members[0]
+    highroller = current.roles[0]
+    current.roles = [highroller] if has_role else []
+    current.guild_permissions.administrator = exempt
+    guild.fetch_member = AsyncMock(return_value=current)
+    event = SimpleNamespace(id=current.id, guild=guild, roles=[])
+    asyncio.run(sync.on_member_update(event, event))
+    sync.service.record_highroller_access.assert_called_once_with(current.id, has_role, exempt)
+
+
+def test_member_leaving_revokes_access_and_blocks_restoration(grandfather_sync):
+    sync, guild, _, _ = grandfather_sync
+    asyncio.run(sync.on_member_remove(SimpleNamespace(id=123, guild=guild)))
+    sync.service.record_highroller_access.assert_called_once_with(123, False, False)
+
+
+def test_roster_failure_prevents_all_role_changes(grandfather_sync):
+    sync, _, members, _ = grandfather_sync
+    sync.service.grandfather_captured.return_value = True
+    sync.service.sync_highroller_access.side_effect = RuntimeError("Database unavailable")
+    with pytest.raises(RuntimeError, match="Database unavailable"):
+        asyncio.run(sync.sync())
+    sync.service.highroller_role_entitlements.assert_not_called()
+    for member in members:
+        member.add_roles.assert_not_awaited()
+        member.remove_roles.assert_not_awaited()
 
 
 @pytest.mark.parametrize("kind", ["bot", "owner", "owner-role", "admin", "capper"])

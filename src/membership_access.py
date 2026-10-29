@@ -22,6 +22,36 @@ class MembershipRoleSync:
         self.guild_id = guild_id
         self.role_id = role_id
         self.service = service or MembershipService()
+        self.lock = asyncio.Lock()
+
+    def member_access_state(self, member, guild) -> dict:
+        return {
+            "discord_user_id": str(member.id),
+            "has_role": not member.bot and any(role.id == self.role_id for role in member.roles),
+            "exempt": not member.bot and self.excluded_from_highroller(member, guild),
+        }
+
+    async def on_member_update(self, before, after) -> None:
+        if after.guild.id != self.guild_id or self.role_id != HIGHROLLER_ROLE_ID:
+            return
+        async with self.lock:
+            try:
+                current = await after.guild.fetch_member(after.id)
+                state = self.member_access_state(current, after.guild)
+                await asyncio.to_thread(
+                    self.service.record_highroller_access, current.id, state["has_role"], state["exempt"],
+                )
+            except discord.NotFound:
+                await asyncio.to_thread(self.service.record_highroller_access, after.id, False, False)
+            except Exception:
+                logger.exception("highroller_access_update_failed member=%s", after.id)
+                raise
+
+    async def on_member_remove(self, member) -> None:
+        if member.guild.id != self.guild_id or self.role_id != HIGHROLLER_ROLE_ID:
+            return
+        async with self.lock:
+            await asyncio.to_thread(self.service.record_highroller_access, member.id, False, False)
 
     @staticmethod
     def excluded_from_highroller(member, guild) -> bool:
@@ -32,6 +62,10 @@ class MembershipRoleSync:
         )
 
     async def sync(self) -> None:
+        async with self.lock:
+            await self.sync_locked()
+
+    async def sync_locked(self) -> None:
         guild = self.bot.get_guild(self.guild_id)
         if guild is None or guild.me is None:
             raise RuntimeError("The configured membership guild is unavailable.")
@@ -46,6 +80,11 @@ class MembershipRoleSync:
         members = [member async for member in guild.fetch_members(limit=None)]
         captured = await self.capture_grandfather(guild, members)
         if self.role_id == HIGHROLLER_ROLE_ID:
+            if not captured:
+                await asyncio.to_thread(
+                    self.service.sync_highroller_access,
+                    [self.member_access_state(member, guild) for member in members],
+                )
             whop_ids, grandfather_ids = await asyncio.to_thread(self.service.highroller_role_entitlements)
         else:
             whop_ids = await asyncio.to_thread(self.service.member_discord_ids)
@@ -65,6 +104,13 @@ class MembershipRoleSync:
                     await member.remove_roles(role, reason="No current membership entitlement")
             except discord.HTTPException:
                 logger.exception("membership_role_update_failed user=%s guild=%s", member.id, guild.id)
+        if self.role_id == HIGHROLLER_ROLE_ID:
+            # Fetch again: discord.py's role API calls do not mutate the fetched Member snapshots.
+            current = [member async for member in guild.fetch_members(limit=None)]
+            await asyncio.to_thread(
+                self.service.sync_highroller_access,
+                [self.member_access_state(member, guild) for member in current],
+            )
 
     async def capture_grandfather(self, guild, members) -> bool:
         if self.role_id != HIGHROLLER_ROLE_ID or datetime.now(timezone.utc) >= GRANDFATHER_END:

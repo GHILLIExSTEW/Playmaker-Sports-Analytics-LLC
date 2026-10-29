@@ -122,8 +122,9 @@ notice check still pauses intake.
 
 ### Legacy HIGHROLLER grace period
 
-Apply `20261029010000_highroller_grandfather.sql` and
-`20261029020000_highroller_role_policy.sql` before restarting the bot.
+Apply `20261029010000_highroller_grandfather.sql`,
+`20261029020000_highroller_role_policy.sql`, and
+`20261029030000_highroller_access_revocation.sql` before restarting the bot.
 The first HIGHROLLER role sync captures every current non-bot server member,
 regardless of their existing roles or Whop enrollment, as authorized October 29,
 2026. Manage Roles is required; audit history is not needed. A failed capture
@@ -138,16 +139,32 @@ Eastern** (05:00 UTC). Subsequent runs cannot enroll new members or extend it.
 Existing owner/team grants remain unchanged. Staff can revoke a grandfather grant
 by deleting its row from `highroller_grandfather_members` using service-only access;
 the immutable capture prevents a later sync from re-enrolling it.
-At expiration, normal paid/trial/team entitlement checks resume.
+At expiration, normal paid/trial/team entitlement checks resume, subject to the
+HIGHROLLER access gate below.
 HIGHROLLER role eligibility is separate: bots, server owner, Owner-role members,
 administrators and cappers (`TRACKER_ROLE_ID`) must not hold HIGHROLLER, even if
 they have independent membership access. A grandfather grant retains an existing
-role but never restores an absent role after the initial capture. Manual removal
-therefore persists across syncs/restarts without revoking website, stats or Vault
-access. Verified Whop paid/trial members may regain the role unless excluded.
+role but never restores an absent role after the initial capture.
 Owner/team access by itself no longer assigns HIGHROLLER.
 Look for `highroller_grandfather_captured` in the journal and use
 `/membership_status` on a recovered account to verify access.
+
+Manual HIGHROLLER removal now revokes ordinary website, stats and Vault access,
+including paid/trial and grandfather entitlements, and persistently blocks automatic
+Whop role restoration. Manually adding HIGHROLLER back clears the block and restores
+otherwise-valid membership access. Cappers and existing owner/admin privileges are
+exempt from the role requirement; exemption does not create owner/research privileges
+or fabricate a paid entitlement. Bots are never exempt.
+
+Role/member gateway updates save current Discord state immediately; the complete
+roster is reconciled every five minutes and after role changes. Missing or older
+than 15-minute role evidence denies member access. Full-roster reconciliation also
+revokes departed members, and persistent blocks survive restarts and fresh Whop
+payments. Existing grandfather members already missing HIGHROLLER at deployment are
+blocked on the first snapshot. Apply the migration and deploy/restart together:
+until the bot publishes a verified roster, ordinary access fails closed.
+Previously displayed browser content cannot be recalled, but subsequent protected
+database requests enforce revocation even if the tab still shows cached membership.
 
 ### Capper ballot acknowledgement
 

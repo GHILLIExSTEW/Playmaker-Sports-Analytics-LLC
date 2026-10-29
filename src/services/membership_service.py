@@ -83,6 +83,22 @@ class MembershipService:
             {int(row["discord_user_id"]) for row in rows if row["source"] == "grandfather"},
         )
 
+    def record_highroller_access(self, member_id: int, has_role: bool, exempt: bool) -> None:
+        result = self.db._execute(lambda: self.db._ensure_client().rpc(
+            "record_highroller_access_state", {
+                "p_discord_user_id": str(member_id), "p_has_role": has_role, "p_exempt": exempt,
+            },
+        ).execute()).data
+        if result is not True:
+            raise RuntimeError("HIGHROLLER access state was not saved.")
+
+    def sync_highroller_access(self, members: list[dict]) -> None:
+        result = self.db._execute(lambda: self.db._ensure_client().rpc(
+            "sync_highroller_access_states", {"p_members": members},
+        ).execute()).data
+        if result is not True:
+            raise RuntimeError("The complete HIGHROLLER access roster was not saved.")
+
     def has_vault_access(self, discord_user_id: int) -> bool:
         return self.has_paid_access(discord_user_id) or self.has_trial_access(discord_user_id)
 

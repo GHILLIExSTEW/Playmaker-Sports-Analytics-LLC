@@ -695,5 +695,53 @@ test(`website member access and current picks enforce server authorization (${ha
     assert.equal((await call(capture, 'service_role'))[0].saved, false)
     await assert.rejects(call('select * from public.member_current_picks()'), /Verified active membership required/)
   })
+  await t.test('HIGHROLLER removal revokes access and blocks paid restoration; manual re-add and capper exemptions work', async () => {
+    await load('../../supabase/migrations/20261029030000_highroller_access_revocation.sql')
+    await db.exec(`
+      update public.highroller_grandfather_members set expires_at='2027-02-01T05:00:00Z';
+      insert into public.whop_memberships
+        (membership_id,discord_user_id,account_id,plan_id,status,paid_from,paid_through,
+         payment_id,paid,cancel_at_period_end,source_updated_at,verified_at,verification_reason)
+      values ('revocation-paid','986001','biz_rCNwfXRlnl0bFU','plan_test','active',now()-interval '1 day',
+        now()+interval '1 day','revocation-payment',true,false,now(),now(),'Revocation test')
+    `)
+    const state = async (hasRole, exempt = false) => call(
+      `select public.record_highroller_access_state('986001',${hasRole},${exempt})`, 'service_role',
+    )
+    const paid = async () => (await call("select public.discord_has_paid_access('986001') as allowed", 'service_role'))[0].allowed
+    const roleRows = async () => call(
+      "select * from public.highroller_role_entitlements('biz_rCNwfXRlnl0bFU',array['plan_test'],array[]::text[])", 'service_role',
+    )
+    // Missing/stale role evidence fails closed, even with fresh payment and grandfather records.
+    assert.equal((await access()).state, 'membership-required')
+    await state(true)
+    assert.equal(await paid(), true)
+    assert.equal((await access()).state, 'active')
+    await call('select * from public.member_current_picks()')
+    await state(false)
+    assert.equal(await paid(), false)
+    assert.equal((await access()).state, 'membership-required')
+    assert.deepEqual(await roleRows(), [])
+    assert.equal((await call("select public.discord_has_paid_plan_access('986001','biz_rCNwfXRlnl0bFU',array['plan_test']) as allowed", 'service_role'))[0].allowed, false)
+    await assert.rejects(call('select * from public.member_current_picks()'), /Verified active membership required/)
+    // Polling a removed role and refreshing payment cannot clear the persistent block.
+    await state(false)
+    await db.exec("update public.whop_memberships set verified_at=now() where membership_id='revocation-paid'")
+    assert.deepEqual(await roleRows(), [])
+    await state(true)
+    assert.equal(await paid(), true)
+    assert.equal((await roleRows()).some(row => row.source === 'whop'), true)
+    await state(false, true)
+    assert.equal(await paid(), true)
+    assert.equal((await access()).state, 'active')
+    await db.exec("update public.highroller_access_states set verified_at=now()-interval '16 minutes'")
+    assert.equal(await paid(), false)
+    await assert.rejects(call("select public.record_highroller_access_state('986001',true,false)"), /permission denied/)
+    await assert.rejects(call('select * from public.highroller_access_states'), /permission denied/)
+    await state(true)
+    await call("select public.sync_highroller_access_states('[]'::jsonb)", 'service_role')
+    assert.equal(await paid(), false)
+    assert.deepEqual(await roleRows(), [])
+  })
 })
 }

@@ -177,6 +177,8 @@ class OfficialBot(commands.Bot):
             if PAID_MEMBER_ROLE_ID in OFFICIAL_ROLE_IDS | OPERATOR_ROLE_IDS:
                 raise RuntimeError("Use a dedicated paid-member role, not an official/operator role.")
             await asyncio.to_thread(membership_role_sync.service.ready)
+            self.add_listener(membership_role_sync.on_member_update, "on_member_update")
+            self.add_listener(membership_role_sync.on_member_remove, "on_member_remove")
         if member_bet_vault is not None:
             other_channels = {
                 OFFICIAL_CHANNEL_ID, IMAGE_INPUT_CHANNEL_ID, CONFIRMATION_CHANNEL_ID,
