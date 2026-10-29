@@ -654,5 +654,46 @@ test(`website member access and current picks enforce server authorization (${ha
     await assert.rejects(call("select public.record_whop_subscription_membership('{}')"), /permission denied/)
     await assert.rejects(call('select public.website_member_access_standard()'), /permission denied/)
   })
+  await t.test('legacy HIGHROLLER access grants ordinary membership without owner or research access', async () => {
+    await load('../../supabase/migrations/20261029010000_highroller_grandfather.sql')
+    await load('../../supabase/migrations/20261029020000_highroller_role_policy.sql')
+    await db.exec("update auth.identities set provider_id='986001'; update public.member_profiles set age_verified_at=now()")
+    assert.equal((await access()).state, 'membership-required')
+    const capture = "select public.capture_highroller_grandfather('123','77','biz_rCNwfXRlnl0bFU',array['986001']) as saved"
+    assert.equal((await call(capture, 'service_role'))[0].saved, true)
+    assert.equal((await access()).kind, 'grandfather')
+    const roleEntitlements = "select * from public.highroller_role_entitlements('biz_rCNwfXRlnl0bFU',array['plan_test'],array[]::text[])"
+    const roleRows = await call(roleEntitlements, 'service_role')
+    assert.deepEqual(roleRows, [{ discord_user_id: '986001', source: 'grandfather' }])
+    await assert.rejects(call(roleEntitlements), /permission denied/)
+    await db.exec(`
+      insert into public.whop_memberships
+        (membership_id,discord_user_id,account_id,plan_id,status,paid_from,paid_through,
+         payment_id,paid,cancel_at_period_end,source_updated_at,verified_at,verification_reason)
+      values
+        ('role-paid','986002','biz_rCNwfXRlnl0bFU','plan_test','active',now()-interval '1 day',
+         now()+interval '1 day','role-payment',true,false,now(),now(),'Role policy test'),
+        ('role-stale','986003','biz_rCNwfXRlnl0bFU','plan_test','active',now()-interval '1 day',
+         now()+interval '1 day','stale-payment',true,false,now(),now()-interval '16 minutes','Stale test'),
+        ('role-other-plan','986004','biz_rCNwfXRlnl0bFU','other_plan','active',now()-interval '1 day',
+         now()+interval '1 day','other-payment',true,false,now(),now(),'Other plan test')
+    `)
+    assert.deepEqual(
+      (await call(roleEntitlements, 'service_role')).filter(row => row.source === 'whop'),
+      [{ discord_user_id: '986002', source: 'whop' }],
+    )
+    await db.exec("delete from public.whop_memberships where membership_id in ('role-paid','role-stale','role-other-plan')")
+    assert.equal((await call("select public.discord_has_paid_access('986001') as allowed", 'service_role'))[0].allowed, true)
+    assert.equal((await call("select public.discord_has_paid_plan_access('986001','biz_rCNwfXRlnl0bFU',array['plan_test']) as allowed", 'service_role'))[0].allowed, true)
+    await call('select * from public.member_current_picks()')
+    await assert.rejects(db.query('select public.require_operator_research_access()'), /required/)
+    await db.exec('update public.member_profiles set age_verified_at=null')
+    assert.equal((await access()).state, 'age-required')
+    await db.exec("update public.member_profiles set age_verified_at=now(); update public.highroller_grandfather_members set expires_at=now()")
+    assert.equal((await access()).state, 'membership-required')
+    assert.deepEqual(await call(roleEntitlements, 'service_role'), [])
+    assert.equal((await call(capture, 'service_role'))[0].saved, false)
+    await assert.rejects(call('select * from public.member_current_picks()'), /Verified active membership required/)
+  })
 })
 }

@@ -24,6 +24,29 @@ class MembershipService:
         if WHOP_TRIAL_PLAN_IDS:
             self.has_trial_access(0)
 
+    def grandfather_captured(self, guild_id: int, role_id: int) -> bool:
+        rows = self.db.select(
+            "highroller_grandfather_captures", "guild_id",
+            {"guild_id": str(guild_id), "role_id": str(role_id)},
+        ).data
+        if not isinstance(rows, list):
+            raise RuntimeError("Grandfather capture lookup returned an invalid response.")
+        return bool(rows)
+
+    def capture_grandfather(self, guild_id: int, role_id: int, member_ids: set[int]) -> bool:
+        if not WHOP_ACCOUNT_ID:
+            raise RuntimeError("Configure the Whop seller before capturing grandfather access.")
+        result = self.db._ensure_client().rpc(
+            "capture_highroller_grandfather", {
+                "p_guild_id": str(guild_id), "p_role_id": str(role_id),
+                "p_account_id": WHOP_ACCOUNT_ID,
+                "p_member_ids": sorted(str(member_id) for member_id in member_ids),
+            },
+        ).execute().data
+        if not isinstance(result, bool):
+            raise RuntimeError("Grandfather capture returned an invalid response.")
+        return result
+
     def has_trial_access(self, discord_user_id: int) -> bool:
         if not WHOP_TRIAL_PLAN_IDS:
             return False
@@ -39,6 +62,26 @@ class MembershipService:
         if not isinstance(result, bool):
             raise RuntimeError("Trial lookup returned an invalid access response.")
         return result
+
+    def highroller_role_entitlements(self) -> tuple[set[int], set[int]]:
+        if not WHOP_ACCOUNT_ID or not WHOP_PAID_PLAN_IDS:
+            raise RuntimeError("Configure the Whop seller and paid plans before syncing HIGHROLLER.")
+        rows = self.db._ensure_client().rpc(
+            "highroller_role_entitlements", {
+                "p_account_id": WHOP_ACCOUNT_ID,
+                "p_paid_plan_ids": sorted(WHOP_PAID_PLAN_IDS),
+                "p_trial_plan_ids": sorted(WHOP_TRIAL_PLAN_IDS),
+            },
+        ).execute().data
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not str(row.get("discord_user_id", "")).isdigit()
+            or row.get("source") not in {"whop", "grandfather"} for row in rows
+        ):
+            raise RuntimeError("HIGHROLLER role lookup returned invalid entitlements.")
+        return (
+            {int(row["discord_user_id"]) for row in rows if row["source"] == "whop"},
+            {int(row["discord_user_id"]) for row in rows if row["source"] == "grandfather"},
+        )
 
     def has_vault_access(self, discord_user_id: int) -> bool:
         return self.has_paid_access(discord_user_id) or self.has_trial_access(discord_user_id)

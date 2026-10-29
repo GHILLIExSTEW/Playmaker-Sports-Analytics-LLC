@@ -10,8 +10,191 @@ from src.membership_access import MembershipRoleSync, WhopMembershipSync
 from src.services.membership_service import MembershipService
 from src.services.whop_service import WhopService, discord_identity, paid_payment
 from src.member_bet_vault import ConfirmTicketModal
+import src.membership_access as access_module
+import discord
 
 NOW = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def grandfather_sync(monkeypatch):
+    monkeypatch.setattr(access_module, "HIGHROLLER_ROLE_ID", 77)
+    role = Mock(spec=discord.Role)
+    role.id, role.managed = 77, False
+    role.is_default.return_value = False
+    role.permissions = SimpleNamespace(administrator=False, manage_guild=False, manage_roles=False)
+    role.__ge__ = Mock(return_value=False)
+    members = [
+        SimpleNamespace(id=123, bot=False, roles=[role], add_roles=AsyncMock(), remove_roles=AsyncMock()),
+        SimpleNamespace(id=456, bot=False, roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock()),
+        SimpleNamespace(id=789, bot=False, roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock()),
+    ]
+    for member in members:
+        member.guild_permissions = SimpleNamespace(administrator=False)
+    entries = [SimpleNamespace(
+        user=SimpleNamespace(id=999), target=SimpleNamespace(id=456),
+        reason="No current membership entitlement",
+        before=SimpleNamespace(roles=[role]), after=SimpleNamespace(roles=[]),
+    )]
+
+    async def fetch_members(**kwargs):
+        for member in members:
+            yield member
+
+    async def audit_logs(**kwargs):
+        for entry in entries:
+            yield entry
+
+    guild = SimpleNamespace(
+        id=1, owner_id=999, me=SimpleNamespace(id=999, top_role=object(),
+                                guild_permissions=SimpleNamespace(manage_roles=True, view_audit_log=True)),
+        get_role=lambda role_id: role, fetch_members=fetch_members, audit_logs=audit_logs,
+    )
+    service = Mock()
+    service.grandfather_captured.return_value = False
+    service.capture_grandfather.return_value = True
+    service.member_discord_ids.return_value = {123, 456}
+    service.highroller_role_entitlements.return_value = (set(), {123, 456, 789})
+    sync = MembershipRoleSync(SimpleNamespace(get_guild=lambda guild_id: guild), 1, 77, service)
+    return sync, guild, members, entries
+
+
+def test_grandfather_captures_all_current_humans_without_audit_permission(grandfather_sync):
+    sync, guild, members, entries = grandfather_sync
+    guild.me.guild_permissions.view_audit_log = False
+    guild.audit_logs = Mock(side_effect=AssertionError("Audit history is not required"))
+    members.append(SimpleNamespace(id=9999, bot=True, roles=[]))
+    sync.service.member_discord_ids.return_value = {123, 456, 789}
+    asyncio.run(sync.sync())
+    sync.service.capture_grandfather.assert_called_once_with(1, 77, {123, 456, 789})
+    members[1].add_roles.assert_awaited_once()
+    members[2].add_roles.assert_awaited_once()
+    for member in members[:3]:
+        member.remove_roles.assert_not_awaited()
+
+
+def test_grandfather_capture_is_not_repeated(grandfather_sync):
+    sync, guild, members, _ = grandfather_sync
+    sync.service.grandfather_captured.return_value = True
+    guild.audit_logs = Mock(side_effect=AssertionError("Must not recapture"))
+    asyncio.run(sync.sync())
+    sync.service.capture_grandfather.assert_not_called()
+
+
+def test_failed_grandfather_capture_never_changes_roles(grandfather_sync):
+    sync, guild, members, _ = grandfather_sync
+    sync.service.capture_grandfather.side_effect = RuntimeError("Database unavailable")
+    with pytest.raises(RuntimeError):
+        asyncio.run(sync.sync())
+    sync.service.member_discord_ids.assert_not_called()
+    sync.service.highroller_role_entitlements.assert_not_called()
+    for member in members:
+        member.add_roles.assert_not_awaited()
+        member.remove_roles.assert_not_awaited()
+
+
+def test_grandfather_expiry_resumes_normal_role_enforcement(grandfather_sync, monkeypatch):
+    sync, _, members, _ = grandfather_sync
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = access_module.GRANDFATHER_END
+    monkeypatch.setattr(access_module, "datetime", clock)
+    sync.service.member_discord_ids.return_value = set()
+    sync.service.highroller_role_entitlements.return_value = (set(), set())
+    asyncio.run(sync.sync())
+    sync.service.grandfather_captured.assert_not_called()
+    sync.service.capture_grandfather.assert_not_called()
+    members[0].remove_roles.assert_awaited_once()
+
+
+def test_manual_removal_is_not_undone_by_grandfather_access_or_restart(grandfather_sync):
+    sync, _, members, _ = grandfather_sync
+    sync.service.grandfather_captured.return_value = True
+    asyncio.run(sync.sync())
+    asyncio.run(sync.sync())
+    members[1].add_roles.assert_not_awaited()
+    members[2].add_roles.assert_not_awaited()
+    members[0].remove_roles.assert_not_awaited()
+    sync.service.highroller_role_entitlements.assert_called()
+
+
+def test_verified_whop_membership_can_restore_manually_removed_role(grandfather_sync):
+    sync, _, members, _ = grandfather_sync
+    sync.service.grandfather_captured.return_value = True
+    sync.service.highroller_role_entitlements.return_value = ({456}, {123, 456, 789})
+    asyncio.run(sync.sync())
+    members[1].add_roles.assert_awaited_once()
+    members[2].add_roles.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["bot", "owner", "owner-role", "admin", "capper"])
+@pytest.mark.parametrize("has_role", [False, True])
+def test_excluded_members_never_receive_highroller_even_when_paid(grandfather_sync, kind, has_role):
+    sync, guild, members, _ = grandfather_sync
+    member = members[0]
+    highroller = member.roles[0]
+    member.roles = [highroller] if has_role else []
+    if kind == "bot":
+        member.bot = True
+    elif kind == "owner":
+        guild.owner_id = member.id
+    elif kind == "owner-role":
+        member.roles.append(SimpleNamespace(id=access_module.WEBSITE_OWNER_ROLE_ID))
+    elif kind == "admin":
+        member.guild_permissions.administrator = True
+    else:
+        member.roles.append(SimpleNamespace(id=access_module.TRACKER_ROLE_ID))
+    sync.service.highroller_role_entitlements.return_value = ({member.id}, {member.id})
+    asyncio.run(sync.sync())
+    member.add_roles.assert_not_awaited()
+    if has_role:
+        member.remove_roles.assert_awaited_once()
+    else:
+        member.remove_roles.assert_not_awaited()
+
+
+def test_failed_role_entitlements_never_changes_roles(grandfather_sync):
+    sync, _, members, _ = grandfather_sync
+    sync.service.highroller_role_entitlements.side_effect = RuntimeError("Migration missing")
+    with pytest.raises(RuntimeError, match="Migration missing"):
+        asyncio.run(sync.sync())
+    for member in members:
+        member.add_roles.assert_not_awaited()
+        member.remove_roles.assert_not_awaited()
+
+
+def test_role_entitlements_are_separate_from_member_access(monkeypatch):
+    monkeypatch.setattr("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test")
+    monkeypatch.setattr("src.services.membership_service.WHOP_PAID_PLAN_IDS", {"plan_paid"})
+    db = Mock()
+    result = db._ensure_client.return_value.rpc.return_value.execute.return_value
+    result.data = [
+        {"discord_user_id": "123", "source": "whop"},
+        {"discord_user_id": "456", "source": "grandfather"},
+    ]
+    service = MembershipService(db)
+    assert service.highroller_role_entitlements() == ({123}, {456})
+    for invalid in [None, [{"discord_user_id": "123", "source": "owner"}]]:
+        result.data = invalid
+        with pytest.raises(RuntimeError, match="invalid entitlements"):
+            service.highroller_role_entitlements()
+
+
+def test_grandfather_capture_service_validates_rpc_and_fixed_identity(monkeypatch):
+    monkeypatch.setattr("src.services.membership_service.WHOP_ACCOUNT_ID", "biz_test")
+    db = Mock()
+    db.select.return_value.data = []
+    rpc = db._ensure_client.return_value.rpc
+    rpc.return_value.execute.return_value.data = True
+    service = MembershipService(db)
+    assert not service.grandfather_captured(1, 77)
+    assert service.capture_grandfather(1, 77, {456, 123})
+    rpc.assert_called_once_with("capture_highroller_grandfather", {
+        "p_guild_id": "1", "p_role_id": "77", "p_account_id": "biz_test",
+        "p_member_ids": ["123", "456"],
+    })
+    rpc.return_value.execute.return_value.data = None
+    with pytest.raises(RuntimeError, match="invalid response"):
+        service.capture_grandfather(1, 77, {123})
 
 
 def membership():

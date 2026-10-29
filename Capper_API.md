@@ -120,6 +120,35 @@ verify that intake resumes and the alert stops. A failed discovery scan no
 longer disables gateway intake when the privacy notice was verified; a failed
 notice check still pauses intake.
 
+### Legacy HIGHROLLER grace period
+
+Apply `20261029010000_highroller_grandfather.sql` and
+`20261029020000_highroller_role_policy.sql` before restarting the bot.
+The first HIGHROLLER role sync captures every current non-bot server member,
+regardless of their existing roles or Whop enrollment, as authorized October 29,
+2026. Manage Roles is required; audit history is not needed. A failed capture
+stops reconciliation before any role changes.
+
+The capture and complimentary grants commit atomically, once per guild/role.
+They authorize HIGHROLLER, ordinary website membership, member stats and Vault
+through a dedicated complimentary ledger, not fabricated Whop payment or trial data.
+Age verification, Discord sign-in and feature gates still apply; this does not
+grant staff/research privileges. Access expires **February 1, 2027, midnight
+Eastern** (05:00 UTC). Subsequent runs cannot enroll new members or extend it.
+Existing owner/team grants remain unchanged. Staff can revoke a grandfather grant
+by deleting its row from `highroller_grandfather_members` using service-only access;
+the immutable capture prevents a later sync from re-enrolling it.
+At expiration, normal paid/trial/team entitlement checks resume.
+HIGHROLLER role eligibility is separate: bots, server owner, Owner-role members,
+administrators and cappers (`TRACKER_ROLE_ID`) must not hold HIGHROLLER, even if
+they have independent membership access. A grandfather grant retains an existing
+role but never restores an absent role after the initial capture. Manual removal
+therefore persists across syncs/restarts without revoking website, stats or Vault
+access. Verified Whop paid/trial members may regain the role unless excluded.
+Owner/team access by itself no longer assigns HIGHROLLER.
+Look for `highroller_grandfather_captured` in the journal and use
+`/membership_status` on a recovered account to verify access.
+
 Afterward, pull a team on `/tools`. Expect **Recalculating model...**, then the
 completion message and a model generation timestamp after the pull. Check logs
 for `capper_model_refreshed`; a job can validly produce zero projections.
