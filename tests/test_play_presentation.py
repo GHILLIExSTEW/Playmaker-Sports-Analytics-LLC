@@ -173,6 +173,27 @@ def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play
     assert mock_play_cards.call_args.args[0]["tracking_scope"] == "capper"
 
 
+@pytest.mark.parametrize("scope", ["capper", "official"])
+def test_publishing_forwards_team_details_to_card_artwork(scope, mock_play_cards):
+    presentation = cog()
+    presentation.bot.user = SimpleNamespace(
+        display_name="Playmaker", display_avatar=SimpleNamespace(url="https://example.com/bot.png"),
+    )
+    request = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")),
+    )
+    legs = [{"selection": "DAL Stars moneyline", "odds": -105, "details": {
+        "sport": "hockey", "market": "moneyline", "side": "home",
+        "home_name": "Dallas Stars", "away_name": "Montreal Canadiens",
+    }}]
+    data = {**payload(), "tracking_scope": scope, "leg_records": legs}
+
+    asyncio.run(presentation.publish_play_message(request, data))
+
+    assert mock_play_cards.call_args.kwargs["legs"] == legs
+
+
 def test_publishing_capper_play_removes_highroller_mentions_from_embed(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     presentation = cog()

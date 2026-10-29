@@ -406,6 +406,11 @@ settlement refreshes; changing or removing a frame does not change older cards
 or official team picks. Superseded frame files are retained because existing
 plays may still reference them.
 
+New-play publication includes the saved structured leg records so Discord cards
+can resolve API-Sports team/player artwork instead of unnecessarily using the
+server icon. Existing cards with a saved fallback upgrade their artwork when
+regenerated with their stored legs; deploying the fix does not edit old posts.
+
 Website premium access was **disabled by default** in the initial schema. The database-owner/service
 configuration is `public.website_membership_config`; clients cannot read or
 change it. Copy the seller and the **complete** bot `WHOP_PAID_PLAN_IDS` and

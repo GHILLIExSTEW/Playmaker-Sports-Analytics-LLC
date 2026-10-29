@@ -69,6 +69,42 @@ def test_personal_capper_play_over_three_units_is_rejected():
     assert result == {"error": "Personal capper plays cannot exceed 3 units."}
 
 
+@pytest.mark.parametrize("scope", ["capper", "official"])
+def test_created_play_returns_saved_team_details_for_card_artwork(monkeypatch, scope):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_ensure_sport", lambda _: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(
+        official_play_module.supabase_service, "select",
+        Mock(return_value=SimpleNamespace(data=[])),
+    )
+    insert = Mock(return_value=SimpleNamespace(data=[{"id": 361}]))
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", insert)
+    leg = {
+        "selection": "DAL Stars moneyline (3-way, excluding OT)",
+        "odds": -105,
+        "sport": "NHL",
+        "home_name": "Dallas Stars",
+        "away_name": "Montreal Canadiens",
+        "market": "moneyline",
+        "side": "home",
+        "scope": "full_game",
+    }
+
+    result = service.create_play_record(
+        "900", "Ace", 2.1, 1, "-105", tracking_scope=scope, leg_records=[leg],
+    )
+
+    saved_leg = insert.call_args.args[1][0]
+    assert result["leg_records"] == [{
+        "selection": saved_leg["selection"],
+        "odds": saved_leg["odds"],
+        "details": saved_leg["details"],
+    }]
+    assert result["leg_records"][0]["details"]["sport"] == "hockey"
+    assert result["leg_records"][0]["details"]["home_name"] == "Dallas Stars"
+
+
 def test_new_capper_play_snapshots_selected_frame_path(monkeypatch):
     service = OfficialPlayService()
     path = "capper-frames/11111111-1111-1111-1111-111111111111/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.webp"

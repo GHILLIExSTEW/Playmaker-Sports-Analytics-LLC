@@ -198,6 +198,7 @@ class OfficialPlayService:
             "legs": int(legs),
             "odds": odds_value,
             "odds_text": str(odds_value),
+            "leg_records": leg_rows,
             "to_win": to_win,
             "user_name": username,
             "team_name": payload["team_name"],
