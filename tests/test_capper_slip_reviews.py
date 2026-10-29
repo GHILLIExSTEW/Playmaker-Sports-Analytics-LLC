@@ -766,6 +766,8 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         text = notice.edit.call_args.kwargs["content"]
         assert module.ACKNOWLEDGEMENT_EMOJI in text
         assert "Posts submitted without this acknowledgement are deleted" in text
+        assert "ONLY this READ FIRST rules thread is read-only." in text
+        assert "All separate ballot posts allow replies and discussion." in text
         notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
         reply.delete.assert_awaited_once()
     asyncio.run(check())
