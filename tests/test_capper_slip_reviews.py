@@ -768,6 +768,10 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         assert "Posts submitted without this acknowledgement are deleted" in text
         assert "ONLY this READ FIRST rules thread is read-only." in text
         assert "All separate ballot posts allow replies and discussion." in text
+        assert "Lakers vs Celtics; Musetti vs Struff" in text
+        assert "NBA 3-leg parlay" in text
+        assert "The message/body can be blank when the image is attached." in text
+        assert len(text) <= 2000
         notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
         reply.delete.assert_awaited_once()
     asyncio.run(check())
