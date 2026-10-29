@@ -190,6 +190,47 @@ def test_recap_post_routes_to_results_channel(monkeypatch):
     assert "<#999>" in request.followup.send.call_args.args[0]
 
 
+def test_weekly_recap_repeated_posts_edit_only_configured_message(monkeypatch):
+    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_MESSAGE_ID", 1564277423304998984)
+    cog = make_reporting()
+    cog.bot.user = SimpleNamespace(id=42)
+    message = SimpleNamespace(author=SimpleNamespace(id=42), edit=AsyncMock())
+    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message), send=AsyncMock())
+    cog.resolve_channel.return_value = channel
+
+    async def check():
+        await cog.post_recap("weekly")
+        await cog.post_recap("weekly")
+
+    asyncio.run(check())
+    assert channel.fetch_message.await_count == 2
+    channel.fetch_message.assert_awaited_with(1564277423304998984)
+    assert message.edit.await_count == 2
+    assert message.edit.call_args.kwargs["embed"].title == "📊 Weekly Recap"
+    assert message.edit.call_args.kwargs["attachments"] == []
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure", ["missing", "forbidden", "wrong-author", "unset"])
+def test_weekly_recap_target_failure_never_posts_another_message(monkeypatch, failure):
+    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_MESSAGE_ID", None if failure == "unset" else 123)
+    cog = make_reporting()
+    cog.bot.user = SimpleNamespace(id=42)
+    message = SimpleNamespace(author=SimpleNamespace(id=43), edit=AsyncMock())
+    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message), send=AsyncMock())
+    cog.resolve_channel.return_value = channel
+    expected = RuntimeError
+    if failure in {"missing", "forbidden"}:
+        expected = discord.NotFound if failure == "missing" else discord.Forbidden
+        channel.fetch_message.side_effect = expected(
+            SimpleNamespace(status=404 if failure == "missing" else 403, reason=failure), failure,
+        )
+    with pytest.raises(expected):
+        asyncio.run(cog.post_recap("weekly"))
+    channel.send.assert_not_awaited()
+    message.edit.assert_not_awaited()
+
+
 @pytest.mark.parametrize("command", ["rankings_command", "summary_command"])
 def test_team_reports_preserve_channel_restrictions(monkeypatch, command):
     monkeypatch.setattr(reporting_module, "TEAM_STATS_CHANNEL_ID", 888)

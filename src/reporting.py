@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from src.config import GUILD_ID, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID
+from src.config import GUILD_ID, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, WEEKLY_RECAP_MESSAGE_ID
 from src.results import ResultsView, filter_results, parse_results_dates
 from src.datetime_utils import parse_iso_datetime
 from src.services.settlement_service import SettlementService
@@ -311,6 +311,7 @@ class Reporting(commands.Cog):
         self.staff_alert = staff_alert
         self.tracker_message_store = tracker_message_store or TrackerMessageStore()
         self._tracker_update_lock = asyncio.Lock()
+        self._weekly_recap_update_lock = asyncio.Lock()
 
     def tracker_rows(self) -> tuple[list[dict], list[dict]]:
         return fetch_official_tracker_rows()
@@ -428,6 +429,17 @@ class Reporting(commands.Cog):
 
     async def post_recap(self, period: str) -> None:
         channel = await self.resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
+        if period == "weekly":
+            if not WEEKLY_RECAP_MESSAGE_ID:
+                raise RuntimeError("WEEKLY_RECAP_MESSAGE_ID is not configured; no new recap was posted.")
+            async with self._weekly_recap_update_lock:
+                message = await channel.fetch_message(WEEKLY_RECAP_MESSAGE_ID)
+                if self.bot.user is None or message.author.id != self.bot.user.id:
+                    raise RuntimeError("The configured weekly recap message is not owned by this bot.")
+                embed = await asyncio.to_thread(build_recap_embed, self.features, period)
+                await message.edit(content=None, embed=embed, attachments=[])
+            logger.info("recap_updated period=%s message=%s", period, WEEKLY_RECAP_MESSAGE_ID)
+            return
         embed = await asyncio.to_thread(
             build_recap_embed, self.features, period,
         )
@@ -451,7 +463,7 @@ class Reporting(commands.Cog):
         await self.bot.wait_until_ready()
 
     @app_commands.command(name="recap", description="Preview or post the last weekly/monthly recap")
-    @app_commands.describe(period="Which recap to build", post="Post it to the results channel instead of previewing")
+    @app_commands.describe(period="Which recap to build", post="Update the weekly message or post a monthly recap")
     @app_commands.choices(period=[
         app_commands.Choice(name="Weekly (last Mon–Sun)", value="weekly"),
         app_commands.Choice(name="Monthly (last month)", value="monthly"),
@@ -466,7 +478,8 @@ class Reporting(commands.Cog):
         try:
             if post:
                 await self.post_recap(period.value)
-                await interaction.followup.send(f"{period.value.title()} recap posted in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
+                action = "updated" if period.value == "weekly" else "posted"
+                await interaction.followup.send(f"{period.value.title()} recap {action} in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
             else:
                 embed = await asyncio.to_thread(
                     build_recap_embed, self.features, period.value,
