@@ -184,6 +184,10 @@ class SlipReviewStore(BallotStore):
     def register(self, message_id: int, review: dict) -> bool:
         return self.rpc("register_capper_slip", p_message_id=str(message_id), p_review=review) is True
 
+    def find(self, message_id: int, *, columns: str = "*") -> dict | None:
+        rows = supabase_service.select("capper_ballots", columns, {"message_id": str(message_id)}).data or []
+        return rows[0] if rows else None
+
     def pending(self) -> list[dict]:
         return supabase_service.select(
             "capper_ballots", "*", {"state": "pending", "policy_version": SLIP_POLICY_VERSION},

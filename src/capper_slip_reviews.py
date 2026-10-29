@@ -16,6 +16,7 @@ from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
+from src.capper_review_records import ReviewRecords
 from src.services.slip_review_service import (
     SlipReviewStore, confirmed_legs, friendly_time, parse_cutoff, parse_event_start, response_choices, review_time,
 )
@@ -156,6 +157,7 @@ class CapperSlipReviews(commands.Cog):
         self.intake_ids: set[int] = set()
         self.prompt_edits: dict[int, tuple] = {}
         self.needs_reconciliation = True
+        self.records = ReviewRecords(bot, resolve_channel)
 
     def review_lock(self, message_id: int) -> asyncio.Lock:
         return self.review_locks.setdefault(message_id, asyncio.Lock())
@@ -168,6 +170,7 @@ class CapperSlipReviews(commands.Cog):
         self.process_reviews.cancel()
         self.scan_slips.cancel()
         self.daily_cleanup.cancel()
+        self.refresh_records.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -178,6 +181,8 @@ class CapperSlipReviews(commands.Cog):
             self.scan_slips.start()
         if not self.daily_cleanup.is_running():
             self.daily_cleanup.start()
+        if not self.refresh_records.is_running():
+            self.refresh_records.start()
 
     @commands.Cog.listener()
     async def on_disconnect(self) -> None:
@@ -187,13 +192,38 @@ class CapperSlipReviews(commands.Cog):
     async def on_resumed(self) -> None:
         self.needs_reconciliation = True
 
-    async def channel(self):
+    @staticmethod
+    def source_channel_id(row: dict) -> int:
+        return int(row["review"].get("source_channel_id") or CAPPER_BALLOT_CHANNEL_ID)
+
+    def check_review_channel(self, channel_id: int, row: dict) -> None:
+        if channel_id != self.source_channel_id(row):
+            raise ValueError("This control does not belong to the saved review's channel.")
+
+    async def channel(self, row: dict | None = None):
+        channel_id = self.source_channel_id(row) if row is not None else CAPPER_BALLOT_CHANNEL_ID
         channel = await self.publisher.resolve_channel(
-            CAPPER_BALLOT_CHANNEL_ID, "CAPPER_BALLOT_CHANNEL_ID", required=True,
+            channel_id, "CAPPER_BALLOT_CHANNEL_ID", required=True,
         )
         if channel.guild.id != GUILD_ID:
             raise RuntimeError("Slip reviews must use the configured guild.")
+        if isinstance(channel, discord.ForumChannel) and channel.permissions_for(channel.guild.default_role).view_channel:
+            raise RuntimeError("The capper ballot forum must not be visible to @everyone.")
+        if isinstance(channel, discord.Thread):
+            if channel.parent_id != CAPPER_BALLOT_CHANNEL_ID:
+                raise RuntimeError("Review thread is outside the configured capper forum.")
+            if channel.locked:
+                raise RuntimeError("Review thread is locked. Staff must unlock it before processing.")
+            if channel.archived:
+                channel = await channel.edit(archived=False, reason="Resume saved capper slip review")
         return channel
+
+    async def forum_threads(self, forum: discord.ForumChannel) -> list[discord.Thread]:
+        active = await forum.guild.active_threads()
+        threads = {thread.id: thread for thread in active if thread.parent_id == forum.id}
+        async for thread in forum.archived_threads(limit=None):
+            threads[thread.id] = thread
+        return list(threads.values())
 
     async def edit_prompt(self, channel, prompt, *, final: bool = True, **kwargs) -> None:
         """Edit the review prompt, skipping no-op edits; Discord caps edits to messages older than an hour (30046)."""
@@ -242,6 +272,26 @@ class CapperSlipReviews(commands.Cog):
         )
 
     async def discover(self, channel) -> None:
+        if isinstance(channel, discord.ForumChannel):
+            scan = await asyncio.to_thread(self.store.scan_state)
+            for thread in await self.forum_threads(channel):
+                if thread.id in self.intake_ids or await asyncio.to_thread(self.store.find, thread.id, columns="message_id"):
+                    continue
+                message = await thread.fetch_message(thread.id)
+                if message.created_at < review_time(scan["started_at"]) or message.author.bot:
+                    continue
+                member = channel.guild.get_member(message.author.id) or await channel.guild.fetch_member(message.author.id)
+                if not self.publisher.is_tracked_operator(member):
+                    continue
+                images = [item for item in message.attachments if (item.content_type or "").startswith("image/")]
+                if not images:
+                    continue
+                if thread.locked:
+                    raise RuntimeError(f"New slip thread {thread.id} is locked; staff must unlock it.")
+                if thread.archived:
+                    await thread.edit(archived=False, reason="Prepare capper slip confirmation")
+                await self.intake(message, images)
+            return
         scan = await asyncio.to_thread(self.store.scan_state)
         after = discord.Object(id=int(scan["last_message_id"])) if scan["last_message_id"] else review_time(scan["started_at"])
         async for message in channel.history(limit=None, after=after, oldest_first=True):
@@ -270,6 +320,11 @@ class CapperSlipReviews(commands.Cog):
             suffix = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(image.content_type, "png")
             review = {
                 "author_id": str(message.author.id), "source_text": message.content,
+                "author_name": str(message.author),
+                "source_channel_id": str(message.channel.id),
+                "source_parent_id": str(message.channel.parent_id) if isinstance(message.channel, discord.Thread) else None,
+                "post_title": message.channel.name if isinstance(message.channel, discord.Thread) else "",
+                "source_created_at": message.created_at.isoformat(),
                 "source_edited_at": message.edited_at.isoformat() if message.edited_at else None,
                 "attachment_ids": [str(item.id) for item in message.attachments],
                 "slip_base64": base64.b64encode(await image.read()).decode("ascii"),
@@ -309,9 +364,10 @@ class CapperSlipReviews(commands.Cog):
 
     async def confirm(self, interaction, message_id: int, legs_text: str, start_text: str, cutoff_text: str) -> None:
         async with self.review_lock(message_id):
-            if self.publisher.get_testing() or interaction.guild_id != GUILD_ID or interaction.channel_id != CAPPER_BALLOT_CHANNEL_ID:
+            if self.publisher.get_testing() or interaction.guild_id != GUILD_ID:
                 raise ValueError("Slip reviews are unavailable here or in testing mode.")
             row = await asyncio.to_thread(self.store.get, message_id)
+            self.check_review_channel(interaction.channel_id, row)
             if str(interaction.user.id) != row["review"]["author_id"] or not self.publisher.is_tracked_operator(interaction.user):
                 raise ValueError("Only the capper who submitted the slip can confirm it.")
             if row["state"] != "pending" or row["cutoff_at"] is not None:
@@ -323,7 +379,7 @@ class CapperSlipReviews(commands.Cog):
                     "Voting has to close before the first game starts, and after right now. "
                     "Check the start time, or set voting to close sooner (for example '5 min before')."
                 )
-            channel = await self.channel()
+            channel = await self.channel(row)
             if not await self.valid_source(channel, row):
                 raise ValueError("The original slip was edited or deleted. Submit a fresh slip.")
             parsed = {**row["review"]["parsed"]}
@@ -422,7 +478,7 @@ class CapperSlipReviews(commands.Cog):
             self.needs_reconciliation = True
             return
         if (
-            payload.guild_id != GUILD_ID or payload.channel_id != CAPPER_BALLOT_CHANNEL_ID
+            payload.guild_id != GUILD_ID
             or str(payload.emoji) not in {SUPPORT, OPPOSE}
             or self.needs_reconciliation
             or (self.bot.user and payload.user_id == self.bot.user.id)
@@ -431,7 +487,8 @@ class CapperSlipReviews(commands.Cog):
         row = None
         try:
             rows = await asyncio.to_thread(self.store.pending)
-            row = next((item for item in rows if item["review_message_id"] == str(payload.message_id)), None)
+            row = next((item for item in rows if item["review_message_id"] == str(payload.message_id)
+                        and self.source_channel_id(item) == payload.channel_id), None)
             if row is None:
                 return
             async with self.review_lock(int(row["message_id"])):
@@ -442,13 +499,13 @@ class CapperSlipReviews(commands.Cog):
                 )
                 logger.info("slip_response message=%s voter=%s result=%s", row["message_id"], payload.user_id, status)
                 if status == "conflict":
-                    channel = await self.channel()
+                    channel = await self.channel(row)
                     await channel.send(
                         f"<@{payload.user_id}>, both reactions are selected. Remove one to record your response.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 if status in {"saved", "conflict"}:
-                    await self.evaluate(await self.channel(), await asyncio.to_thread(self.store.get, int(row["message_id"])))
+                    await self.evaluate(await self.channel(row), await asyncio.to_thread(self.store.get, int(row["message_id"])))
         except Exception as exc:
             logger.exception("slip_reaction_failed")
             self.needs_reconciliation = True
@@ -490,17 +547,17 @@ class CapperSlipReviews(commands.Cog):
             self.needs_reconciliation = True
             return
         if (
-            payload.guild_id != GUILD_ID or payload.channel_id != CAPPER_BALLOT_CHANNEL_ID
+            payload.guild_id != GUILD_ID
             or (hasattr(payload, "emoji") and str(payload.emoji) not in {SUPPORT, OPPOSE})
         ):
             return
         row = None
         try:
-            channel = await self.channel()
             for row in await asyncio.to_thread(self.store.pending):
-                if row["review_message_id"] == str(payload.message_id) and row.get("cutoff_at"):
+                if (row["review_message_id"] == str(payload.message_id) and row.get("cutoff_at")
+                        and self.source_channel_id(row) == payload.channel_id):
                     async with self.review_lock(int(row["message_id"])):
-                        await self.reconcile_reactions(channel, row)
+                        await self.reconcile_reactions(await self.channel(row), row)
         except Exception as exc:
             logger.exception("slip_reaction_clear_failed")
             self.needs_reconciliation = True
@@ -533,12 +590,13 @@ class CapperSlipReviews(commands.Cog):
         try:
             match = re.fullmatch(r"pm:sr:(\d{1,20}):(confirm|pass|cancel)", custom_id)
             if (
-                match is None or interaction.guild_id != GUILD_ID or interaction.channel_id != CAPPER_BALLOT_CHANNEL_ID
+                match is None or interaction.guild_id != GUILD_ID
                 or interaction.user.bot or self.publisher.get_testing()
             ):
                 raise ValueError("This review control is not available here.")
             message_id, action = int(match[1]), match[2]
             row = await asyncio.to_thread(self.store.get, message_id)
+            self.check_review_channel(interaction.channel_id, row)
             if interaction.message is None or str(interaction.message.id) != row["review_message_id"]:
                 raise ValueError("This control does not belong to the saved review.")
             if row["state"] != "pending":
@@ -569,7 +627,7 @@ class CapperSlipReviews(commands.Cog):
                     # Remove visible reactions after saving Pass. Remove events do not undo Pass.
                     for emoji in (SUPPORT, OPPOSE):
                         await interaction.message.remove_reaction(emoji, interaction.user)
-                    await self.evaluate(await self.channel(), await asyncio.to_thread(self.store.get, message_id))
+                    await self.evaluate(await self.channel(row), await asyncio.to_thread(self.store.get, message_id))
                     result = "Pass recorded. It is not an opposing vote."
             await interaction.followup.send(result, ephemeral=True)
         except Exception as exc:
@@ -598,6 +656,7 @@ class CapperSlipReviews(commands.Cog):
                 row = await asyncio.to_thread(self.store.get, message_id)
                 if row["state"] != "pending" or message_id in self.intake_ids:
                     return
+                channel = await self.channel(row)
                 if reconcile:
                     await self.reconcile_reactions(channel, row)
                 else:
@@ -655,6 +714,31 @@ class CapperSlipReviews(commands.Cog):
                 channel = await self.channel()
                 rows = await asyncio.to_thread(self.store.pending)
                 rows += await asyncio.to_thread(self.store.interrupted)
+                if isinstance(channel, discord.ForumChannel):
+                    protected_threads = {self.source_channel_id(row) for row in rows}
+                    protected_threads.update(self.intake_ids)
+                    for thread in await self.forum_threads(channel):
+                        if thread.id in protected_threads:
+                            continue
+                        row = await asyncio.to_thread(self.store.find, thread.id)
+                        if row is None:
+                            # Leave unprocessed/invalid posts for staff, never delete an unrecorded submission.
+                            continue
+                        async with self.review_lock(int(row["message_id"])):
+                            try:
+                                row = await asyncio.to_thread(self.store.get, int(row["message_id"]))
+                                if row["state"] in {"pending", "processing"} or thread.id in self.intake_ids:
+                                    continue
+                                await self.records.save(thread, row)
+                                await thread.delete(reason="Recorded completed capper review; daily 3 AM Eastern cleanup")
+                            except Exception as exc:
+                                logger.exception("capper_forum_cleanup_failed thread=%s", thread.id)
+                                await self.publisher.staff_alert(
+                                    f"capper_forum_cleanup:{thread.id}",
+                                    f"Could not safely clear capper post {thread.id}: {str(exc)[:1500]}. "
+                                    "Its daily record must be verified before deletion.",
+                                )
+                    return
                 protected = {
                     int(value) for row in rows for value in (row["message_id"], row.get("review_message_id")) if value
                 }
@@ -669,4 +753,20 @@ class CapperSlipReviews(commands.Cog):
 
     @daily_cleanup.before_loop
     async def before_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=5)
+    async def refresh_records(self) -> None:
+        if self.publisher.get_testing() or not self.bot.is_ready():
+            return
+        try:
+            await self.records.refresh()
+        except Exception as exc:
+            logger.exception("capper_records_refresh_failed")
+            await self.publisher.staff_alert(
+                "capper_records_refresh", f"Daily betting records could not be updated: {str(exc)[:1500]}",
+            )
+
+    @refresh_records.before_loop
+    async def before_refresh_records(self) -> None:
         await self.bot.wait_until_ready()

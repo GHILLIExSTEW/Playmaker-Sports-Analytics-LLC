@@ -45,6 +45,44 @@ async function closeVoting(db) {
   await db.exec("update public.capper_ballots set cutoff_at=now() - interval '1 second' where message_id='500'")
 }
 
+test('forum record mappings are private, preserve legacy channel context, and expose live linked results', async (t) => {
+  const db = await setup(t)
+  await db.exec(`alter table public.plays add column ballot_message_id text unique,
+    add column status text, add column odds integer, add column message_id text;
+    alter table public.capper_ballots enable row level security;
+    grant select on public.capper_ballots, public.plays to service_role;
+    create table public.operator_user_guide_content (html text);
+    insert into public.operator_user_guide_content values
+      ('Upload one slip image per message in Cappers_Ballet (1559647368650166322). Daily 3:00 AM Eastern cleanup preserves active and interrupted review messages.');
+  `)
+  for (const name of ['20261028000000_capper_forum_records.sql', '20261028010000_capper_forum_guide.sql']) {
+    await db.exec(await readFile(new URL(`../../supabase/migrations/${name}`, import.meta.url), 'utf8'))
+  }
+  const original = (await db.query("select review from capper_ballots where message_id='500'")).rows[0].review
+  assert.equal(original.source_channel_id, '1559647368650166322')
+  assert.equal(original.slip_base64, 'c2xpcA==')
+  await db.exec(`insert into capper_review_record_days values('2026-10-28','1565170427851047053','700');
+    insert into capper_review_records values('500','2026-10-28','900','Pending');
+    update plays set ballot_message_id='500', status='open', odds=100, message_id='800' where id=1;`)
+  assert.equal((await db.query('select play from capper_review_record_snapshots')).rows[0].play.status, 'open')
+  assert.equal((await db.query('select ballot from capper_review_record_snapshots')).rows[0].ballot.review.slip_base64, undefined)
+  await db.exec("update plays set status='win' where id=1")
+  assert.equal((await db.query('select play from capper_review_record_snapshots')).rows[0].play.status, 'win')
+  const html = (await db.query('select html from operator_user_guide_content')).rows[0].html
+  assert.match(html, /1565167115726618686/)
+  assert.match(html, /1565170427851047053/)
+  for (const role of ['anon', 'authenticated']) {
+    await db.exec(`set role ${role}`)
+    for (const table of ['capper_review_records', 'capper_review_record_days', 'capper_review_record_snapshots']) {
+      await assert.rejects(db.query(`select * from ${table}`), /permission denied/)
+    }
+    await db.exec('reset role')
+  }
+  await db.exec('set role service_role')
+  assert.equal((await db.query('select * from capper_review_record_snapshots')).rows.length, 1)
+  await db.exec('reset role')
+})
+
 test('author plus one supporter qualifies despite three missing responses, at 1u only at cutoff', async (t) => {
   const db = await setup(t)
   assert.equal(await respond(db, 43, 'yes_add'), 'saved')

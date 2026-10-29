@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import discord
 
 import src.capper_slip_reviews as module
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
@@ -33,7 +34,8 @@ def saved_row():
 def make_cog(monkeypatch):
     monkeypatch.setattr(module, "GUILD_ID", 123)
     channel = SimpleNamespace(
-        guild=SimpleNamespace(id=123), fetch_message=AsyncMock(), send=AsyncMock(), purge=AsyncMock(),
+        id=module.CAPPER_BALLOT_CHANNEL_ID, guild=SimpleNamespace(id=123),
+        fetch_message=AsyncMock(), send=AsyncMock(), purge=AsyncMock(),
     )
     prompt = SimpleNamespace(id=900, jump_url="https://discord.com/channels/123/100/900",
                              edit=AsyncMock(), add_reaction=AsyncMock(), clear_reactions=AsyncMock())
@@ -290,6 +292,7 @@ def test_intake_keeps_private_original_and_displays_slip_on_review_message(monke
         source = SimpleNamespace(
             id=500, author=SimpleNamespace(id=42), content="Wolves ML", attachments=[image],
             edited_at=None, channel=channel, jump_url="https://discord.com/channels/123/100/500",
+            created_at=datetime.now(timezone.utc),
         )
         cog.publisher.images.extract_play.return_value = {"legs": [{"selection": "Wolves ML", "odds": 100}]}
         channel.send.return_value = SimpleNamespace(id=900)
@@ -333,6 +336,140 @@ def test_review_reactions_do_not_dispatch_settlement_and_ignore_other_channels(m
     payload.channel_id = 999
     asyncio.run(cog.reaction(payload, added=True))
     cog.store.respond.assert_not_called()
+
+
+def forum_channel():
+    forum = Mock(spec=discord.ForumChannel)
+    forum.id = module.CAPPER_BALLOT_CHANNEL_ID
+    forum.guild = SimpleNamespace(id=123, default_role=Mock(), get_member=Mock(return_value=SimpleNamespace(id=42)))
+    forum.permissions_for.return_value = SimpleNamespace(view_channel=False)
+    return forum
+
+
+def review_thread(thread_id=500):
+    thread = Mock(spec=discord.Thread)
+    thread.id, thread.parent_id = thread_id, module.CAPPER_BALLOT_CHANNEL_ID
+    thread.guild = SimpleNamespace(id=123)
+    thread.archived, thread.locked = False, False
+    thread.fetch_message = AsyncMock()
+    thread.delete = AsyncMock()
+    thread.edit = AsyncMock(return_value=thread)
+    return thread
+
+
+def test_forum_discovery_reads_only_new_starter_slips(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    forum, thread, known = forum_channel(), review_thread(), review_thread(501)
+    thread.fetch_message.return_value = SimpleNamespace(
+        created_at=datetime.now(timezone.utc), author=SimpleNamespace(id=42, bot=False),
+        attachments=[SimpleNamespace(content_type="image/png")],
+    )
+    cog.store.scan_state.return_value = {"started_at": "2026-01-01T00:00:00+00:00"}
+    cog.store.find.side_effect = lambda value, **kwargs: saved_row() if value == 501 else None
+    cog.forum_threads = AsyncMock(return_value=[thread, known])
+    cog.intake = AsyncMock()
+    asyncio.run(cog.discover(forum))
+    thread.fetch_message.assert_awaited_once_with(500)
+    known.fetch_message.assert_not_awaited()
+    cog.intake.assert_awaited_once_with(thread.fetch_message.return_value, thread.fetch_message.return_value.attachments)
+
+
+def test_forum_thread_listing_includes_archived_posts_and_filters_other_forums(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    forum = forum_channel()
+    active, archived, other = review_thread(500), review_thread(501), review_thread(502)
+    other.parent_id = 999
+    forum.guild.active_threads = AsyncMock(return_value=[active, other])
+
+    async def history(**kwargs):
+        yield archived
+
+    forum.archived_threads = history
+    assert [thread.id for thread in asyncio.run(cog.forum_threads(forum))] == [500, 501]
+
+
+def test_forum_reactions_route_to_saved_thread_and_ignore_sibling_posts(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    thread = review_thread()
+    row = saved_row()
+    row["review"]["source_channel_id"] = "500"
+    cog.store.pending.return_value = [row]
+    cog.store.respond.return_value = "saved"
+    cog.publisher.resolve_channel.return_value = thread
+    cog.evaluate = AsyncMock()
+    payload = SimpleNamespace(guild_id=123, channel_id=500, message_id=900, emoji=module.SUPPORT, user_id=43)
+    asyncio.run(cog.reaction(payload, added=True))
+    cog.store.respond.assert_called_once_with(500, 43, "yes_add")
+    assert cog.evaluate.call_args.args[0] is thread
+    cog.store.respond.reset_mock()
+    payload.channel_id = 501
+    asyncio.run(cog.reaction(payload, added=True))
+    cog.store.respond.assert_not_called()
+
+
+def test_restart_recovery_resolves_and_reopens_saved_thread(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    row, thread = saved_row(), review_thread()
+    row["review"]["source_channel_id"] = "500"
+    cog.store.get.return_value = row
+    thread.archived = True
+    cog.publisher.resolve_channel.return_value = thread
+    cog.reconcile_reactions = AsyncMock()
+    asyncio.run(cog.process_row(forum_channel(), row, reconcile=True))
+    cog.publisher.resolve_channel.assert_awaited_with(500, "CAPPER_BALLOT_CHANNEL_ID", required=True)
+    thread.edit.assert_awaited_once()
+    cog.reconcile_reactions.assert_awaited_once_with(thread, row)
+
+
+def test_nightly_forum_cleanup_records_before_deleting_and_preserves_active_posts(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    forum = forum_channel()
+    completed, active, interrupted, unknown = [review_thread(value) for value in (500, 501, 502, 503)]
+    row = saved_row()
+    row.update(state="published")
+    row["review"]["source_channel_id"] = "500"
+    pending = deepcopy(row)
+    pending.update(message_id="501", state="pending")
+    pending["review"]["source_channel_id"] = "501"
+    processing = deepcopy(row)
+    processing.update(message_id="502", state="processing")
+    processing["review"]["source_channel_id"] = "502"
+    cog.publisher.resolve_channel.return_value = forum
+    cog.store.pending.return_value = [pending]
+    cog.store.interrupted.return_value = [processing]
+    cog.store.find.side_effect = lambda value: row if value == 500 else None
+    cog.store.get.return_value = row
+    cog.forum_threads = AsyncMock(return_value=[completed, active, interrupted, unknown])
+    events = []
+
+    async def record(*args):
+        events.append("record")
+
+    async def delete(**kwargs):
+        events.append("delete")
+
+    cog.records = Mock(save=AsyncMock(side_effect=record))
+    completed.delete.side_effect = delete
+    asyncio.run(cog.daily_cleanup.coro(cog))
+    assert events == ["record", "delete"]
+    for thread in (active, interrupted, unknown):
+        thread.delete.assert_not_awaited()
+
+
+def test_record_failure_prevents_source_deletion_and_alerts_staff(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    thread = review_thread()
+    row = saved_row()
+    row["state"] = "rejected"
+    row["review"]["source_channel_id"] = "500"
+    cog.publisher.resolve_channel.return_value = forum_channel()
+    cog.forum_threads = AsyncMock(return_value=[thread])
+    cog.store.find.return_value = row
+    cog.store.get.return_value = row
+    cog.records = Mock(save=AsyncMock(side_effect=RuntimeError("record forum unavailable")))
+    asyncio.run(cog.daily_cleanup.coro(cog))
+    thread.delete.assert_not_awaited()
+    cog.publisher.staff_alert.assert_awaited_once()
 
 
 def test_valid_source_detects_edits_even_when_text_was_restored(monkeypatch):
