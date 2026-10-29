@@ -38,6 +38,7 @@ SUBMISSION_NOTICE = (
     f"Read this notice and react to this opening message with {ACKNOWLEDGEMENT_EMOJI} to acknowledge it "
     "BEFORE creating a ballot post. Posts submitted without this acknowledgement are deleted; "
     "the bot will DM you the acknowledgement link. After acknowledging, submit a fresh post.\n\n"
+    "This thread is read-only: reactions are allowed, but all replies are deleted. Create your own ballot post instead.\n\n"
     "Use one static JPEG, PNG or WebP (10 MB maximum) per post, with the matchup in its title. "
     "Crop/redact names, account IDs, balances and barcodes BEFORE uploading; metadata removal cannot hide visible details.\n\n"
     "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
@@ -269,6 +270,8 @@ class CapperSlipReviews(commands.Cog):
             raise RuntimeError("The saved submission notice does not match the required acknowledgement thread.")
         message = await thread.fetch_message(thread.id)
         await message.add_reaction(ACKNOWLEDGEMENT_EMOJI)
+        async for reply in thread.history(limit=None, after=discord.Object(id=thread.id)):
+            await self.delete_notice_reply(reply)
 
     @commands.Cog.listener()
     async def on_disconnect(self) -> None:
@@ -298,11 +301,32 @@ class CapperSlipReviews(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        if (isinstance(message.channel, discord.Thread)
+                and message.guild is not None and message.guild.id == GUILD_ID
+                and message.channel.parent_id == CAPPER_BALLOT_CHANNEL_ID
+                and message.channel.id == ACKNOWLEDGEMENT_THREAD_ID):
+            if message.id != ACKNOWLEDGEMENT_THREAD_ID:
+                await self.delete_notice_reply(message)
+            return
         if (not message.author.bot and isinstance(message.channel, discord.Thread)
                 and message.guild is not None and message.guild.id == GUILD_ID
                 and message.channel.parent_id == CAPPER_BALLOT_CHANNEL_ID
                 and message.id == message.channel.id):
             await self.queue_intake(message.id)
+
+    async def delete_notice_reply(self, message: discord.Message) -> None:
+        try:
+            await message.delete(reason="Submission rules thread is read-only; acknowledge with a reaction")
+        except discord.NotFound:
+            logger.info("slip_notice_reply_already_deleted message=%s", message.id)
+        except discord.HTTPException:
+            logger.exception("slip_notice_reply_delete_failed message=%s", message.id)
+            await self.publisher.staff_alert(
+                "slip_notice_read_only",
+                f"Could not delete reply {message.id} in the read-only submission rules thread "
+                f"{ACKNOWLEDGEMENT_THREAD_ID}. Check Manage Messages permission and bot logs.",
+            )
+            raise
 
     @commands.Cog.listener()
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:

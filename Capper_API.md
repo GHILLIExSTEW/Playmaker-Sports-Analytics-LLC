@@ -163,6 +163,10 @@ submissions; reactions elsewhere or with other emoji do not qualify.
 Existing registered reviews are not deleted or reopened. The acknowledgement
 thread itself is never treated as a ballot. This is post-creation moderation:
 Discord does not natively gate forum creation on a message reaction.
+The rules thread is read-only: all replies, including bot replies, are deleted;
+the opening notice and its acknowledgement reactions remain. Startup and each
+five-minute notice check remove replies missed while offline. Deletion failures
+are logged and alerted to staff; Manage Messages is required.
 
 Afterward, pull a team on `/tools`. Expect **Recalculating model...**, then the
 completion message and a model generation timestamp after the pull. Check logs

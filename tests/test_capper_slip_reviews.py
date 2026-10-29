@@ -754,6 +754,10 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         thread.flags = SimpleNamespace(pinned=True)
         notice = SimpleNamespace(author=cog.bot.user, content="Old rules", edit=AsyncMock(), add_reaction=AsyncMock())
         thread.fetch_message.return_value = notice
+        reply = SimpleNamespace(id=module.ACKNOWLEDGEMENT_THREAD_ID + 1, delete=AsyncMock())
+        async def history(**kwargs):
+            yield reply
+        thread.history = history
         monkeypatch.setattr(module.supabase_service, "select", Mock(
             return_value=SimpleNamespace(data=[{"thread_id": str(thread.id)}]),
         ))
@@ -763,6 +767,63 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         assert module.ACKNOWLEDGEMENT_EMOJI in text
         assert "Posts submitted without this acknowledgement are deleted" in text
         notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
+        reply.delete.assert_awaited_once()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("bot", [False, True])
+@pytest.mark.parametrize("starter", [False, True])
+def test_notice_thread_deletes_all_replies_but_preserves_starter(monkeypatch, bot, starter):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.queue_intake = AsyncMock()
+        thread = review_thread(module.ACKNOWLEDGEMENT_THREAD_ID)
+        message = SimpleNamespace(
+            id=thread.id if starter else thread.id + 1,
+            channel=thread, guild=thread.guild, author=SimpleNamespace(bot=bot), delete=AsyncMock(),
+        )
+        await cog.on_message(message)
+        if starter:
+            message.delete.assert_not_awaited()
+        else:
+            message.delete.assert_awaited_once()
+        cog.queue_intake.assert_not_awaited()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("kind", ["other-thread", "other-guild", "other-forum"])
+def test_notice_read_only_gate_does_not_delete_elsewhere(monkeypatch, kind):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        thread = review_thread(500 if kind == "other-thread" else module.ACKNOWLEDGEMENT_THREAD_ID)
+        if kind == "other-guild":
+            thread.guild.id = 456
+        if kind == "other-forum":
+            thread.parent_id = 456
+        message = SimpleNamespace(
+            id=thread.id + 1, channel=thread, guild=thread.guild,
+            author=SimpleNamespace(bot=False), delete=AsyncMock(),
+        )
+        await cog.on_message(message)
+        message.delete.assert_not_awaited()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_notice_reply_delete_errors_are_not_silently_ignored(monkeypatch, missing):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        exception = discord.NotFound if missing else discord.Forbidden
+        message = SimpleNamespace(id=123, delete=AsyncMock(side_effect=exception(
+            SimpleNamespace(status=404 if missing else 403, reason="Unavailable"), "Unavailable",
+        )))
+        if missing:
+            await cog.delete_notice_reply(message)
+            cog.publisher.staff_alert.assert_not_awaited()
+        else:
+            with pytest.raises(discord.Forbidden):
+                await cog.delete_notice_reply(message)
+            cog.publisher.staff_alert.assert_awaited_once()
     asyncio.run(check())
 
 
