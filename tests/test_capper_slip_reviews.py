@@ -59,6 +59,7 @@ def make_cog(monkeypatch):
     cog.needs_reconciliation = False
     cog.submission_notice_ready = True
     cog.valid_source = AsyncMock(return_value=True)
+    cog.has_submission_acknowledgement = AsyncMock(return_value=True)
     cog.publisher.publish_approved = AsyncMock(return_value={"play_id": 7})
     return cog, channel, prompt
 
@@ -631,6 +632,138 @@ def test_forum_discovery_reads_only_new_starter_slips(monkeypatch):
     thread.fetch_message.assert_awaited_once_with(500)
     known.fetch_message.assert_not_awaited()
     cog.intake.assert_awaited_once_with(thread.fetch_message.return_value, thread.fetch_message.return_value.attachments)
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_submission_acknowledgement_is_required_before_image_intake(monkeypatch, acknowledged):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread()
+        member = SimpleNamespace(id=42, send=AsyncMock())
+        forum.guild.get_member.return_value = member
+        image = SimpleNamespace(content_type="image/png")
+        thread.fetch_message.return_value = SimpleNamespace(
+            created_at=datetime.now(timezone.utc), author=SimpleNamespace(id=42, bot=False),
+            attachments=[image],
+        )
+        cog.has_submission_acknowledgement.return_value = acknowledged
+        cog.intake = AsyncMock()
+        await cog.discover_thread(forum, thread, since=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        cog.has_submission_acknowledgement.assert_awaited_once_with(42)
+        if acknowledged:
+            cog.intake.assert_awaited_once()
+            thread.delete.assert_not_awaited()
+            member.send.assert_not_awaited()
+        else:
+            thread.delete.assert_awaited_once()
+            cog.intake.assert_not_awaited()
+            member.send.assert_awaited_once()
+            assert str(module.ACKNOWLEDGEMENT_THREAD_ID) in member.send.call_args.args[0]
+            assert module.ACKNOWLEDGEMENT_EMOJI in member.send.call_args.args[0]
+            cog.store.register.assert_not_called()
+            cog.publisher.images.extract_play.assert_not_called()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("failure", ["lookup", "delete", "dm"])
+def test_acknowledgement_failures_are_explicit_and_never_intake(monkeypatch, failure):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread()
+        member = SimpleNamespace(id=42, send=AsyncMock())
+        forum.guild.get_member.return_value = member
+        thread.fetch_message.return_value = SimpleNamespace(
+            created_at=datetime.now(timezone.utc), author=SimpleNamespace(id=42, bot=False), attachments=[],
+        )
+        cog.has_submission_acknowledgement.return_value = False
+        cog.intake = AsyncMock()
+        denied = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing access")
+        if failure == "lookup":
+            cog.has_submission_acknowledgement.side_effect = denied
+        elif failure == "delete":
+            thread.delete.side_effect = denied
+        else:
+            member.send.side_effect = denied
+        if failure == "dm":
+            await cog.discover_thread(forum, thread, since=datetime(2026, 1, 1, tzinfo=timezone.utc))
+            thread.delete.assert_awaited_once()
+            cog.publisher.staff_alert.assert_awaited_once()
+            assert "DM could not be delivered" in cog.publisher.staff_alert.call_args.args[1]
+        else:
+            with pytest.raises(discord.Forbidden):
+                await cog.discover_thread(forum, thread, since=datetime(2026, 1, 1, tzinfo=timezone.utc))
+            member.send.assert_not_awaited()
+            if failure == "lookup":
+                thread.delete.assert_not_awaited()
+        cog.intake.assert_not_awaited()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("kind", ["correct", "wrong-emoji", "wrong-user", "bot", "removed"])
+def test_acknowledgement_checks_live_reaction_users_on_exact_notice(monkeypatch, kind):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        thread = review_thread(module.ACKNOWLEDGEMENT_THREAD_ID)
+        cog.publisher.resolve_channel.return_value = thread
+        user = SimpleNamespace(id=43 if kind == "wrong-user" else 42, bot=kind == "bot")
+        async def users(**kwargs):
+            yield user
+        reaction = SimpleNamespace(
+            emoji=module.OPPOSE if kind == "wrong-emoji" else module.ACKNOWLEDGEMENT_EMOJI,
+            users=users,
+        )
+        thread.fetch_message.return_value = SimpleNamespace(
+            author=cog.bot.user, reactions=[] if kind == "removed" else [reaction],
+        )
+        result = await CapperSlipReviews.has_submission_acknowledgement(cog, 42)
+        assert result is (kind == "correct")
+        thread.fetch_message.assert_awaited_once_with(module.ACKNOWLEDGEMENT_THREAD_ID)
+    asyncio.run(check())
+
+
+def test_acknowledgement_thread_is_never_processed_or_deleted(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread(module.ACKNOWLEDGEMENT_THREAD_ID)
+        await cog.discover_thread(forum, thread)
+        thread.fetch_message.assert_not_awaited()
+        thread.delete.assert_not_awaited()
+        cog.has_submission_acknowledgement.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_registered_review_is_not_deleted_when_acknowledgement_is_removed(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.store.find.return_value = saved_row()
+        cog.has_submission_acknowledgement.return_value = False
+        forum, thread = forum_channel(), review_thread()
+        await cog.discover_thread(forum, thread)
+        thread.delete.assert_not_awaited()
+        thread.fetch_message.assert_not_awaited()
+        cog.has_submission_acknowledgement.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        forum, thread = forum_channel(), review_thread(module.ACKNOWLEDGEMENT_THREAD_ID)
+        cog.checked_forum.resolve = AsyncMock(return_value=forum)
+        cog.publisher.resolve_channel.return_value = thread
+        thread.flags = SimpleNamespace(pinned=True)
+        notice = SimpleNamespace(author=cog.bot.user, content="Old rules", edit=AsyncMock(), add_reaction=AsyncMock())
+        thread.fetch_message.return_value = notice
+        monkeypatch.setattr(module.supabase_service, "select", Mock(
+            return_value=SimpleNamespace(data=[{"thread_id": str(thread.id)}]),
+        ))
+        await cog.ensure_submission_notice()
+        notice.edit.assert_awaited_once()
+        text = notice.edit.call_args.kwargs["content"]
+        assert module.ACKNOWLEDGEMENT_EMOJI in text
+        assert "Posts submitted without this acknowledgement are deleted" in text
+        notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
+    asyncio.run(check())
 
 
 def test_scan_recovers_reported_postgres_cursor_without_alert_or_republishing(monkeypatch):

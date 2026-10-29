@@ -149,6 +149,21 @@ Owner/team access by itself no longer assigns HIGHROLLER.
 Look for `highroller_grandfather_captured` in the journal and use
 `/membership_status` on a recovered account to verify access.
 
+### Capper ballot acknowledgement
+
+Before creating a ballot post, cappers must read the opening message in thread
+`1565183972244201622` and react to it with the handshake emoji. Startup maintains
+the notice instructions and seeds that reaction. Gateway intake and five-minute
+recovery both check the live reaction users before processing an unregistered
+post or sending its image for extraction. The bot deletes unacknowledged posts
+and DMs the author an error with the acknowledgement link and resubmission steps.
+If the DM fails, staff receive an alert. If Discord cannot verify the reaction,
+intake fails without deleting the post. Removing the reaction blocks subsequent
+submissions; reactions elsewhere or with other emoji do not qualify.
+Existing registered reviews are not deleted or reopened. The acknowledgement
+thread itself is never treated as a ballot. This is post-creation moderation:
+Discord does not natively gate forum creation on a message reaction.
+
 Afterward, pull a team on `/tools`. Expect **Recalculating model...**, then the
 completion message and a model generation timestamp after the pull. Check logs
 for `capper_model_refreshed`; a job can validly produce zero projections.

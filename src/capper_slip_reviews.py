@@ -31,8 +31,13 @@ from src.services.slip_review_service import (
 logger = logging.getLogger("official_play_bot")
 SUPPORT = "\N{THUMBS UP SIGN}"
 OPPOSE = "\N{THUMBS DOWN SIGN}"
+ACKNOWLEDGEMENT_THREAD_ID = 1565183972244201622
+ACKNOWLEDGEMENT_EMOJI = "\N{HANDSHAKE}"
 SUBMISSION_NOTICE = (
     "Before submitting a capper slip\n\n"
+    f"Read this notice and react to this opening message with {ACKNOWLEDGEMENT_EMOJI} to acknowledge it "
+    "BEFORE creating a ballot post. Posts submitted without this acknowledgement are deleted; "
+    "the bot will DM you the acknowledgement link. After acknowledging, submit a fresh post.\n\n"
     "Use one static JPEG, PNG or WebP (10 MB maximum) per post, with the matchup in its title. "
     "Crop/redact names, account IDs, balances and barcodes BEFORE uploading; metadata removal cannot hide visible details.\n\n"
     "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
@@ -174,6 +179,7 @@ class CapperSlipReviews(commands.Cog):
         )
         self.lock = asyncio.Lock()
         self.review_locks: dict[int, asyncio.Lock] = {}
+        self.discovery_locks: dict[int, asyncio.Lock] = {}
         self.intake_ids: set[int] = set()
         self.prompt_edits: dict[int, tuple] = {}
         self.needs_reconciliation = True
@@ -259,6 +265,10 @@ class CapperSlipReviews(commands.Cog):
                 await message.edit(content=SUBMISSION_NOTICE, allowed_mentions=discord.AllowedMentions.none())
         if not thread.flags.pinned:
             await thread.edit(pinned=True, reason="Keep privacy and submission rules visible before upload")
+        if thread.id != ACKNOWLEDGEMENT_THREAD_ID:
+            raise RuntimeError("The saved submission notice does not match the required acknowledgement thread.")
+        message = await thread.fetch_message(thread.id)
+        await message.add_reaction(ACKNOWLEDGEMENT_EMOJI)
 
     @commands.Cog.listener()
     async def on_disconnect(self) -> None:
@@ -520,6 +530,31 @@ class CapperSlipReviews(commands.Cog):
             await asyncio.to_thread(self.store.advance, message.id)
 
     async def discover_thread(self, forum, thread, *, since: datetime | None = None) -> None:
+        if thread.id == ACKNOWLEDGEMENT_THREAD_ID:
+            return
+        async with self.discovery_locks.setdefault(thread.id, asyncio.Lock()):
+            if await asyncio.to_thread(self.store.find, thread.id, columns="message_id"):
+                return
+            await self.discover_locked_thread(forum, thread, since=since)
+
+    async def has_submission_acknowledgement(self, user_id: int) -> bool:
+        thread = await self.publisher.resolve_channel(
+            ACKNOWLEDGEMENT_THREAD_ID, "capper submission acknowledgement", required=True,
+        )
+        if (not isinstance(thread, discord.Thread) or thread.guild.id != GUILD_ID
+                or thread.parent_id != CAPPER_BALLOT_CHANNEL_ID):
+            raise RuntimeError("The acknowledgement thread is outside the configured ballot forum.")
+        message = await thread.fetch_message(ACKNOWLEDGEMENT_THREAD_ID)
+        if message.author.id != self.bot.user.id:
+            raise RuntimeError("The acknowledgement notice must be bot-owned.")
+        for reaction in message.reactions:
+            if str(reaction.emoji) == ACKNOWLEDGEMENT_EMOJI:
+                async for user in reaction.users(limit=None):
+                    if user.id == user_id and not user.bot:
+                        return True
+        return False
+
+    async def discover_locked_thread(self, forum, thread, *, since: datetime | None = None) -> None:
         if since is None:
             scan = await asyncio.to_thread(self.store.scan_state)
             since = review_time(scan["started_at"])
@@ -528,6 +563,26 @@ class CapperSlipReviews(commands.Cog):
             return
         member = forum.guild.get_member(message.author.id) or await forum.guild.fetch_member(message.author.id)
         if not self.publisher.is_tracked_operator(member):
+            return
+        if not await self.has_submission_acknowledgement(member.id):
+            await thread.delete(reason="Capper has not acknowledged the submission rules with the required reaction")
+            logger.info("slip_unacknowledged_post_deleted thread=%s author=%s", thread.id, member.id)
+            link = f"https://discord.com/channels/{GUILD_ID}/{ACKNOWLEDGEMENT_THREAD_ID}/{ACKNOWLEDGEMENT_THREAD_ID}"
+            error = (
+                f"Your capper ballot post was deleted because you have not acknowledged the submission rules. "
+                f"Read the opening message and react with {ACKNOWLEDGEMENT_EMOJI} here: {link}\n"
+                "Then create a fresh ballot post. Reactions on other messages or using another emoji do not count."
+            )
+            try:
+                await member.send(error, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                logger.exception("slip_acknowledgement_dm_failed thread=%s author=%s", thread.id, member.id)
+                await self.publisher.staff_alert(
+                    f"slip_acknowledgement:{member.id}",
+                    f"Deleted ballot post {thread.id}: capper {member.id} has not acknowledged the rules. "
+                    f"The error DM could not be delivered. Ask them to react with {ACKNOWLEDGEMENT_EMOJI} to {link} "
+                    "and submit a fresh ballot post.",
+                )
             return
         images = [item for item in message.attachments if (item.content_type or "").startswith("image/")]
         if not images:
