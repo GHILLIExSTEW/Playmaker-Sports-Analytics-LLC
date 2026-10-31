@@ -22,7 +22,8 @@ def service(monkeypatch):
 
 def request(**changes):
     return {"id": "request", "competition": "nfl", "game_id": "1", "kind": "odds",
-            "user_id": "user", "discord_user_id": "123", **changes}
+            "user_id": "user", "discord_user_id": "123", "guild_id": "456",
+            "role_id": "42", **changes}
 
 
 def test_budget_disabled_and_revoked_access_never_call_provider(service, monkeypatch):
@@ -33,6 +34,13 @@ def test_budget_disabled_and_revoked_access_never_call_provider(service, monkeyp
     service.db._ensure_client.return_value.rpc.return_value.execute.return_value.data = False
     with pytest.raises(PermissionError):
         service.run(request())
+    service.db._ensure_client.return_value.rpc.assert_called_once_with(
+        "research_refresh_authorized",
+        {
+            "p_user_id": "user", "p_discord_user_id": "123",
+            "p_guild_id": "456", "p_role_id": "42",
+        },
+    )
     service.multi._request.assert_not_called()
 
 
@@ -61,6 +69,21 @@ def test_players_reuse_verified_adapter(service):
     assert service.run(request(kind="players")) == "Updated"
     service.players.refresh.assert_called_once_with("nfl", 1, 123)
     service.multi._request.assert_not_called()
+
+
+def test_refresh_request_binds_current_guild_and_tracker_role():
+    db = Mock()
+    db._ensure_client.return_value.rpc.return_value.execute.return_value.data = "request-id"
+    data = workspace.ResearchWorkspaceData(database=db)
+
+    assert data.request_refresh(123, "nfl", "1", "game", 456, 42) == "request-id"
+    db._ensure_client.return_value.rpc.assert_called_once_with(
+        "request_discord_research_refresh",
+        {
+            "p_discord_user_id": "123", "p_competition": "nfl", "p_game_id": "1",
+            "p_kind": "game", "p_guild_id": "456", "p_role_id": "42",
+        },
+    )
 
 
 def test_game_refresh_checks_id_and_league(service, monkeypatch):
@@ -211,6 +234,67 @@ def test_operator_research_gate_does_not_accept_paid_membership():
     assert asyncio.run(cog._gate(target, operator_only=True)) is False
     assert "OPERATOR/Owner" in target.response.send_message.call_args.args[0]
     cog.membership.has_stats_access.assert_not_called()
+
+
+def test_stale_research_auto_refresh_is_capper_only(monkeypatch):
+    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
+    monkeypatch.setattr(workspace, "GUILD_ID", None)
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    cog.data.request_refresh.return_value = "request-123"
+    capper = Mock(spec=workspace.discord.Member)
+    capper.id = 123
+    capper.roles = [SimpleNamespace(id=42)]
+    interaction = SimpleNamespace(user=capper, guild_id=456)
+    game = {"competition": "nfl", "game_id": "1"}
+
+    note = asyncio.run(cog._refresh_if_stale(
+        interaction, game, "game",
+        (workspace.datetime.now(workspace.timezone.utc) - workspace.timedelta(minutes=61)).isoformat(),
+    ))
+
+    assert "Refresh queued" in note
+    cog.data.request_refresh.assert_called_once_with(123, "nfl", "1", "game", 456, 42)
+
+    member = Mock(spec=workspace.discord.Member)
+    member.id = 456
+    member.roles = []
+    non_capper = SimpleNamespace(user=member, guild_id=456)
+    assert asyncio.run(cog._refresh_if_stale(non_capper, game, "game", None)) is None
+    cog.data.request_refresh.assert_called_once()
+
+
+def test_fresh_capper_cache_does_not_queue_refresh(monkeypatch):
+    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
+    monkeypatch.setattr(workspace, "GUILD_ID", None)
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    capper = Mock(spec=workspace.discord.Member)
+    capper.id = 123
+    capper.roles = [SimpleNamespace(id=42)]
+    interaction = SimpleNamespace(user=capper, guild_id=456)
+    updated_at = workspace.datetime.now(workspace.timezone.utc).isoformat()
+
+    assert asyncio.run(cog._refresh_if_stale(
+        interaction, {"competition": "nfl", "game_id": "1"}, "odds", updated_at,
+    )) is None
+    cog.data.request_refresh.assert_not_called()
+
+
+def test_auto_refresh_reports_unsupported_player_stat_leagues(monkeypatch):
+    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
+    monkeypatch.setattr(workspace, "GUILD_ID", None)
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    capper = Mock(spec=workspace.discord.Member)
+    capper.id = 123
+    capper.roles = [SimpleNamespace(id=42)]
+    interaction = SimpleNamespace(user=capper, guild_id=456)
+
+    note = asyncio.run(cog._refresh_if_stale(
+        interaction, {"competition": "baseball:1", "game_id": "1", "sport": "baseball"},
+        "players", None,
+    ))
+
+    assert "unsupported" in note
+    cog.data.request_refresh.assert_not_called()
 
 
 def test_player_report_aggregates_cached_threshold_observations():

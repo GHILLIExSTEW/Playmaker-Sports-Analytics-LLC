@@ -43,8 +43,10 @@ admins, cappers never get HIGHROLLER).
 **Member features:** `member_bet_vault.py` (private bet tracking + monthly challenge),
 `member_activity.py`, `member_onboarding.py`, `research_workspace.py`, `data_models.py`
 (model-card commands). `research_workspace.py` also exposes `/research matchup`, `players`,
-`odds`, and budgeted `refresh` commands to eligible members; `/research model` and
-`performance` remain restricted to OPERATOR/Owner or approved research access.
+`odds`, and budgeted `refresh` commands to eligible members; tracker-role cappers
+automatically queue a refresh when game, player, or odds data is over 60 minutes old.
+Other users receive cached reports only. `/research model` and `performance` remain
+restricted to OPERATOR/Owner or approved research access.
 
 ## 2. Service Layer (`src/services/`, 34 modules)
 

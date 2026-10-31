@@ -14,7 +14,7 @@ from postgrest.exceptions import APIError
 
 from src.config import (
     API_SPORTS_BUDGET_ENABLED, GUILD_ID, LIVE_STATS_MOD_ROLE_IDS,
-    OPERATOR_ROLE_IDS, WHOP_MEMBERSHIP_SYNC_ENABLED,
+    OPERATOR_ROLE_IDS, TRACKER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED,
 )
 from src.member_stats import is_stats_moderator
 from src.services.api_budget_service import ApiBudgetDenied, member_request_batch, member_request_user
@@ -28,6 +28,7 @@ from src.services.website_capper_service import WEBSITE_OWNER_ROLE_ID
 from src.datetime_utils import parse_iso_datetime
 
 logger = logging.getLogger("official_play_bot")
+RESEARCH_STALE_AFTER = timedelta(minutes=60)
 
 
 class ResearchRefreshService:
@@ -42,6 +43,7 @@ class ResearchRefreshService:
             raise ApiBudgetDenied("Live refresh is disabled until the shared API budget is enabled.")
         authorized = self.db._ensure_client().rpc("research_refresh_authorized", {
             "p_user_id": request["user_id"], "p_discord_user_id": request["discord_user_id"],
+            "p_guild_id": request["guild_id"], "p_role_id": request["role_id"],
         }).execute().data
         if authorized is not True:
             raise PermissionError("Research access or verified Discord identity is no longer active.")
@@ -266,6 +268,14 @@ class ResearchWorkspaceData:
             raise RuntimeError("Cached odds returned an invalid response.")
         return rows[0] if rows else None
 
+    def player_snapshot_updated(self, sport: str, game_id: str) -> str | None:
+        rows = self.db._ensure_client().table("api_sports_player_game_stats").select(
+            "synced_at",
+        ).eq("sport_slug", sport).eq("game_id", int(game_id)).limit(1).execute().data
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise RuntimeError("Player snapshot freshness returned an invalid response.")
+        return rows[0].get("synced_at") if rows else None
+
     def model(self, competition: str) -> tuple[list[dict], dict | None]:
         if competition not in COMPETITIONS:
             raise ValueError("Select a supported model league.")
@@ -342,10 +352,14 @@ class ResearchWorkspaceData:
         fields.append(("Cached injuries", detail or "No current cached injury reports; no records does not mean a healthy roster."))
         return fields
 
-    def request_refresh(self, discord_user_id: int, competition: str, game_id: str, kind: str) -> str:
+    def request_refresh(
+        self, discord_user_id: int, competition: str, game_id: str, kind: str,
+        guild_id: int, role_id: int,
+    ) -> str:
         result = self.db._ensure_client().rpc("request_discord_research_refresh", {
             "p_discord_user_id": str(discord_user_id), "p_competition": competition,
             "p_game_id": game_id, "p_kind": kind,
+            "p_guild_id": str(guild_id), "p_role_id": str(role_id),
         }).execute().data
         if not isinstance(result, str):
             raise RuntimeError("Research refresh was not acknowledged.")
@@ -411,6 +425,16 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             return True
         return await asyncio.to_thread(self.membership.has_stats_access, interaction.user.id)
 
+    def _is_capper(self, interaction: discord.Interaction) -> bool:
+        member = interaction.user
+        return (
+            isinstance(member, discord.Member)
+            and interaction.guild_id is not None
+            and (GUILD_ID is None or interaction.guild_id == GUILD_ID)
+            and TRACKER_ROLE_ID > 0
+            and any(role.id == TRACKER_ROLE_ID for role in member.roles)
+        )
+
     async def _gate(self, interaction: discord.Interaction, *, operator_only: bool = False) -> bool:
         try:
             allowed = await self._is_operator(interaction) if operator_only else await self._member_allowed(interaction)
@@ -430,6 +454,54 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             await interaction.response.send_message(message, ephemeral=True)
             return False
         return True
+
+    async def _capper_refresh_gate(self, interaction: discord.Interaction) -> bool:
+        if self._is_capper(interaction):
+            return True
+        await interaction.response.send_message(
+            "Live research refresh is reserved for verified cappers with the tracker role. "
+            "You can still use cached research reports.",
+            ephemeral=True,
+        )
+        return False
+
+    async def _refresh_if_stale(
+        self, interaction: discord.Interaction, game: dict, kind: str, updated_at: str | None,
+    ) -> str | None:
+        if not self._is_capper(interaction):
+            return None
+        stale = True
+        if updated_at:
+            stale = datetime.now(timezone.utc) - parse_iso_datetime(updated_at) >= RESEARCH_STALE_AFTER
+        if not stale:
+            return None
+        if kind == "players" and game["sport"] in {"baseball", "hockey"}:
+            return "Live player-stat refresh is unsupported for this league; cached data shown."
+        if not API_SPORTS_BUDGET_ENABLED:
+            logger.info("research_auto_refresh_disabled user=%s game=%s kind=%s", interaction.user.id, game["game_id"], kind)
+            return "Live refresh is disabled; cached data shown."
+        try:
+            request_id = await asyncio.to_thread(
+                self.data.request_refresh, interaction.user.id, game["competition"], game["game_id"],
+                kind, interaction.guild_id, TRACKER_ROLE_ID,
+            )
+        except APIError:
+            logger.info(
+                "research_auto_refresh_not_queued user=%s competition=%s game=%s kind=%s",
+                interaction.user.id, game["competition"], game["game_id"], kind, exc_info=True,
+            )
+            return "Refresh not queued (cooldown or access check); cached data shown."
+        except Exception:
+            logger.exception(
+                "research_auto_refresh_failed user=%s competition=%s game=%s kind=%s",
+                interaction.user.id, game["competition"], game["game_id"], kind,
+            )
+            return "Refresh could not be queued; cached data shown."
+        logger.info(
+            "research_auto_refresh_queued user=%s competition=%s game=%s kind=%s request=%s",
+            interaction.user.id, game["competition"], game["game_id"], kind, request_id,
+        )
+        return f"Refresh queued (`{request_id}`); showing cached data while it runs."
 
     async def _game_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         try:
@@ -459,11 +531,18 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         await interaction.response.defer(ephemeral=True)
         try:
             workspace = await asyncio.to_thread(self.data.matchup, competition, game)
+            refresh_note = await self._refresh_if_stale(
+                interaction, workspace["game"], "game", workspace["game"].get("synced_at"),
+            )
             is_operator = await self._is_operator(interaction)
             operator_fields = await asyncio.to_thread(
                 self.data.operator_matchup_fields, workspace["game"],
             ) if is_operator else []
             embed = self._matchup_embed(workspace, operator_fields=operator_fields)
+            if refresh_note:
+                embed.add_field(name="Data freshness", value=refresh_note, inline=False)
+            elif not is_operator:
+                embed.set_footer(text="Cached data only · refreshed automatically for cappers when over 60 minutes old")
             await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -504,8 +583,22 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         try:
             workspace = await asyncio.to_thread(self.data.matchup, competition, game)
             records = await asyncio.to_thread(self.data.players, competition, game, workspace)
+            updated_at = await asyncio.to_thread(
+                self.data.player_snapshot_updated, workspace["game"]["sport"], game,
+            )
+            refresh_note = await self._refresh_if_stale(
+                interaction, workspace["game"], "players", updated_at,
+            )
             text = self._player_report(workspace["game"], records, player, statistic, threshold, split)
-            await interaction.followup.send(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            embed = discord.Embed(
+                title=f"{workspace['game']['away_name']} at {workspace['game']['home_name']} · Player research",
+                description=text[:4096],
+                color=0x9146BF,
+            )
+            if refresh_note:
+                embed.add_field(name="Data freshness", value=refresh_note, inline=False)
+            embed.set_footer(text="Cached game logs only · threshold is user-entered, not a sportsbook line")
+            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
@@ -530,11 +623,23 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         await interaction.response.defer(ephemeral=True)
         try:
             odds = await asyncio.to_thread(self.data.odds, competition, game)
+            game_rows = await asyncio.to_thread(self.data.matchup, competition, game)
+            selected_game = game_rows["game"]
+            refresh_note = await self._refresh_if_stale(
+                interaction, selected_game, "odds", odds.get("fetched_at") if odds else None,
+            )
             if odds is None:
-                message = "No cached sportsbook snapshot is available. Use `/research refresh` to request one."
+                embed = discord.Embed(
+                    title="Sportsbook lines",
+                    description="No cached sportsbook snapshot is available.",
+                    color=0x9146BF,
+                )
             else:
-                message = self._odds_report(odds, market)
-            await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                embed = self._odds_embed(odds, competition, game, market)
+            if refresh_note:
+                embed.add_field(name="Data freshness", value=refresh_note, inline=False)
+            embed.set_footer(text="Cached quotes only · implied probability includes bookmaker margin")
+            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception("research_odds_failed user=%s competition=%s game=%s", interaction.user.id, competition, game)
             await interaction.followup.send(
@@ -598,7 +703,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     async def research_refresh(
         self, interaction: discord.Interaction, competition: str, game: str, kind: str,
     ):
-        if not await self._gate(interaction):
+        if not await self._capper_refresh_gate(interaction):
             return
         if not API_SPORTS_BUDGET_ENABLED:
             await interaction.response.send_message(
@@ -610,12 +715,19 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         try:
             request_id = await asyncio.to_thread(
                 self.data.request_refresh, interaction.user.id, competition, game, kind,
+                interaction.guild_id, TRACKER_ROLE_ID,
             )
-            await interaction.followup.send(
-                f"Refresh queued as `{request_id}`. Check `/research refresh_status` for its result. "
-                "Existing per-user/event cooldowns and shared provider budgets apply.",
-                ephemeral=True,
+            embed = discord.Embed(
+                title="Research refresh queued",
+                description=(
+                    f"**{competition}** · `{game}` · {kind}\n"
+                    f"Request ID: `{request_id}`\n"
+                    "Use `/research refresh_status` to check its result."
+                ),
+                color=0x9146BF,
             )
+            embed.set_footer(text="Shared API budget and per-user/event cooldowns apply")
+            await interaction.followup.send(embed=embed, ephemeral=True)
         except (ApiBudgetDenied, ValueError, APIError) as exc:
             logger.exception("research_refresh_request_failed user=%s competition=%s game=%s kind=%s",
                              interaction.user.id, competition, game, kind)
@@ -633,19 +745,29 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     @app_commands.command(name="refresh_status", description="Check one of your research refresh requests")
     @app_commands.guild_only()
     async def research_refresh_status(self, interaction: discord.Interaction, request_id: str):
-        if not await self._gate(interaction):
+        if not await self._capper_refresh_gate(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         try:
             row = await asyncio.to_thread(self.data.refresh_status, interaction.user.id, request_id)
             if row is None:
-                await interaction.followup.send("No refresh request with that ID belongs to your account.", ephemeral=True)
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="Refresh not found",
+                        description="No refresh request with that ID belongs to your account.",
+                        color=0x9146BF,
+                    ),
+                    ephemeral=True,
+                )
                 return
             result = f"\n{row['result']}" if row.get("result") else ""
-            await interaction.followup.send(
-                f"**{row['kind']}** · **{row['state']}** · {row['competition']} game `{row['game_id']}`{result}",
-                ephemeral=True, allowed_mentions=discord.AllowedMentions.none(),
+            embed = discord.Embed(
+                title="Research refresh status",
+                description=f"**{row['kind']}** · **{row['state']}**\n{row['competition']} · `{row['game_id']}`{result}",
+                color=0x9146BF,
             )
+            embed.set_footer(text=f"Requested {self._time_tag(row['requested_at'])}")
+            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception("research_refresh_status_failed user=%s", interaction.user.id)
             await interaction.followup.send(
@@ -821,8 +943,15 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         return "\n".join(lines)[:3900]
 
     @staticmethod
-    def _odds_report(odds: dict, market_filter: str | None = None) -> str:
-        lines = [f"**Cached sportsbook lines** · updated {ResearchWorkspace._time_tag(odds['fetched_at'])}"]
+    def _odds_embed(
+        odds: dict, competition: str, game_id: str, market_filter: str | None = None,
+    ) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"{competition} · Sportsbook lines",
+            description=f"Game `{game_id}` · updated {ResearchWorkspace._time_tag(odds['fetched_at'])}",
+            color=0x9146BF,
+        )
+        added = 0
         for book in odds.get("bookmakers", []):
             if not isinstance(book, dict):
                 raise RuntimeError("Cached sportsbook data has an invalid bookmaker.")
@@ -836,22 +965,23 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                         raise RuntimeError("Cached sportsbook data has an invalid selection.")
                     decimal = _numeric_score(selection.get("odd"))
                     if decimal is not None and decimal > 1:
-                        lines.append(
-                            f"{discord.utils.escape_markdown(str(book.get('name') or 'Book'))} · "
-                            f"{discord.utils.escape_markdown(str(market.get('name') or 'Market'))} · "
-                            f"{discord.utils.escape_markdown(str(selection.get('value') or 'Selection'))}: "
-                            f"{decimal:.2f} decimal ({100 / decimal:.1f}% implied)"
+                        embed.add_field(
+                            name=f"{discord.utils.escape_markdown(str(book.get('name') or 'Book'))} · "
+                            f"{discord.utils.escape_markdown(str(market.get('name') or 'Market'))}"[:256],
+                            value=f"{discord.utils.escape_markdown(str(selection.get('value') or 'Selection'))}\n"
+                            f"**{decimal:.2f}** decimal · {100 / decimal:.1f}% implied",
+                            inline=True,
                         )
-                    if len(lines) >= 31:
+                        added += 1
+                    if added >= 20:
                         break
-                if len(lines) >= 31:
+                if added >= 20:
                     break
-            if len(lines) >= 31:
+            if added >= 20:
                 break
-        if len(lines) == 1:
-            lines.append("No usable odds lines were included in the cached snapshot.")
-        lines.append("Implied probability includes bookmaker margin; line rules may differ. No-vig probabilities are not calculated.")
-        return "\n".join(lines)[:3900]
+        if not added:
+            embed.description += "\nNo usable odds lines were included in the cached snapshot."
+        return embed
 
     @staticmethod
     def _model_embed(competition: str, projections: list[dict], backtest: dict | None) -> discord.Embed:
