@@ -312,6 +312,45 @@ def test_player_report_aggregates_cached_threshold_observations():
     assert "1 over · 1 under · 1 push" in report
 
 
+def test_player_embed_splits_player_research_into_compact_sections():
+    game = {"away_name": "Minnesota Vikings", "home_name": "Detroit Lions"}
+    report = "\n".join([
+        "**Jared Goff — Detroit Lions**",
+        "Sample: 1 prior game logs, up to ten; only pre-match data is included.",
+        "**Passing yards:** average 250.00 across 1 prior observations. At 225: 1 over · 0 under · 0 push.",
+        "Selected game snapshot: 300 (not included in the prior-game sample).",
+        "<t:1791501600:f>: 250",
+        "Cached samples may be incomplete; this is descriptive research, not a prediction or betting advice.",
+    ])
+
+    embed = workspace.ResearchWorkspace._player_embed(game, report)
+
+    assert embed.title == "Minnesota Vikings at Detroit Lions · Player research"
+    assert "Sample:" in embed.description
+    assert len(embed.fields) == 1
+    assert embed.fields[0].name == "Stat results"
+    assert "**Passing yards:**" in embed.fields[0].value
+    assert "Selected game snapshot: 300" in embed.fields[0].value
+    assert "Cached samples may be incomplete" in embed.footer.text
+
+
+def test_player_embed_lists_available_players_in_separate_field():
+    game = {"away_name": "Minnesota Vikings", "home_name": "Detroit Lions"}
+    report = "\n".join([
+        "**Cached player records before <t:1791501600:f>**",
+        "Jared Goff — Detroit Lions",
+        "Justin Jefferson — Minnesota Vikings",
+        "Run `/research players` again with a player name.",
+    ])
+
+    embed = workspace.ResearchWorkspace._player_embed(game, report)
+
+    assert embed.description == "**Cached player records before <t:1791501600:f>**"
+    assert embed.fields[0].name == "Players in cached sample"
+    assert "Jared Goff" in embed.fields[0].value
+    assert embed.fields[1].name == "Next step"
+
+
 def test_selected_game_stats_do_not_leak_into_pre_match_sample():
     game = {"start_at": "2026-10-10T18:00:00Z", "sport": "basketball"}
     records = [{

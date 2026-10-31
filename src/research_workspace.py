@@ -590,14 +590,9 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                 interaction, workspace["game"], "players", updated_at,
             )
             text = self._player_report(workspace["game"], records, player, statistic, threshold, split)
-            embed = discord.Embed(
-                title=f"{workspace['game']['away_name']} at {workspace['game']['home_name']} · Player research",
-                description=text[:4096],
-                color=0x9146BF,
-            )
+            embed = self._player_embed(workspace["game"], text)
             if refresh_note:
                 embed.add_field(name="Data freshness", value=refresh_note, inline=False)
-            embed.set_footer(text="Cached game logs only · threshold is user-entered, not a sportsbook line")
             await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
@@ -941,6 +936,83 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             lines.append("Run again with a statistic name; thresholds are user-entered and are not sportsbook lines.")
         lines.append("Cached samples may be incomplete; this is descriptive research, not a prediction or betting advice.")
         return "\n".join(lines)[:3900]
+
+    @staticmethod
+    def _player_embed(game: dict, report: str) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"{game['away_name']} at {game['home_name']} · Player research",
+            color=0x9146BF,
+        )
+        embed.set_footer(text="Cached game logs · descriptive research, not a prediction or sportsbook line")
+        lines = report.splitlines()
+        if not lines:
+            embed.description = "No player research is available for this game."
+        elif len(lines) >= 2 and lines[1].startswith("Sample:"):
+            embed.description = f"{lines[0]}\n{lines[1]}"
+            observations = []
+            stat_lines = []
+            available_stats = []
+            notes = []
+            disclaimer = None
+            for line in lines[2:]:
+                if line.startswith("Available stats: "):
+                    available_stats.extend(
+                        stat.strip() for stat in line.removeprefix("Available stats: ").split(",")
+                    )
+                elif line.startswith("Cached samples "):
+                    disclaimer = line
+                elif line.startswith("Run again "):
+                    notes.append(line)
+                elif line.startswith("<t:") or line.startswith("Selected game snapshot:"):
+                    observations.append(line)
+                else:
+                    stat_lines.append(line)
+            if stat_lines or observations:
+                embed.add_field(
+                    name="Stat results",
+                    value="\n".join([*stat_lines, *observations])[:1024] or "No stat results available.",
+                    inline=False,
+                )
+            if available_stats:
+                chunks = []
+                current = ""
+                for stat in available_stats:
+                    candidate = f"{current}, {stat}" if current else stat
+                    if len(candidate) > 900 and current:
+                        chunks.append(current)
+                        current = stat
+                    else:
+                        current = candidate
+                if current:
+                    chunks.append(current)
+                for index, chunk in enumerate(chunks[:3]):
+                    name = "Available stats" if index == 0 else f"Available stats ({index + 1})"
+                    embed.add_field(name=name, value=chunk, inline=False)
+            if notes:
+                embed.add_field(name="How to use this report", value="\n".join(notes)[:1024], inline=False)
+            if disclaimer:
+                embed.set_footer(text=disclaimer[:2048])
+        else:
+            embed.description = lines[0][:4096]
+            remaining = lines[1:]
+            if remaining and lines[0].startswith("**Cached player records"):
+                names = []
+                instructions = []
+                for line in remaining:
+                    if line.startswith("Run `/research players`"):
+                        instructions.append(line)
+                    elif line.startswith("Cached samples "):
+                        instructions.append(line)
+                    else:
+                        names.append(line)
+                if names:
+                    embed.add_field(name="Players in cached sample", value="\n".join(names)[:1024], inline=False)
+                if instructions:
+                    embed.add_field(name="Next step", value="\n".join(instructions)[:1024], inline=False)
+            elif remaining:
+                embed.add_field(name="Research details", value="\n".join(remaining)[:1024], inline=False)
+            embed.set_footer(text="Cached game logs · descriptive research, not a prediction or sportsbook line")
+        return embed
 
     @staticmethod
     def _odds_embed(
