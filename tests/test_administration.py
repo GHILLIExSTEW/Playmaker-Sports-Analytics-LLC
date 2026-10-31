@@ -61,10 +61,10 @@ def test_diagnostics_preserves_safe_check_results(monkeypatch):
 
 
 def test_diagnostics_exception_is_explicit(monkeypatch, caplog):
-    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", set())
+    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {77})
     cog = administration()
     cog.diagnostics.run_checks.side_effect = RuntimeError("failed")
-    request = interaction()
+    request = interaction(roles=[77])
     asyncio.run(cog.test_command.callback(cog, request))
     assert "Diagnostics failed" in request.response.send_message.call_args.args[0]
     assert "diagnostics_failed" in caplog.text
@@ -72,19 +72,19 @@ def test_diagnostics_exception_is_explicit(monkeypatch, caplog):
 
 @pytest.mark.parametrize("content_type", [None, "application/pdf", "text/plain"])
 def test_image_test_rejects_nonimage_without_extracting(monkeypatch, content_type):
-    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", set())
+    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {77})
     cog = administration()
-    request = interaction()
+    request = interaction(roles=[77])
     asyncio.run(cog.test_command.callback(cog, request, SimpleNamespace(content_type=content_type)))
     cog.image_service.extract_play.assert_not_called()
     assert "Attach an image" in request.response.send_message.call_args.args[0]
 
 
 def test_image_test_parses_privately_without_recording(monkeypatch):
-    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", set())
+    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {77})
     cog = administration()
     cog.image_service.extract_play.return_value = parsed()
-    request = interaction()
+    request = interaction(roles=[77])
     asyncio.run(cog.test_command.callback(
         cog, request, SimpleNamespace(content_type="image/png", url="https://cdn/test.png"),
     ))
@@ -99,10 +99,10 @@ def test_image_test_parses_privately_without_recording(monkeypatch):
 
 
 def test_image_test_failure_is_private(monkeypatch):
-    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", set())
+    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {77})
     cog = administration()
     cog.image_service.extract_play.side_effect = RuntimeError("unreadable")
-    request = interaction()
+    request = interaction(roles=[77])
     asyncio.run(cog.test_command.callback(
         cog, request, SimpleNamespace(content_type="image/png", url="https://cdn/test.png"),
     ))

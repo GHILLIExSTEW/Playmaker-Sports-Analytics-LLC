@@ -155,7 +155,7 @@ class PlaySubmission(commands.Cog):
         if not self.is_tracked_operator(interaction.user):
             await interaction.response.send_message("Only cappers can import personal plays.", ephemeral=True)
             return
-        if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
+        if not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("You do not have permission to import plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
@@ -186,7 +186,7 @@ class PlaySubmission(commands.Cog):
         if not self.is_tracked_operator(interaction.user):
             await interaction.response.send_message("Only cappers can record personal plays.", ephemeral=True)
             return
-        if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
+        if not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("You do not have permission to log official plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):

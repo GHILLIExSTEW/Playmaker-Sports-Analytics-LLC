@@ -429,7 +429,8 @@ async def send_insight_request(play_id: int) -> bool:
 
 
 def is_official(user) -> bool:
-    return not OFFICIAL_ROLE_IDS or any(role.id in OFFICIAL_ROLE_IDS for role in getattr(user, "roles", []))
+    # Fail closed: an unconfigured OFFICIAL_ROLE_IDS grants official access to no one.
+    return bool(OFFICIAL_ROLE_IDS) and any(role.id in OFFICIAL_ROLE_IDS for role in getattr(user, "roles", []))
 
 
 def can_manage_plays(user, guild: discord.Guild | None) -> bool:
@@ -480,6 +481,8 @@ async def announce_new_play(payload: dict, capper_name: str, card: discord.Messa
 async def main() -> None:
     if not DISCORD_TOKEN:
         raise RuntimeError("DISCORD_TOKEN is not configured.")
+    if not OFFICIAL_ROLE_IDS:
+        logger.warning("OFFICIAL_ROLE_IDS is not configured; official-only commands are disabled for everyone.")
     async with bot:
         await bot.start(DISCORD_TOKEN)
 

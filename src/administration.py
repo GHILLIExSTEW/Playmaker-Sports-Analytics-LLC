@@ -281,7 +281,7 @@ class Administration(commands.Cog):
     @app_commands.command(name="test", description="Test an image or run play-system diagnostics")
     @app_commands.describe(image="Optional betting-slip image to parse without recording")
     async def test_command(self, interaction: discord.Interaction, image: discord.Attachment | None = None):
-        if OFFICIAL_ROLE_IDS and not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
+        if not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
             await interaction.response.send_message("Only officials can run diagnostics.", ephemeral=True)
             return
         if image is not None:

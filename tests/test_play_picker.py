@@ -150,3 +150,9 @@ def test_is_official(monkeypatch):
     monkeypatch.setattr(bot_module, "OFFICIAL_ROLE_IDS", {555})
     assert bot_module.is_official(FakeInteraction(roles=[555]).user)
     assert not bot_module.is_official(FakeInteraction(roles=[1]).user)
+
+
+def test_is_official_fails_closed_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(bot_module, "OFFICIAL_ROLE_IDS", set())
+    assert not bot_module.is_official(FakeInteraction(roles=[555]).user)
+    assert not bot_module.is_official(FakeInteraction(roles=[]).user)
