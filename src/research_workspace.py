@@ -23,6 +23,10 @@ from src.services.api_sports_service import ApiSportsService, normalize_game
 from src.services.data_model_service import COMPETITIONS
 from src.services.membership_service import MembershipService
 from src.services.player_stats_service import PlayerStatsService, athlete_records
+from src.services.play_card_service import download_artwork
+from src.services.research_card_image_service import (
+    player_report_sections, render_research_card,
+)
 from src.services.supabase_service import supabase_service
 from src.services.website_capper_service import WEBSITE_OWNER_ROLE_ID
 from src.datetime_utils import parse_iso_datetime
@@ -276,6 +280,27 @@ class ResearchWorkspaceData:
             raise RuntimeError("Player snapshot freshness returned an invalid response.")
         return rows[0].get("synced_at") if rows else None
 
+    def team_logo_urls(self, game: dict) -> tuple[str | None, str | None]:
+        if game["sport"] == "nfl":
+            query = self.db._ensure_client().table("api_sports_nfl_games").select(
+                "away_team_logo,home_team_logo",
+            ).eq("game_id", int(game["game_id"])).limit(1)
+            fields = "away_team_logo", "home_team_logo"
+        else:
+            query = self.db._ensure_client().table("api_sports_events").select(
+                "away_logo,home_logo",
+            ).eq("sport_slug", game["sport"]).eq("event_id", game["game_id"]).limit(1)
+            fields = "away_logo", "home_logo"
+        rows = self.db._execute(query.execute).data
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise RuntimeError("Cached team logos returned an invalid response.")
+        if not rows:
+            return None, None
+        logos = tuple(rows[0].get(field) for field in fields)
+        if any(logo is not None and not isinstance(logo, str) for logo in logos):
+            raise RuntimeError("Cached team logo URL returned an invalid response.")
+        return logos
+
     def model(self, competition: str) -> tuple[list[dict], dict | None]:
         if competition not in COMPETITIONS:
             raise ValueError("Select a supported model league.")
@@ -503,6 +528,41 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         )
         return f"Refresh queued (`{request_id}`); showing cached data while it runs."
 
+    async def _attach_research_image(self, embed: discord.Embed, game: dict) -> discord.File:
+        away_url, home_url = await asyncio.to_thread(self.data.team_logo_urls, game)
+
+        async def load_logo(url: str | None, side: str) -> bytes | None:
+            if not url:
+                return None
+            try:
+                return await asyncio.to_thread(download_artwork, url)
+            except Exception:
+                logger.exception(
+                    "research_team_logo_load_failed competition=%s game=%s side=%s",
+                    game.get("competition"), game.get("game_id"), side,
+                )
+                return None
+
+        away_logo, home_logo = await asyncio.gather(
+            load_logo(away_url, "away"), load_logo(home_url, "home"),
+        )
+        sections = [(field.name, field.value) for field in embed.fields]
+        description = embed.description or ""
+        image = await asyncio.to_thread(
+            render_research_card,
+            away_name=str(game["away_name"]),
+            home_name=str(game["home_name"]),
+            heading=embed.title or "Game research",
+            description=description,
+            sections=sections,
+            away_logo=away_logo,
+            home_logo=home_logo,
+        )
+        embed.description = None
+        embed.clear_fields()
+        embed.set_image(url="attachment://research-card.png")
+        return discord.File(image, filename="research-card.png")
+
     async def _game_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         try:
             if not await self._member_allowed(interaction):
@@ -543,7 +603,11 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                 embed.add_field(name="Data freshness", value=refresh_note, inline=False)
             elif not is_operator:
                 embed.set_footer(text="Cached data only · refreshed automatically for cappers when over 60 minutes old")
-            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            image = await self._attach_research_image(embed, workspace["game"])
+            await interaction.followup.send(
+                embed=embed, file=image, ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
@@ -593,7 +657,20 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             embed = self._player_embed(workspace["game"], text)
             if refresh_note:
                 embed.add_field(name="Data freshness", value=refresh_note, inline=False)
-            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            if player:
+                title, description, sections = player_report_sections(text)
+                embed.title = f"{workspace['game']['away_name']} at {workspace['game']['home_name']} · {title}"
+                embed.description = description
+                embed.clear_fields()
+                for label, value in sections:
+                    embed.add_field(name=label[:256], value=value[:1024] or "No observations", inline=False)
+                if refresh_note:
+                    embed.add_field(name="Data freshness", value=refresh_note, inline=False)
+            image = await self._attach_research_image(embed, workspace["game"])
+            await interaction.followup.send(
+                embed=embed, file=image, ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
@@ -634,7 +711,11 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             if refresh_note:
                 embed.add_field(name="Data freshness", value=refresh_note, inline=False)
             embed.set_footer(text="Cached quotes only · implied probability includes bookmaker margin")
-            await interaction.followup.send(embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            image = await self._attach_research_image(embed, selected_game)
+            await interaction.followup.send(
+                embed=embed, file=image, ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except Exception:
             logger.exception("research_odds_failed user=%s competition=%s game=%s", interaction.user.id, competition, game)
             await interaction.followup.send(

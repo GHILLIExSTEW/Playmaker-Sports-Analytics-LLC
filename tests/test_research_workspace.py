@@ -334,6 +334,66 @@ def test_player_embed_splits_player_research_into_compact_sections():
     assert "Cached samples may be incomplete" in embed.footer.text
 
 
+def test_player_image_card_parser_extracts_selected_stats_and_observations():
+    report = "\n".join([
+        "**Jared Goff — Detroit Lions**",
+        "Sample: 1 prior game logs, up to ten; only pre-match data is included.",
+        "**Passing yards:** average 250.00 across 1 prior observations. At 225: 1 over · 0 under · 0 push.",
+        "Selected game snapshot: 300 (not included in the prior-game sample).",
+        "<t:1791501600:f>: 250",
+    ])
+
+    player, description, sections = workspace.player_report_sections(report)
+
+    assert player == "Jared Goff — Detroit Lions"
+    assert description.startswith("Sample:")
+    assert sections[0][0] == "Passing yards"
+    assert "1 over" in sections[0][1]
+    assert sections[1][0] == "Recent observations"
+
+
+def test_research_image_card_renders_team_marks_and_report_sections():
+    from io import BytesIO
+
+    from PIL import Image
+
+    logo = BytesIO()
+    Image.new("RGBA", (32, 32), (255, 0, 0, 255)).save(logo, format="PNG")
+
+    result = workspace.render_research_card(
+        away_name="Minnesota Vikings",
+        home_name="Detroit Lions",
+        heading="Player research · Jared Goff",
+        description="Sample: 1 prior game · pre-match only",
+        sections=[("Passing yards", "Average 250 · 1 over · 0 under · 0 push")],
+        away_logo=logo.getvalue(),
+        home_logo=logo.getvalue(),
+    )
+
+    with Image.open(result) as card:
+        assert card.format == "PNG"
+        assert card.width == 1200
+        assert card.height >= 760
+
+
+def test_research_response_attaches_rendered_card_image():
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    cog.data.team_logo_urls.return_value = (None, None)
+    embed = workspace.discord.Embed(title="Lions at Vikings", description="Cached matchup")
+    embed.add_field(name="Recent form", value="Lions 4-1")
+
+    image = asyncio.run(cog._attach_research_image(
+        embed,
+        {"competition": "nfl", "game_id": "1", "sport": "nfl",
+         "away_name": "Detroit Lions", "home_name": "Minnesota Vikings"},
+    ))
+
+    assert image.filename == "research-card.png"
+    assert embed.image.url == "attachment://research-card.png"
+    assert embed.description is None
+    assert not embed.fields
+
+
 def test_player_embed_lists_available_players_in_separate_field():
     game = {"away_name": "Minnesota Vikings", "home_name": "Detroit Lions"}
     report = "\n".join([
