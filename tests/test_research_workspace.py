@@ -171,3 +171,131 @@ def test_nontransport_worker_error_remains_explicit():
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=alert, service=service)
     asyncio.run(cog.refresh_requests.coro(cog))
     assert alert.await_args.args[0] == "research_refresh_worker"
+
+
+def test_research_group_registers_cached_and_budgeted_tools():
+    commands = {command.name for command in workspace.ResearchWorkspace.__cog_app_commands__}
+    assert workspace.ResearchWorkspace.__cog_is_app_commands_group__ is True
+    assert workspace.ResearchWorkspace.__cog_group_name__ == "research"
+    assert commands == {
+        "matchup", "players", "odds", "model", "performance", "refresh", "refresh_status",
+    }
+
+
+def test_member_research_gate_requires_paid_access_or_operator_override(monkeypatch):
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock())
+    cog.membership.has_stats_access.return_value = False
+    cog._is_operator = AsyncMock(return_value=False)
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=123), guild_id=456,
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+    monkeypatch.setattr(workspace, "WHOP_MEMBERSHIP_SYNC_ENABLED", True)
+    monkeypatch.setattr(workspace, "is_stats_moderator", lambda interaction: False)
+    assert asyncio.run(cog._gate(target)) is False
+    assert "verified paid membership" in target.response.send_message.call_args.args[0]
+
+    cog.membership.has_stats_access.return_value = True
+    target.response.send_message.reset_mock()
+    assert asyncio.run(cog._gate(target)) is True
+    target.response.send_message.assert_not_awaited()
+
+
+def test_operator_research_gate_does_not_accept_paid_membership():
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock())
+    cog._is_operator = AsyncMock(return_value=False)
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=123), guild_id=456,
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+    assert asyncio.run(cog._gate(target, operator_only=True)) is False
+    assert "OPERATOR/Owner" in target.response.send_message.call_args.args[0]
+    cog.membership.has_stats_access.assert_not_called()
+
+
+def test_player_report_aggregates_cached_threshold_observations():
+    game = {"start_at": "2026-10-10T18:00:00Z", "sport": "basketball"}
+    records = [{
+        "id": "12", "name": "Player One", "team": "Home",
+        "logs": [
+            {"date": "2026-10-08T18:00:00Z", "stats": {"Points": 18}},
+            {"date": "2026-10-06T18:00:00Z", "stats": {"Points": 22}},
+            {"date": "2026-10-04T18:00:00Z", "stats": {"Points": 20}},
+        ],
+    }]
+    report = workspace.ResearchWorkspace._player_report(game, records, "Player One", "Points", 20)
+    assert "average 20.00 across 3 prior observations" in report
+    assert "1 over · 1 under · 1 push" in report
+
+
+def test_selected_game_stats_do_not_leak_into_pre_match_sample():
+    game = {"start_at": "2026-10-10T18:00:00Z", "sport": "basketball"}
+    records = [{
+        "id": "12", "name": "Player One", "team": "Home",
+        "logs": [
+            {"date": "2026-10-08T18:00:00Z", "stats": {"Points": 20}},
+            {"date": "2026-10-10T18:00:00Z", "stats": {"Points": 50}, "current": True},
+        ],
+    }]
+    report = workspace.ResearchWorkspace._player_report(game, records, "Player One", "Points", 25)
+    assert "average 20.00 across 1 prior observations" in report
+    assert "Selected game snapshot: 50" in report
+    assert "0 over · 1 under · 0 push" in report
+
+
+def test_player_report_filters_home_away_and_head_to_head_samples():
+    game = {"start_at": "2026-10-10T18:00:00Z", "sport": "basketball", "home_id": "1", "away_id": "2"}
+    history = [
+        {"game_id": "8", "home_id": "1", "away_id": "3"},
+        {"game_id": "9", "home_id": "4", "away_id": "2"},
+        {"game_id": "10", "home_id": "1", "away_id": "2"},
+    ]
+    records = [{
+        "id": "12", "name": "Player One", "team": "Home",
+        "logs": [
+            {"date": "2026-10-08T18:00:00Z", "stats": {"Points": 10}, "home_name": "Home", "away_name": "Other", "home_id": "1", "away_id": "3"},
+            {"date": "2026-10-06T18:00:00Z", "stats": {"Points": 20}, "home_name": "Other", "away_name": "Home", "home_id": "4", "away_id": "1"},
+            {"date": "2026-10-04T18:00:00Z", "stats": {"Points": 30}, "home_name": "Home", "away_name": "Away", "home_id": "1", "away_id": "2"},
+        ],
+    }]
+    home = workspace.ResearchWorkspace._player_report(game, records, "Player One", "Points", None, "home")
+    head_to_head = workspace.ResearchWorkspace._player_report(
+        game, records, "Player One", "Points", None, "head-to-head",
+    )
+    assert "average 20.00 across 2 prior observations" in home
+    assert "average 30.00 across 1 prior observations" in head_to_head
+
+
+def test_player_report_explains_unavailable_league_adapter():
+    game = {"start_at": "2026-10-10T18:00:00Z", "sport": "baseball"}
+    assert "unavailable" in workspace.ResearchWorkspace._player_report(game, [], None, None, None)
+
+
+def test_matchup_report_uses_prior_scores_and_h2h_only():
+    game = {
+        "competition": "nfl", "game_id": "30", "start_at": "2026-10-10T18:00:00Z",
+        "home_id": "1", "home_name": "Home", "away_id": "2", "away_name": "Away",
+        "status": "NS", "synced_at": "2026-10-09T18:00:00Z",
+    }
+    history = [
+        {
+            "game_id": "10", "start_at": "2026-10-01T18:00:00Z", "home_id": "1",
+            "home_name": "Home", "away_id": "2", "away_name": "Away", "home_score": 24,
+            "away_score": 17, "synced_at": "2026-10-02T18:00:00Z",
+        },
+        {
+            "game_id": "11", "start_at": "2026-10-02T18:00:00Z", "home_id": "1",
+            "home_name": "Home", "away_id": "3", "away_name": "Other", "home_score": 7,
+            "away_score": 10, "synced_at": "2026-10-03T18:00:00Z",
+        },
+    ]
+    embed = workspace.ResearchWorkspace._matchup_embed(
+        {"game": game, "history": history}, operator_fields=[],
+    )
+    assert "**Last 2 scored games:** 1-1-0" in embed.fields[0].value
+    assert "Recent head-to-head" in embed.fields[2].name
+    assert "Other" not in embed.fields[2].value
+
+
+def test_score_parser_treats_missing_score_as_unavailable():
+    assert workspace._numeric_score(None) is None

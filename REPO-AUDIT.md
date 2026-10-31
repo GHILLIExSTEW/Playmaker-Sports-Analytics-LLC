@@ -42,7 +42,9 @@ admins, cappers never get HIGHROLLER).
 
 **Member features:** `member_bet_vault.py` (private bet tracking + monthly challenge),
 `member_activity.py`, `member_onboarding.py`, `research_workspace.py`, `data_models.py`
-(model-card commands).
+(model-card commands). `research_workspace.py` also exposes `/research matchup`, `players`,
+`odds`, and budgeted `refresh` commands to eligible members; `/research model` and
+`performance` remain restricted to OPERATOR/Owner or approved research access.
 
 ## 2. Service Layer (`src/services/`, 34 modules)
 
@@ -63,7 +65,7 @@ admins, cappers never get HIGHROLLER).
 
 ## 3. Supabase Layer (`supabase/`)
 
-- **81 migrations** (Sept 30 – Oct 29, 2026) build: core play/settlement schema, member
+- **82 migrations** (Sept 30 – Oct 31, 2026) build: core play/settlement schema, member
   profiles/favorites, Whop membership + trials, bet vault, API budget accounting, sports caches,
   model history/projections, research workspace, capper credentials/ballots/insights/forums,
   BANG delivery recovery, HIGHROLLER grandfather/revocation, plus 7 large guide-content
