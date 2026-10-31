@@ -390,6 +390,16 @@ class ResearchWorkspaceData:
             raise RuntimeError("Research refresh was not acknowledged.")
         return result
 
+    def website_capper_tools_access(self, discord_user_id: int, guild_id: int, role_id: int) -> bool:
+        result = self.db._ensure_client().rpc("discord_capper_tools_access", {
+            "p_discord_user_id": str(discord_user_id),
+            "p_guild_id": str(guild_id),
+            "p_role_id": str(role_id),
+        }).execute().data
+        if not isinstance(result, bool):
+            raise RuntimeError("Website capper research access returned an invalid response.")
+        return result
+
     def refresh_status(self, discord_user_id: int, request_id: str) -> dict | None:
         rows = self.db._ensure_client().table("research_refresh_requests").select(
             "id,competition,game_id,kind,state,requested_at,updated_at,result",
@@ -444,6 +454,8 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             return True
         if not interaction.guild_id:
             return False
+        if await self._website_capper_tools_allowed(interaction):
+            return True
         if not WHOP_MEMBERSHIP_SYNC_ENABLED:
             return False
         if is_stats_moderator(interaction):
@@ -481,15 +493,24 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         return True
 
     async def _capper_refresh_gate(self, interaction: discord.Interaction) -> bool:
-        if self._is_capper(interaction):
-            return True
+        try:
+            if (
+                interaction.guild_id
+                and await asyncio.to_thread(
+                    self.data.website_capper_tools_access,
+                    interaction.user.id, interaction.guild_id, TRACKER_ROLE_ID,
+                )
+            ):
+                return True
+        except Exception:
+            logger.exception("research_refresh_website_access_check_failed user=%s", interaction.user.id)
         try:
             if await self._is_operator(interaction):
                 return True
         except Exception:
-            logger.exception("research_refresh_role_check_failed user=%s", interaction.user.id)
+            logger.exception("research_refresh_operator_access_check_failed user=%s", interaction.user.id)
             await interaction.response.send_message(
-                "Refresh access could not be verified right now. Please retry after the next role sync.",
+                "Refresh access could not be verified right now. Please retry or contact support.",
                 ephemeral=True,
             )
             return False
@@ -500,11 +521,28 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
         )
         return False
 
+    async def _website_capper_tools_allowed(self, interaction: discord.Interaction) -> bool:
+        if not interaction.guild_id:
+            return False
+        try:
+            return await asyncio.to_thread(
+                self.data.website_capper_tools_access,
+                interaction.user.id, interaction.guild_id, TRACKER_ROLE_ID,
+            )
+        except Exception:
+            logger.exception("research_website_capper_access_failed user=%s", interaction.user.id)
+            return False
+
     async def _refresh_if_stale(
         self, interaction: discord.Interaction, game: dict, kind: str, updated_at: str | None,
     ) -> str | None:
-        if not self._is_capper(interaction):
-            return None
+        if not await self._website_capper_tools_allowed(interaction):
+            try:
+                if not await self._is_operator(interaction):
+                    return None
+            except Exception:
+                logger.exception("research_auto_refresh_operator_check_failed user=%s", interaction.user.id)
+                return "Refresh access could not be verified; cached data shown."
         stale = True
         if updated_at:
             stale = datetime.now(timezone.utc) - parse_iso_datetime(updated_at) >= RESEARCH_STALE_AFTER

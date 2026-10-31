@@ -86,6 +86,18 @@ def test_refresh_request_binds_current_guild_and_tracker_role():
     )
 
 
+def test_website_capper_access_uses_approved_research_rpc():
+    db = Mock()
+    db._ensure_client.return_value.rpc.return_value.execute.return_value.data = True
+    data = workspace.ResearchWorkspaceData(database=db)
+
+    assert data.website_capper_tools_access(123, 456, 42) is True
+    db._ensure_client.return_value.rpc.assert_called_once_with(
+        "discord_capper_tools_access",
+        {"p_discord_user_id": "123", "p_guild_id": "456", "p_role_id": "42"},
+    )
+
+
 def test_game_refresh_checks_id_and_league(service, monkeypatch):
     service.api._request.return_value = [{}]
     monkeypatch.setattr(workspace, "normalize_game", lambda row, now: {"game_id": 1, "league_id": 2})
@@ -206,8 +218,9 @@ def test_research_group_registers_cached_and_budgeted_tools():
 
 
 def test_member_research_gate_requires_paid_access_or_operator_override(monkeypatch):
-    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock())
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock(), data=Mock())
     cog.membership.has_stats_access.return_value = False
+    cog.data.website_capper_tools_access.return_value = False
     cog._is_operator = AsyncMock(return_value=False)
     target = SimpleNamespace(
         user=SimpleNamespace(id=123), guild_id=456,
@@ -225,7 +238,8 @@ def test_member_research_gate_requires_paid_access_or_operator_override(monkeypa
 
 
 def test_operator_research_gate_does_not_accept_paid_membership():
-    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock())
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock(), data=Mock())
+    cog.data.website_capper_tools_access.return_value = False
     cog._is_operator = AsyncMock(return_value=False)
     target = SimpleNamespace(
         user=SimpleNamespace(id=123), guild_id=456,
@@ -237,7 +251,8 @@ def test_operator_research_gate_does_not_accept_paid_membership():
 
 
 def test_owner_can_pass_live_refresh_gate_without_capper_roster(monkeypatch):
-    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock())
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    cog.data.website_capper_tools_access.return_value = False
     cog._is_operator = AsyncMock(return_value=True)
     monkeypatch.setattr(cog, "_is_capper", lambda interaction: False)
     target = SimpleNamespace(
@@ -249,15 +264,36 @@ def test_owner_can_pass_live_refresh_gate_without_capper_roster(monkeypatch):
     target.response.send_message.assert_not_awaited()
 
 
+def test_approved_website_capper_can_pass_refresh_gate():
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
+    cog.data.website_capper_tools_access.return_value = True
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=123),
+        guild_id=456,
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    assert asyncio.run(cog._capper_refresh_gate(target)) is True
+    cog.data.website_capper_tools_access.assert_called_once_with(123, 456, workspace.TRACKER_ROLE_ID)
+
+
+def test_approved_website_capper_can_use_cached_research_without_paid_membership(monkeypatch):
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), membership=Mock(), data=Mock())
+    cog.data.website_capper_tools_access.return_value = True
+    cog._is_operator = AsyncMock(return_value=False)
+    target = SimpleNamespace(user=SimpleNamespace(id=123), guild_id=456)
+    monkeypatch.setattr(workspace, "WHOP_MEMBERSHIP_SYNC_ENABLED", False)
+
+    assert asyncio.run(cog._member_allowed(target)) is True
+    cog.membership.has_stats_access.assert_not_called()
+
+
 def test_stale_research_auto_refresh_is_capper_only(monkeypatch):
-    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
     monkeypatch.setattr(workspace, "GUILD_ID", None)
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
     cog.data.request_refresh.return_value = "request-123"
-    capper = Mock(spec=workspace.discord.Member)
-    capper.id = 123
-    capper.roles = [SimpleNamespace(id=42)]
-    interaction = SimpleNamespace(user=capper, guild_id=456)
+    cog.data.website_capper_tools_access.return_value = True
+    interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild_id=456)
     game = {"competition": "nfl", "game_id": "1"}
 
     note = asyncio.run(cog._refresh_if_stale(
@@ -266,24 +302,22 @@ def test_stale_research_auto_refresh_is_capper_only(monkeypatch):
     ))
 
     assert "Refresh queued" in note
-    cog.data.request_refresh.assert_called_once_with(123, "nfl", "1", "game", 456, 42)
+    cog.data.request_refresh.assert_called_once_with(
+        123, "nfl", "1", "game", 456, workspace.TRACKER_ROLE_ID,
+    )
 
-    member = Mock(spec=workspace.discord.Member)
-    member.id = 456
-    member.roles = []
-    non_capper = SimpleNamespace(user=member, guild_id=456)
+    cog.data.website_capper_tools_access.return_value = False
+    cog._is_operator = AsyncMock(return_value=False)
+    non_capper = SimpleNamespace(user=SimpleNamespace(id=789), guild_id=456)
     assert asyncio.run(cog._refresh_if_stale(non_capper, game, "game", None)) is None
     cog.data.request_refresh.assert_called_once()
 
 
 def test_fresh_capper_cache_does_not_queue_refresh(monkeypatch):
-    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
     monkeypatch.setattr(workspace, "GUILD_ID", None)
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
-    capper = Mock(spec=workspace.discord.Member)
-    capper.id = 123
-    capper.roles = [SimpleNamespace(id=42)]
-    interaction = SimpleNamespace(user=capper, guild_id=456)
+    cog.data.website_capper_tools_access.return_value = True
+    interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild_id=456)
     updated_at = workspace.datetime.now(workspace.timezone.utc).isoformat()
 
     assert asyncio.run(cog._refresh_if_stale(
@@ -293,13 +327,10 @@ def test_fresh_capper_cache_does_not_queue_refresh(monkeypatch):
 
 
 def test_auto_refresh_reports_unsupported_player_stat_leagues(monkeypatch):
-    monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
     monkeypatch.setattr(workspace, "GUILD_ID", None)
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
-    capper = Mock(spec=workspace.discord.Member)
-    capper.id = 123
-    capper.roles = [SimpleNamespace(id=42)]
-    interaction = SimpleNamespace(user=capper, guild_id=456)
+    cog.data.website_capper_tools_access.return_value = True
+    interaction = SimpleNamespace(user=SimpleNamespace(id=123), guild_id=456)
 
     note = asyncio.run(cog._refresh_if_stale(
         interaction, {"competition": "baseball:1", "game_id": "1", "sport": "baseball"},
