@@ -420,6 +420,16 @@ def test_research_image_card_renders_team_marks_and_report_sections():
         assert card.height >= 760
 
 
+def test_image_cards_render_discord_timestamps_as_readable_dates():
+    from src.services.research_card_image_service import _image_text
+
+    text = _image_text("Kickoff <t:1793438400:f> · Last result <t:1793340000:R>")
+
+    assert "<t:" not in text
+    assert "2026" in text
+    assert "Kickoff" in text
+
+
 def test_research_response_attaches_rendered_card_image():
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
     cog.data.team_logo_urls.return_value = (None, None)
@@ -502,26 +512,83 @@ def test_matchup_report_uses_prior_scores_and_h2h_only():
     game = {
         "competition": "nfl", "game_id": "30", "start_at": "2026-10-10T18:00:00Z",
         "home_id": "1", "home_name": "Home", "away_id": "2", "away_name": "Away",
-        "status": "NS", "synced_at": "2026-10-09T18:00:00Z",
+        "status": "NS", "synced_at": "2026-10-09T18:00:00Z", "season": "2026",
     }
     history = [
         {
-            "game_id": "10", "start_at": "2026-10-01T18:00:00Z", "home_id": "1",
+            "game_id": "10", "season": "2026", "start_at": "2026-10-01T18:00:00Z", "home_id": "1",
             "home_name": "Home", "away_id": "2", "away_name": "Away", "home_score": 24,
             "away_score": 17, "synced_at": "2026-10-02T18:00:00Z",
         },
         {
-            "game_id": "11", "start_at": "2026-10-02T18:00:00Z", "home_id": "1",
+            "game_id": "11", "season": "2026", "start_at": "2026-10-02T18:00:00Z", "home_id": "1",
             "home_name": "Home", "away_id": "3", "away_name": "Other", "home_score": 7,
             "away_score": 10, "synced_at": "2026-10-03T18:00:00Z",
+        },
+        {
+            "game_id": "9", "season": "2025", "start_at": "2025-12-01T18:00:00Z", "home_id": "1",
+            "home_name": "Home", "away_id": "4", "away_name": "Old season", "home_score": 99,
+            "away_score": 0, "synced_at": "2025-12-02T18:00:00Z",
         },
     ]
     embed = workspace.ResearchWorkspace._matchup_embed(
         {"game": game, "history": history}, operator_fields=[],
     )
-    assert "**Last 2 scored games:** 1-1-0" in embed.fields[0].value
+    assert "Season 2026" in embed.description
+    assert "**Season record (2 scored):** 1-1-0" in embed.fields[0].value
+    assert "99" not in embed.fields[0].value
     assert "Recent head-to-head" in embed.fields[2].name
     assert "Other" not in embed.fields[2].value
+    assert "2026 season only" in embed.footer.text
+
+
+def test_matchup_history_queries_and_filters_exact_selected_season():
+    game = {
+        "competition": "nfl", "game_id": "30", "start_at": "2026-10-10T18:00:00Z",
+        "home_id": "1", "home_name": "Home", "away_id": None, "away_name": "Away",
+        "status": "NS", "synced_at": "2026-10-09T18:00:00Z", "season": "2026",
+    }
+    rows = [
+        {"game_id": "old", "season": "2025", "start_at": "2025-12-01T18:00:00Z"},
+        {"game_id": "current", "season": "2026", "start_at": "2026-10-01T18:00:00Z"},
+    ]
+
+    class Query:
+        def __init__(self):
+            self.filters = []
+
+        def select(self, *_args):
+            return self
+
+        def eq(self, *args):
+            self.filters.append(args)
+            return self
+
+        def lt(self, *_args):
+            return self
+
+        def in_(self, *_args):
+            return self
+
+        def order(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=rows)
+
+    query = Query()
+    db = Mock()
+    db.select.return_value.data = [game]
+    db._ensure_client.return_value.table.return_value = query
+    db._execute.side_effect = lambda operation: operation()
+
+    result = workspace.ResearchWorkspaceData(database=db).matchup("nfl", "30")
+
+    assert ("season", "2026") in query.filters
+    assert [row["game_id"] for row in result["history"]] == ["current"]
 
 
 def test_score_parser_treats_missing_score_as_unavailable():

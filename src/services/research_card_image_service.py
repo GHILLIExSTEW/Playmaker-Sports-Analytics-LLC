@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from io import BytesIO
 import re
-import textwrap
 
 from PIL import Image, ImageDraw, ImageOps
 
@@ -15,10 +15,19 @@ MUTED = (176, 194, 208, 255)
 ACCENT = (104, 229, 194, 255)
 PURPLE = (145, 70, 191, 255)
 PANEL = (16, 30, 44, 255)
+DISCORD_TIMESTAMP = re.compile(r"<t:(\d+)(?::[tTdDfFR])?>")
+
+
+def _image_text(value: str) -> str:
+    def format_timestamp(match: re.Match[str]) -> str:
+        timestamp = datetime.fromtimestamp(int(match.group(1)), timezone.utc)
+        return f"{timestamp:%b} {timestamp.day}, {timestamp:%Y} · {timestamp:%I:%M %p} UTC"
+
+    return DISCORD_TIMESTAMP.sub(format_timestamp, _plain_text(value))
 
 
 def _wrapped(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
-    words = _plain_text(text).split()
+    words = _image_text(text).split()
     lines: list[str] = []
     current = ""
     for word in words:
@@ -76,7 +85,7 @@ def render_research_card(
         wrapped_sections.append((label, lines or ["Unavailable"]))
 
     section_heights = [68 + 36 * len(lines) for _, lines in wrapped_sections]
-    height = 510 + sum(section_heights) + max(0, len(section_heights) - 1) * 18
+    height = 558 + sum(section_heights) + max(0, len(section_heights) - 1) * 18
     height = min(max(height, 760), 1800)
     canvas = Image.new("RGBA", (WIDTH, height), (9, 18, 28, 255))
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -104,7 +113,7 @@ def render_research_card(
         draw.text((x - measure.textlength(text, font=font) / 2, center_y + 116),
                   text, font=font, fill=WHITE)
 
-    y = 422
+    y = 470
     for (label, lines), section_height in zip(wrapped_sections, section_heights):
         draw.rounded_rectangle(
             (PADDING, y, WIDTH - PADDING, y + section_height),

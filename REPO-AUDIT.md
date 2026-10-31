@@ -49,6 +49,8 @@ Discord research access and capper refresh eligibility honor the same approved
 website-research grants (including active API-key grants); verified Owners may also
 request live refreshes. Other users receive cached reports only. Matchup, player,
 and odds results are sent as image report cards with cached team logos where available.
+Research game forms and player samples are scoped to the selected game's season;
+cross-season records and model snapshots are excluded from the matchup card.
 `/research model` and
 `performance` remain restricted to OPERATOR/Owner or approved research access.
 

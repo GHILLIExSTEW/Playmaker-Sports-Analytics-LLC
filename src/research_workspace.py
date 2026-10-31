@@ -188,6 +188,10 @@ class ResearchWorkspaceData:
         if len(games) != 1:
             raise ValueError("Select a game from the cached list for this league.")
         game = games[0]
+        season = game.get("season")
+        if not isinstance(season, str) or not season.strip():
+            raise ValueError("The selected game has no verified season in cache; refusing to mix seasons.")
+        game["season"] = season.strip()
         history: dict[str, dict] = {}
         team_ids = {str(game.get(key)) for key in ("home_id", "away_id") if game.get(key)}
         for team_id in team_ids:
@@ -196,16 +200,19 @@ class ResearchWorkspaceData:
             for side in ("home_id", "away_id"):
                 query = self.db._ensure_client().table("research_games").select("*").eq(
                     "competition", competition,
-                ).eq(side, team_id).lt("start_at", game["start_at"]).in_(
+                ).eq("season", game["season"]).eq(side, team_id).lt("start_at", game["start_at"]).in_(
                     "status", ["FT", "AOT", "AP", "COMPLETED", "FINISHED"],
-                ).order("start_at", desc=True).limit(100)
+                ).order("start_at", desc=True).limit(500)
                 rows = self.db._execute(query.execute).data
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
                     raise RuntimeError("Research history returned an invalid response.")
-                history.update({str(row["game_id"]): row for row in rows})
+                history.update({
+                    str(row["game_id"]): row for row in rows
+                    if str(row.get("season") or "") == game["season"]
+                })
         ordered_history = sorted(
             history.values(), key=lambda row: (row["start_at"], row["game_id"]), reverse=True,
-        )[:100]
+        )[:500]
         return {"game": game, "history": ordered_history}
 
     def players(self, competition: str, game_id: str, workspace: dict | None = None) -> list[dict]:
@@ -923,10 +930,17 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     @classmethod
     def _matchup_embed(cls, workspace: dict, *, operator_fields: list[tuple[str, str]]) -> discord.Embed:
         game, history = workspace["game"], workspace["history"]
+        season = str(game.get("season") or "")
+        history = [
+            row for row in history
+            if season and str(row.get("season") or "") == season
+        ]
         escape = discord.utils.escape_markdown
+        season_description = f"Season {escape(season)} · " if season else "Season unavailable · "
         embed = discord.Embed(
             title=f"{escape(str(game['away_name']))} at {escape(str(game['home_name']))}",
-            description=f"{cls._time_tag(game['start_at'])} · {escape(str(game['status']))} · Cached data only",
+            description=f"{season_description}{cls._time_tag(game['start_at'])} · "
+            f"{escape(str(game['status']))} · Cached data only",
             color=0x9146BF,
         )
         for team_id, team_name in ((game.get("home_id"), game["home_name"]), (game.get("away_id"), game["away_name"])):
@@ -939,15 +953,14 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                     continue
                 own, opponent = (home_score, away_score) if str(row.get("home_id")) == str(team_id) else (away_score, home_score)
                 scores.append((row, own, opponent))
-            recent = scores[:10]
-            wins = sum(own > opponent for _, own, opponent in recent)
-            losses = sum(own < opponent for _, own, opponent in recent)
-            ties = len(recent) - wins - losses
-            points_for = sum(own for _, own, _ in recent) / len(recent) if recent else None
-            points_against = sum(other for _, _, other in recent) / len(recent) if recent else None
-            home_record = [item for item in recent if str(item[0].get("home_id")) == str(team_id)]
-            away_record = [item for item in recent if str(item[0].get("away_id")) == str(team_id)]
-            last_five = recent[:5]
+            season_wins = sum(own > opponent for _, own, opponent in scores)
+            season_losses = sum(own < opponent for _, own, opponent in scores)
+            season_ties = len(scores) - season_wins - season_losses
+            points_for = sum(own for _, own, _ in scores) / len(scores) if scores else None
+            points_against = sum(other for _, _, other in scores) / len(scores) if scores else None
+            home_record = [item for item in scores if str(item[0].get("home_id")) == str(team_id)]
+            away_record = [item for item in scores if str(item[0].get("away_id")) == str(team_id)]
+            last_five = scores[:5]
             last_five_wins = sum(own > opponent for _, own, opponent in last_five)
             last_five_losses = sum(own < opponent for _, own, opponent in last_five)
             last_five_ties = len(last_five) - last_five_wins - last_five_losses
@@ -958,10 +971,14 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                 for label, rows in (("Home", home_record), ("Away", away_record))
             )
             value = (
-                f"**Last {len(recent)} scored games:** {wins}-{losses}-{ties}\n"
+                f"**Season record ({len(scores)} scored):** "
+                f"{season_wins}-{season_losses}-{season_ties}\n"
                 f"Last 5: {last_five_wins}-{last_five_losses}-{last_five_ties}\n"
                 f"Scored {points_for:.1f} / allowed {points_against:.1f} per game\n{split_text}"
-                if recent else "No cached scored history."
+                if scores else (
+                    "No current-season scored history."
+                    if season else "Season unavailable; cross-season records are not shown."
+                )
             )
             embed.add_field(name=escape(team_name), value=value, inline=True)
         h2h = [
@@ -983,9 +1000,11 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             inline=False,
         )
         for name, value in operator_fields:
-            embed.add_field(name=name, value=value[:1024], inline=False)
-        updated = min([game["synced_at"], *(row["synced_at"] for row in history[:10])])
-        embed.set_footer(text=f"History may be incomplete or corrected later · oldest displayed sync {cls._time_tag(updated)}")
+            if name != "Model snapshot":
+                embed.add_field(name=name, value=value[:1024], inline=False)
+        sync_times = [game["synced_at"], *(row["synced_at"] for row in history)]
+        updated = min(sync_times)
+        embed.set_footer(text=f"{season or 'Current'} season only · oldest displayed sync {cls._time_tag(updated)}")
         return embed
 
     @staticmethod
