@@ -45,8 +45,9 @@ admins, cappers never get HIGHROLLER).
 (model-card commands). `research_workspace.py` also exposes `/research matchup`, `players`,
 `odds`, and budgeted `refresh` commands to eligible members; tracker-role cappers
 automatically queue a refresh when game, player, or odds data is over 60 minutes old.
-Other users receive cached reports only. Matchup, player, and odds results are sent as
-image report cards with cached team logos where available. `/research model` and
+Verified Owners may also request live refreshes. Other users receive cached reports
+only. Matchup, player, and odds results are sent as image report cards with cached
+team logos where available. `/research model` and
 `performance` remain restricted to OPERATOR/Owner or approved research access.
 
 ## 2. Service Layer (`src/services/`, 34 modules)

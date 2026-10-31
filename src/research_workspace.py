@@ -483,8 +483,18 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     async def _capper_refresh_gate(self, interaction: discord.Interaction) -> bool:
         if self._is_capper(interaction):
             return True
+        try:
+            if await self._is_operator(interaction):
+                return True
+        except Exception:
+            logger.exception("research_refresh_role_check_failed user=%s", interaction.user.id)
+            await interaction.response.send_message(
+                "Refresh access could not be verified right now. Please retry after the next role sync.",
+                ephemeral=True,
+            )
+            return False
         await interaction.response.send_message(
-            "Live research refresh is reserved for verified cappers with the tracker role. "
+            "Live research refresh is reserved for verified cappers and Owners. "
             "You can still use cached research reports.",
             ephemeral=True,
         )
@@ -804,7 +814,20 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             )
             embed.set_footer(text="Shared API budget and per-user/event cooldowns apply")
             await interaction.followup.send(embed=embed, ephemeral=True)
-        except (ApiBudgetDenied, ValueError, APIError) as exc:
+        except APIError as exc:
+            logger.exception(
+                "research_refresh_request_failed user=%s competition=%s game=%s kind=%s",
+                interaction.user.id, competition, game, kind,
+            )
+            if getattr(exc, "code", None) == "42501":
+                message = (
+                    "The research service has not verified your current Owner/capper role yet. "
+                    "Wait for the role roster sync, then retry."
+                )
+            else:
+                message = "Refresh could not be queued because the research service rejected the request. Please retry or contact support."
+            await interaction.followup.send(message, ephemeral=True)
+        except (ApiBudgetDenied, ValueError) as exc:
             logger.exception("research_refresh_request_failed user=%s competition=%s game=%s kind=%s",
                              interaction.user.id, competition, game, kind)
             await interaction.followup.send(

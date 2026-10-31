@@ -236,6 +236,19 @@ def test_operator_research_gate_does_not_accept_paid_membership():
     cog.membership.has_stats_access.assert_not_called()
 
 
+def test_owner_can_pass_live_refresh_gate_without_capper_roster(monkeypatch):
+    cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock())
+    cog._is_operator = AsyncMock(return_value=True)
+    monkeypatch.setattr(cog, "_is_capper", lambda interaction: False)
+    target = SimpleNamespace(
+        user=SimpleNamespace(id=123),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    assert asyncio.run(cog._capper_refresh_gate(target)) is True
+    target.response.send_message.assert_not_awaited()
+
+
 def test_stale_research_auto_refresh_is_capper_only(monkeypatch):
     monkeypatch.setattr(workspace, "TRACKER_ROLE_ID", 42)
     monkeypatch.setattr(workspace, "GUILD_ID", None)
