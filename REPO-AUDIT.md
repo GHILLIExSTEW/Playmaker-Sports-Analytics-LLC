@@ -43,14 +43,14 @@ admins, cappers never get HIGHROLLER).
 **Member features:** `member_bet_vault.py` (private bet tracking + monthly challenge),
 `member_activity.py`, `member_onboarding.py`, `research_workspace.py`, `data_models.py`
 (model-card commands). `research_workspace.py` also exposes `/research matchup`, `players`,
-`odds`, and budgeted `refresh` commands to eligible members; tracker-role cappers
-automatically queue a refresh when game, player, or odds data is over 60 minutes old.
-Discord research access and capper refresh eligibility honor the same approved
-website-research grants (including active API-key grants); verified Owners may also
-request live refreshes. Other users receive cached reports only. Matchup, player,
-and odds results are sent as image report cards with cached team logos where available.
-Research game forms and player samples are scoped to the selected game's season;
-cross-season records and model snapshots are excluded from the matchup card.
+`odds`, and budgeted `refresh` commands to eligible members. Discord research access
+and live refresh eligibility honor the same approved website-research grants (including
+active API-key grants); verified Owners may also request live refreshes. Eligible
+cappers automatically queue a refresh when game, player, or odds data is over 60
+minutes old. Other users receive cached reports only. Matchup, player, and odds results
+are posted as regular image messages with cached team logos where available. Research
+game forms and player samples are scoped to the selected game's season; cross-season
+records and model snapshots are excluded from the matchup card.
 `/research model` and
 `performance` remain restricted to OPERATOR/Owner or approved research access.
 

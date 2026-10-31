@@ -542,6 +542,25 @@ def test_matchup_report_uses_prior_scores_and_h2h_only():
     assert "2026 season only" in embed.footer.text
 
 
+def test_matchup_card_excludes_non_season_model_snapshot():
+    game = {
+        "competition": "nfl", "game_id": "30", "start_at": "2026-10-10T18:00:00Z",
+        "home_id": "1", "home_name": "Home", "away_id": "2", "away_name": "Away",
+        "status": "NS", "synced_at": "2026-10-09T18:00:00Z", "season": "2026",
+    }
+
+    embed = workspace.ResearchWorkspace._matchup_embed(
+        {"game": game, "history": []},
+        operator_fields=[
+            ("Model snapshot", "Projection based on multi-season data."),
+            ("Cached injuries", "No current reports."),
+        ],
+    )
+
+    assert all(field.name != "Model snapshot" for field in embed.fields)
+    assert any(field.name == "Cached injuries" for field in embed.fields)
+
+
 def test_matchup_history_queries_and_filters_exact_selected_season():
     game = {
         "competition": "nfl", "game_id": "30", "start_at": "2026-10-10T18:00:00Z",

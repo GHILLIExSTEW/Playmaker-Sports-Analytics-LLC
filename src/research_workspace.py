@@ -643,7 +643,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     async def research_matchup(self, interaction: discord.Interaction, competition: str, game: str):
         if not await self._gate(interaction):
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         try:
             workspace = await asyncio.to_thread(self.data.matchup, competition, game)
             refresh_note = await self._refresh_if_stale(
@@ -660,7 +660,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                 embed.set_footer(text="Cached data only · refreshed automatically for cappers when over 60 minutes old")
             image = await self._attach_research_image(embed, workspace["game"])
             await interaction.followup.send(
-                embed=embed, file=image, ephemeral=True,
+                file=image, ephemeral=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except ValueError as exc:
@@ -698,7 +698,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     ):
         if not await self._gate(interaction):
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         try:
             workspace = await asyncio.to_thread(self.data.matchup, competition, game)
             records = await asyncio.to_thread(self.data.players, competition, game, workspace)
@@ -723,7 +723,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
                     embed.add_field(name="Data freshness", value=refresh_note, inline=False)
             image = await self._attach_research_image(embed, workspace["game"])
             await interaction.followup.send(
-                embed=embed, file=image, ephemeral=True,
+                file=image, ephemeral=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except ValueError as exc:
@@ -747,7 +747,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
     ):
         if not await self._gate(interaction):
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         try:
             odds = await asyncio.to_thread(self.data.odds, competition, game)
             game_rows = await asyncio.to_thread(self.data.matchup, competition, game)
@@ -768,7 +768,7 @@ class ResearchWorkspace(commands.GroupCog, group_name="research", group_descript
             embed.set_footer(text="Cached quotes only · implied probability includes bookmaker margin")
             image = await self._attach_research_image(embed, selected_game)
             await interaction.followup.send(
-                embed=embed, file=image, ephemeral=True,
+                file=image, ephemeral=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except Exception:
