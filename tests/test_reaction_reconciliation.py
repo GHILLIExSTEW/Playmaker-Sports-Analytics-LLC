@@ -55,6 +55,7 @@ def test_reconcile_open_play_reactions_settles_owner_reaction(
     monkeypatch.setattr(bot_module.official_play_service, "_fetch_play", lambda play_id: {
         "id": play_id, "status": "win", "tracking_scope": tracking_scope, "units": 1, "odds": 100,
     })
+    monkeypatch.setattr(bot_module.official_play_service, "get_play_legs", lambda play_id: [])
 
     load_presentation()
     load_settlement(bang_notifications=bang)

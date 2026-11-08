@@ -4,7 +4,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT_DIR / ".env")
+# The test suite sets this so production credentials in .env are never loaded.
+if not os.getenv("PLAYMAKER_DISABLE_DOTENV"):
+    load_dotenv(ROOT_DIR / ".env")
 
 
 def get_bool(name: str, default: bool = False) -> bool:

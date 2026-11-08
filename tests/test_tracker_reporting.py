@@ -83,11 +83,16 @@ def test_tracker_fetch_database_error_propagates(monkeypatch):
 
 
 def test_current_cutoff_is_read_on_each_build():
+    # Settle "now" so the play stays inside the monthly window whenever the suite runs;
+    # a cutoff of tomorrow excludes it, and clearing the cutoff brings it back.
+    from datetime import timedelta
+    settled_now = datetime.now(TRACKER_TIMEZONE)
+    current = play(created_at=settled_now.isoformat(), settled_at=settled_now.isoformat())
     reporting = cog()
-    reporting.get_tracker_start.side_effect = [date(2026, 10, 3), None]
+    reporting.get_tracker_start.side_effect = [settled_now.date() + timedelta(days=1), None]
     users = [{"id": 1, "display_name": "Ace"}]
-    assert reporting.tracker_embed([play()], users)[0].fields[1].value == "+0u"
-    assert reporting.tracker_embed([play()], users)[0].fields[1].value == "+3u"
+    assert reporting.tracker_embed([current], users)[0].fields[1].value == "+0u"
+    assert reporting.tracker_embed([current], users)[0].fields[1].value == "+3u"
     assert reporting.get_tracker_start.call_count == 2
 
 

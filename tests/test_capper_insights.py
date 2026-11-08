@@ -41,10 +41,20 @@ def test_only_original_operator_can_open_modal(monkeypatch):
         denied = interaction(user_id, operator, guild_id)
         asyncio.run(website_sync().handle_insight_click(denied, 7))
         denied.response.send_modal.assert_not_awaited()
-        assert denied.response.send_message.call_args.kwargs["ephemeral"]
-    owner = interaction()
-    asyncio.run(website_sync().handle_insight_click(owner, 7))
-    modal = owner.response.send_modal.call_args.args[0]
+        sent = denied.followup.send.call_args
+        assert sent.kwargs["ephemeral"] and "view" not in sent.kwargs
+        assert "original author" in sent.args[0]
+
+    async def open_owner_form():
+        owner = interaction()
+        await website_sync().handle_insight_click(owner, 7)
+        sent = owner.followup.send.call_args
+        assert sent.kwargs["ephemeral"]
+        view = sent.kwargs["view"]
+        assert view.owner_id == 42
+        return view.factory()
+
+    modal = asyncio.run(open_owner_form())
     assert modal.play_id == 7 and modal.owner_id == 42
     assert modal.justification.default == "My reasoning"
 
@@ -54,7 +64,7 @@ def test_closed_pick_cannot_open_modal(monkeypatch):
     owner = interaction()
     asyncio.run(website_sync().handle_insight_click(owner, 7))
     owner.response.send_modal.assert_not_awaited()
-    assert "no longer open" in owner.response.send_message.call_args.args[0]
+    assert "no longer open" in owner.followup.send.call_args.args[0]
 
 
 def test_modal_rechecks_author_and_role_and_saves_privately(monkeypatch):

@@ -1,4 +1,44 @@
+import os
+
 import pytest
+
+# Isolate the suite from production before any src module is imported: never read .env,
+# and drop live credentials inherited from the shell so unmocked calls fail instead of
+# reaching Supabase, Discord, OpenAI, Whop or API-Sports.
+os.environ["PLAYMAKER_DISABLE_DOTENV"] = "1"
+for _name in (
+    "DISCORD_TOKEN", "SUPABASE_URL", "SUPABASE_KEY", "OPENAI_API_KEY", "API_SPORTS_KEY",
+    "OPEN_METEO_API_KEY", "WHOP_API_KEY", "WHOP_ACCOUNT_ID", "CLIENT_SECRET", "SPORTS_DATA_API_KEY",
+):
+    os.environ.pop(_name, None)
+
+
+# Belt and braces: any real outbound connection from a test is a bug. Loopback stays
+# allowed because asyncio's Windows event loop uses a local socketpair internally.
+import socket as _socket
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_real_connect, _real_connect_ex = _socket.socket.connect, _socket.socket.connect_ex
+
+
+def _guard(address) -> None:
+    host = address[0] if isinstance(address, tuple) else address
+    if host not in _LOOPBACK:
+        raise RuntimeError(f"Tests must not open network connections (attempted {host!r}); mock the service.")
+
+
+def _connect(self, address):
+    _guard(address)
+    return _real_connect(self, address)
+
+
+def _connect_ex(self, address):
+    _guard(address)
+    return _real_connect_ex(self, address)
+
+
+_socket.socket.connect = _connect
+_socket.socket.connect_ex = _connect_ex
 
 @pytest.fixture
 def mock_play_cards(monkeypatch):

@@ -290,6 +290,7 @@ def test_approved_website_capper_can_use_cached_research_without_paid_membership
 
 def test_stale_research_auto_refresh_is_capper_only(monkeypatch):
     monkeypatch.setattr(workspace, "GUILD_ID", None)
+    monkeypatch.setattr(workspace, "API_SPORTS_BUDGET_ENABLED", True)
     cog = workspace.ResearchWorkspace(Mock(), staff_alert=AsyncMock(), data=Mock())
     cog.data.request_refresh.return_value = "request-123"
     cog.data.website_capper_tools_access.return_value = True
