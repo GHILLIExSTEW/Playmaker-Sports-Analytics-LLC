@@ -11,6 +11,8 @@ for _name in (
     "OPEN_METEO_API_KEY", "WHOP_API_KEY", "WHOP_ACCOUNT_ID", "CLIENT_SECRET", "SPORTS_DATA_API_KEY",
 ):
     os.environ.pop(_name, None)
+# The vision budget is exercised by its own tests; elsewhere it would need a database.
+os.environ["OPENAI_VISION_DAILY_LIMIT"] = "0"
 
 
 # Belt and braces: any real outbound connection from a test is a bug. Loopback stays

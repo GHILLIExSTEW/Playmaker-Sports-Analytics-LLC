@@ -425,10 +425,23 @@ def test_bot_routes_submission_once_then_prefix_commands(monkeypatch):
 def test_image_extraction_failure_notifies_and_alerts(monkeypatch):
     monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
     cog = submission()
-    cog.images.extract_play.side_effect = RuntimeError("unreadable")
+    cog.images.extract_play.side_effect = RuntimeError("provider response 503: {raw provider body}")
     source = message()
     source.jump_url = "https://discord/message"
     assert not asyncio.run(cog.handle_message(source))
-    assert "could not read" in source.channel.send.call_args.args[0]
-    cog.staff_alert.assert_awaited_once()
+    public = source.channel.send.call_args.args[0]
+    assert "could not read" in public and "/play" in public
+    # Raw provider text stays out of the public channel but reaches staff.
+    assert "raw provider body" not in public
+    assert "raw provider body" in cog.staff_alert.call_args.args[1]
     cog.official.create_play_record.assert_not_called()
+
+
+def test_unreadable_slip_reason_is_shown_to_the_author(monkeypatch):
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
+    cog = submission()
+    cog.images.extract_play.side_effect = module.BallotUnreadable("No odds are shown for the second leg.")
+    source = message()
+    source.jump_url = "https://discord/message"
+    asyncio.run(cog.handle_message(source))
+    assert "No odds are shown for the second leg." in source.channel.send.call_args.args[0]

@@ -9,14 +9,37 @@ import requests
 
 from src.config import (
     OPENAI_API_KEY,
+    OPENAI_VISION_DAILY_LIMIT,
     OPENAI_VISION_MODEL,
     OPENAI_VISION_MODELS,
 )
 from src.services.play_service import PlayService
+from src.services.supabase_service import supabase_service
 
 
 class BallotUnreadable(ValueError):
     """The model answered, but the bet did not state every selection and its odds clearly."""
+
+
+class VisionBudgetDenied(RuntimeError):
+    """The shared daily OpenAI slip-reading allowance is used up; no call was made."""
+
+
+class TransientProviderError(RuntimeError):
+    """Timeouts, rate limits and 5xx responses: worth one more try on the same model."""
+
+
+def reserve_vision_call() -> None:
+    """Atomically count one paid vision call against the shared UTC-day ceiling (fail closed)."""
+    if not OPENAI_VISION_DAILY_LIMIT:
+        return
+    reserved = supabase_service._execute(lambda: supabase_service._ensure_client().rpc(
+        "reserve_openai_vision_request", {"p_daily_limit": OPENAI_VISION_DAILY_LIMIT},
+    ).execute()).data
+    if reserved is not True:
+        raise VisionBudgetDenied(
+            "The daily slip-reading allowance is used up. Enter this play manually with /play or try tomorrow."
+        )
 
 
 class ImagePlayService:
@@ -39,18 +62,22 @@ class ImagePlayService:
     ) -> dict[str, Any]:
         errors = []
         unreadable: list[BallotUnreadable] = []
-        providers = []
-        if OPENAI_API_KEY:
-            providers.append(("openai", "https://api.openai.com/v1/chat/completions", OPENAI_API_KEY, OPENAI_VISION_MODEL))
+        if not OPENAI_API_KEY:
+            # Previously this sent "Bearer None" requests to every configured model, twice each.
+            raise RuntimeError("No vision provider is configured (OPENAI_API_KEY is not set).")
+        url = "https://api.openai.com/v1/chat/completions"
+        providers = [("openai", url, OPENAI_API_KEY, OPENAI_VISION_MODEL)]
         for model in OPENAI_VISION_MODELS:
             if not any(entry[3] == model for entry in providers):
-                providers.append((f"openai:{model}", "https://api.openai.com/v1/chat/completions", OPENAI_API_KEY, model))
-        if not providers:
-            raise RuntimeError("No vision provider is configured.")
+                providers.append((f"openai:{model}", url, OPENAI_API_KEY, model))
 
+        # Each model gets one read. Only transient failures (timeouts, 429, 5xx) earn a second
+        # try on the same model; an unreadable or invalid read moves straight to the next model,
+        # because asking the same model the same question again usually just doubles the cost.
         for name, url, api_key, model in providers:
             for attempt in range(2):
                 try:
+                    reserve_vision_call()
                     parsed = self._extract_with_provider(
                         image_url, message_text, name, url, api_key, model,
                         require_readable=require_readable, allow_missing_odds=allow_missing_odds,
@@ -59,12 +86,19 @@ class ImagePlayService:
                     if text_units is not None:
                         parsed["units"] = text_units
                     return parsed
+                except VisionBudgetDenied:
+                    raise
                 except Exception as exc:
                     errors.append(f"{name} attempt {attempt + 1}: {exc}")
                     if isinstance(exc, BallotUnreadable):
                         unreadable.append(exc)
-                    if attempt == 0:
+                    transient = isinstance(exc, TransientProviderError) or (
+                        isinstance(exc, requests.RequestException) and not isinstance(exc, requests.HTTPError)
+                    )
+                    if attempt == 0 and transient:
                         time.sleep(1)
+                        continue
+                    break
 
         if unreadable and len(unreadable) == len(errors):
             # Every model read the bet and declined it; this is a content problem, not a provider outage.
@@ -117,7 +151,10 @@ class ImagePlayService:
             },
             timeout=60,
         )
-        if response.status_code in {400, 403, 408, 429} or response.status_code >= 500:
+        if response.status_code in {408, 429} or response.status_code >= 500:
+            detail = response.text[:300].replace("\n", " ")
+            raise TransientProviderError(f"provider response {response.status_code}: {detail}")
+        if response.status_code in {400, 403}:
             detail = response.text[:300].replace("\n", " ")
             raise RuntimeError(f"provider response {response.status_code}: {detail}")
         response.raise_for_status()

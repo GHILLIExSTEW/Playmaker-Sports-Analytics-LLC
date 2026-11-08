@@ -12,7 +12,7 @@ from discord.ext import commands
 
 from src.administration import TestFlowView, build_image_test_embed
 from src.config import CAPPER_CHANNEL_ID, OFFICIAL_ROLE_IDS, TEST_CHANNEL_ID
-from src.services.image_play_service import ImagePlayService, image_play_service
+from src.services.image_play_service import BallotUnreadable, ImagePlayService, VisionBudgetDenied, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
 
@@ -108,7 +108,16 @@ class PlaySubmission(commands.Cog):
             )
         except Exception as exc:
             logger.exception("automatic_image_extract_failed message=%s", message.id)
-            await message.channel.send(f"{message.author.mention}, I could not read that betting image: {exc}", delete_after=30)
+            # This channel is public: give the author something actionable, keep provider
+            # details (which can include raw API response text) for the staff alert and logs.
+            reason = str(exc) if isinstance(exc, (BallotUnreadable, VisionBudgetDenied)) else (
+                "the image reader is unavailable right now. Staff have been notified"
+            )
+            await message.channel.send(
+                f"{message.author.mention}, I could not read that betting image: {reason}. "
+                "You can still record it with /play.",
+                delete_after=30,
+            )
             await self.staff_alert(
                 "image_extract",
                 f"Image reading failed for {message.author.mention}'s post {message.jump_url}\n`{str(exc)[:1500]}`",
