@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.services.official_play_service import official_play_service
+from src.services.official_play_service import PlayAlreadySettled, official_play_service
 from src.services.play_features_service import GRADABLE_SPORTS, play_features_service
 
 OUTSTANDING = ["open", "regraded"]
@@ -70,7 +70,11 @@ def main() -> None:
         for note in suggestion["notes"]:
             print(f"         {note}")
         if args.apply:
-            official_play_service.settle_play(int(play["id"]), suggestion["result"])
+            try:
+                official_play_service.settle_play(int(play["id"]), suggestion["result"])
+            except PlayAlreadySettled as exc:
+                print(f"SKIP   {label}: {exc}")
+                continue
             play_features_service.mark_suggested(int(play["id"]))
             settled += 1
     print(f"\n{graded} gradable, {settled} settled, {len(plays) - graded} left outstanding")

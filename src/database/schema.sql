@@ -83,6 +83,7 @@ create table if not exists public.plays (
   play_text text,
   message_id text,
   capper_frame_path text,
+  submission_key uuid unique,
   created_at timestamptz not null default now(),
   settled_at timestamptz,
   settled_by bigint references public.users(id) on delete set null,

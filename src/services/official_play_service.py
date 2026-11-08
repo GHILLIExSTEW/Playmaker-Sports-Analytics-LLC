@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
 from src.services.ballot_vote_service import POLICY_VERSION, SLIP_POLICY_VERSION, ballot_rating, slip_rating
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
+
+
+SETTLEABLE_STATUSES = frozenset({"open", "regraded"})
+
+
+class PlayAlreadySettled(ValueError):
+    """Another settlement won the race; the play is no longer open."""
+
+    def __init__(self, play_id: int, status) -> None:
+        super().__init__(f"Play #{play_id} is already settled as {str(status).upper()}.")
+        self.play_id, self.status = play_id, status
 
 
 class OfficialPlayService:
@@ -170,7 +182,11 @@ class OfficialPlayService:
                 raise ValueError("The ballot's saved team approval differs. Staff reconciliation is required.")
             play_id = int(saved["id"])
         else:
-            inserted = supabase_service.insert("plays", payload)
+            # A unique key per submission lets a dropped connection be resolved by reading the
+            # row back instead of replaying the insert and recording the play twice.
+            inserted = supabase_service.insert(
+                "plays", {**payload, "submission_key": str(uuid4())}, idempotency_column="submission_key",
+            )
             play_id = int(inserted.data[0]["id"])
         if leg_rows:
             records = [
@@ -183,10 +199,8 @@ class OfficialPlayService:
                 }
                 for index, leg in enumerate(leg_rows, start=1)
             ]
-            if ballot_message_id:
-                supabase_service.upsert("play_legs", records, ["play_id", "leg_number"])
-            else:
-                supabase_service.insert("play_legs", records)
+            # (play_id, leg_number) is unique, so an upsert is safe to replay after a dropped connection.
+            supabase_service.upsert("play_legs", records, ["play_id", "leg_number"])
 
         return {
             "play_id": play_id,
@@ -240,14 +254,19 @@ class OfficialPlayService:
         }, {"id": int(play_id)})
         # Keep auto-settle game details for legs whose selection text did not change.
         previous = {leg["selection"]: leg.get("details") for leg in self.get_play_legs(play_id)}
-        supabase_service.delete("play_legs", {"play_id": int(play_id)})
-        supabase_service.insert("play_legs", [
+        # Overwrite legs in place, then trim any surplus. The old delete-then-insert left the
+        # play with no legs at all if the insert failed after the delete committed.
+        supabase_service.upsert("play_legs", [
             {
                 "play_id": int(play_id), "leg_number": index, "selection": selection, "odds": int(leg_odds),
                 "details": previous.get(selection),
             }
             for index, (selection, leg_odds) in enumerate(zip(selections, odds), start=1)
-        ])
+        ], ["play_id", "leg_number"])
+        supabase_service._execute(
+            lambda: supabase_service._ensure_client().table("play_legs").delete()
+            .eq("play_id", int(play_id)).gt("leg_number", len(selections)).execute()
+        )
         return {"play_id": play_id, "units": float(units), "legs": len(selections), "odds": combined_odds, "team_name": team_name}
 
     def get_play_legs(self, play_id: int) -> list[dict]:
@@ -269,11 +288,20 @@ class OfficialPlayService:
 
         play = self._fetch_play(play_id)
         tally = self.settlement_service.tally_for_result(result, float(play["units"]), play.get("odds"))
-        supabase_service.update(
+        # Compare-and-set: only a still-open play can be settled. Two near-simultaneous
+        # reactions (e.g. a win then a loss) used to both pass the caller's status check, and
+        # the later write silently replaced a result whose BANG had already been announced.
+        updated = supabase_service.update(
             "plays",
             {"status": result, "settled_at": datetime.now(timezone.utc).isoformat()},
             {"id": int(play_id)},
+            allowed={"status": sorted(SETTLEABLE_STATUSES)},
         )
+        if not getattr(updated, "data", None):
+            current = self._fetch_play(play_id).get("status")
+            # A replayed request whose first attempt already committed this same result is a success.
+            if current != result:
+                raise PlayAlreadySettled(play_id, current)
         return {"result": result, "tally": tally}
 
     def unsettle_play(self, play_id: int) -> dict:

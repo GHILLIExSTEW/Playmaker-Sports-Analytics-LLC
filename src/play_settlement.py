@@ -10,13 +10,12 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.config import CONFIRMATION_CHANNEL_ID
-from src.services.official_play_service import OfficialPlayService
+from src.services.official_play_service import SETTLEABLE_STATUSES, OfficialPlayService, PlayAlreadySettled
 from src.services.play_features_service import PlayFeaturesService
 from src.services.play_service import PlayService
 from src.services.settlement_service import SettlementService
 
 logger = logging.getLogger("official_play_bot")
-SETTLEABLE_STATUSES = {"open", "regraded"}
 PLAY_PICKER_PAGE_SIZE = 10
 REGRADE_LOOKBACK = timedelta(days=2)
 UNSETTLE_LOOKBACK = timedelta(days=7)
@@ -101,6 +100,9 @@ class PlaySettlement(commands.Cog):
             message = await channel.fetch_message(payload.message_id)
             await self.update_message(message, int(play["id"]), result)
             await self.bang_notifications(message, int(play["id"]))
+        except PlayAlreadySettled as exc:
+            # Lost a race with another settlement; the winner already updated the card and BANG.
+            logger.info("reaction_settlement_raced play=%s status=%s", exc.play_id, exc.status)
         except Exception as exc:
             logger.exception("reaction_settlement_failed message=%s user=%s", payload.message_id, payload.user_id)
             await self.staff_alert("reaction_settlement", f"Reaction settlement failed for message {payload.message_id}: `{str(exc)[:1500]}`")
@@ -135,7 +137,10 @@ class PlaySettlement(commands.Cog):
                 if result:
                     break
             if result:
-                await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
+                try:
+                    await asyncio.to_thread(self.official.settle_play, int(play["id"]), result)
+                except PlayAlreadySettled:
+                    continue
                 await self.update_message(message, int(play["id"]), result)
                 await self.bang_notifications(message, int(play["id"]))
                 settled_count += 1
@@ -236,7 +241,12 @@ class PlaySettlement(commands.Cog):
             embed.set_footer(text=f"Already settled as {str(current.get('status')).upper()}")
             await interaction.edit_original_response(embed=embed, view=None)
             return
-        await asyncio.to_thread(self.official.settle_play, play_id, result)
+        try:
+            await asyncio.to_thread(self.official.settle_play, play_id, result)
+        except PlayAlreadySettled as exc:
+            embed.set_footer(text=f"Already settled as {str(exc.status).upper()}")
+            await interaction.edit_original_response(embed=embed, view=None)
+            return
         message = await self.fetch_message(interaction.guild, int(current["message_id"])) if current.get("message_id") else None
         await self.update_message(message, play_id, result)
         await self.bang_notifications(message, play_id)

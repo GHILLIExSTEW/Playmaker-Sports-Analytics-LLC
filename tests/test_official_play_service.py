@@ -13,19 +13,81 @@ def test_settle_play_updates_valid_play_columns(monkeypatch):
     updates = []
 
     monkeypatch.setattr(service, "_fetch_play", lambda play_id: {"units": 2})
-    monkeypatch.setattr(
-        official_play_module.supabase_service,
-        "update",
-        lambda table, payload, match: updates.append((table, payload, match)),
-    )
+
+    def update(table, payload, match, allowed=None):
+        updates.append((table, payload, match, allowed))
+        return SimpleNamespace(data=[{"id": 42}])
+
+    monkeypatch.setattr(official_play_module.supabase_service, "update", update)
 
     outcome = service.settle_play(42, "win")
 
     assert outcome == {"result": "win", "tally": 2.0}
     assert updates[0][0] == "plays"
     assert updates[0][2] == {"id": 42}
+    assert updates[0][3] == {"status": ["open", "regraded"]}
     assert set(updates[0][1]) == {"status", "settled_at"}
     assert datetime.fromisoformat(updates[0][1]["settled_at"]).tzinfo is not None
+
+
+def test_settle_play_loses_race_to_a_different_result(monkeypatch):
+    service = OfficialPlayService()
+    statuses = iter([{"units": 2, "status": "open"}, {"units": 2, "status": "win"}])
+    monkeypatch.setattr(service, "_fetch_play", lambda play_id: next(statuses))
+    monkeypatch.setattr(official_play_module.supabase_service, "update",
+                        Mock(return_value=SimpleNamespace(data=[])))
+    with pytest.raises(official_play_module.PlayAlreadySettled, match="already settled as WIN") as raised:
+        service.settle_play(42, "loss")
+    assert raised.value.status == "win"
+
+
+def test_settle_play_treats_already_committed_same_result_as_success(monkeypatch):
+    service = OfficialPlayService()
+    statuses = iter([{"units": 2, "status": "open"}, {"units": 2, "status": "win"}])
+    monkeypatch.setattr(service, "_fetch_play", lambda play_id: next(statuses))
+    monkeypatch.setattr(official_play_module.supabase_service, "update",
+                        Mock(return_value=SimpleNamespace(data=[])))
+    assert service.settle_play(42, "win") == {"result": "win", "tally": 2.0}
+
+
+def test_new_play_carries_unique_submission_key_and_idempotent_insert(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(official_play_module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
+    insert = Mock(return_value=SimpleNamespace(data=[{"id": 7}]))
+    upsert = Mock()
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", insert)
+    monkeypatch.setattr(official_play_module.supabase_service, "upsert", upsert)
+    for _ in range(2):
+        service.create_play_record("900", "Ace", 1, 1, "-110", tracking_scope="capper",
+                                   leg_records=[{"selection": "Team ML", "odds": -110}])
+    keys = [call.args[1]["submission_key"] for call in insert.call_args_list]
+    assert len(set(keys)) == 2 and all(len(key) == 36 for key in keys)
+    assert all(call.kwargs == {"idempotency_column": "submission_key"} for call in insert.call_args_list)
+    # Legs are always written with a replay-safe upsert.
+    assert all(call.args[0] == "play_legs" and call.args[2] == ["play_id", "leg_number"] for call in upsert.call_args_list)
+
+
+def test_edit_play_overwrites_legs_before_trimming_and_never_deletes_all(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_fetch_play", lambda _: {"units": 1, "team_approval": None})
+    monkeypatch.setattr(service, "get_play_legs", lambda _: [
+        {"leg_number": 1, "selection": "A ML", "odds": 100, "details": {"sport": "nfl"}},
+        {"leg_number": 2, "selection": "B ML", "odds": 100, "details": None},
+    ])
+    order = []
+    monkeypatch.setattr(official_play_module.supabase_service, "update", lambda *args, **kwargs: order.append("update"))
+    monkeypatch.setattr(official_play_module.supabase_service, "upsert",
+                        lambda table, rows, conflict: order.append(("upsert", table, rows, conflict)))
+    monkeypatch.setattr(official_play_module.supabase_service, "delete",
+                        Mock(side_effect=AssertionError("must not delete every leg")))
+    monkeypatch.setattr(official_play_module.supabase_service, "_execute", lambda operation: order.append("trim"))
+    service.edit_play_record(7, 1, "", ["A ML"], [-110])
+    assert order[0] == "update" and order[-1] == "trim"
+    _, table, rows, conflict = order[1]
+    assert table == "play_legs" and conflict == ["play_id", "leg_number"]
+    assert rows == [{"play_id": 7, "leg_number": 1, "selection": "A ML", "odds": -110, "details": {"sport": "nfl"}}]
 
 
 @pytest.mark.parametrize("recover", [False, True])
@@ -79,7 +141,9 @@ def test_created_play_returns_saved_team_details_for_card_artwork(monkeypatch, s
         Mock(return_value=SimpleNamespace(data=[])),
     )
     insert = Mock(return_value=SimpleNamespace(data=[{"id": 361}]))
+    upsert = Mock()
     monkeypatch.setattr(official_play_module.supabase_service, "insert", insert)
+    monkeypatch.setattr(official_play_module.supabase_service, "upsert", upsert)
     leg = {
         "selection": "DAL Stars moneyline (3-way, excluding OT)",
         "odds": -105,
@@ -95,7 +159,7 @@ def test_created_play_returns_saved_team_details_for_card_artwork(monkeypatch, s
         "900", "Ace", 2.1, 1, "-105", tracking_scope=scope, leg_records=[leg],
     )
 
-    saved_leg = insert.call_args.args[1][0]
+    saved_leg = upsert.call_args.args[1][0]
     assert result["leg_records"] == [{
         "selection": saved_leg["selection"],
         "odds": saved_leg["odds"],
