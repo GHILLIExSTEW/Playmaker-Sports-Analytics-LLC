@@ -249,38 +249,43 @@ def test_justification_request_failure_does_not_fail_or_republish_official_pick(
 
 
 @pytest.mark.parametrize("outcome", ["rejected", "expired"])
-def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
+def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch, outcome):
     cog, channel, prompt = make_cog(monkeypatch)
-    thread = review_thread() if outcome == "rejected" else None
-    if thread:
-        thread.fetch_message.return_value = prompt
-        channel = thread
-        rejected_row = saved_row()
-        rejected_row.update(state="rejected", votes={"yes": 1, "no": 1, "pass": 0})
-        cog.store.get.return_value = rejected_row
-        events = []
-
-        async def save_record(*_):
-            events.append("archive")
-
-        async def delete_thread(**_):
-            events.append("delete")
-
-        cog.records = Mock(
-            save=AsyncMock(side_effect=save_record),
-            store=SimpleNamespace(source_deleted=lambda _: events.append("mark-deleted")),
+    thread = review_thread()
+    thread.fetch_message.return_value = prompt
+    channel = thread
+    terminal_row = saved_row()
+    if outcome == "rejected":
+        terminal_row.update(state="rejected", votes={"yes": 1, "no": 1, "pass": 0})
+    else:
+        terminal_row.update(
+            state="failed",
+            error="Event already started; no late official publication is permitted.",
         )
-        thread.delete.side_effect = delete_thread
-        free_channel = SimpleNamespace(
-            guild=thread.guild, send=AsyncMock(return_value=SimpleNamespace(id=1000)),
-        )
-        free_channels = []
+    cog.store.get.return_value = terminal_row
+    events = []
 
-        async def resolve_channel(channel_id, *_args, **_kwargs):
-            free_channels.append(free_channel)
-            return free_channel if channel_id == module.FREE_PLAYS_CHANNEL_ID else thread
+    async def save_record(*_):
+        events.append("archive")
 
-        cog.publisher.resolve_channel = AsyncMock(side_effect=resolve_channel)
+    async def delete_thread(**_):
+        events.append("delete")
+
+    cog.records = Mock(
+        save=AsyncMock(side_effect=save_record),
+        store=SimpleNamespace(source_deleted=lambda _: events.append("mark-deleted")),
+    )
+    thread.delete.side_effect = delete_thread
+    free_channel = SimpleNamespace(
+        guild=thread.guild, send=AsyncMock(return_value=SimpleNamespace(id=1000)),
+    )
+    free_channels = []
+
+    async def resolve_channel(channel_id, *_args, **_kwargs):
+        free_channels.append(free_channel)
+        return free_channel if channel_id == module.FREE_PLAYS_CHANNEL_ID else thread
+
+    cog.publisher.resolve_channel = AsyncMock(side_effect=resolve_channel)
     cog.store.finalize.return_value = {
         "outcome": outcome, "counts": {"yes": 1, "no": 1, "pass": 0}, "roster_size": 5,
     }
@@ -288,17 +293,21 @@ def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
     cog.publisher.publish_approved.assert_not_awaited()
     cog.request_insight.assert_not_awaited()
     assert prompt.edit.call_args.kwargs["view"] is None
+    free_channel = free_channels[0]
+    assert free_channel.send.await_count == 1
+    assert free_channel.send.call_args.kwargs["content"] == (
+        f"<@&{ROOKIE_ROLE_ID}> <@&{FREE_PLAY_ROLE_ID}>"
+    )
+    assert free_channel.send.call_args.kwargs["allowed_mentions"].roles == [
+        discord.Object(id=ROOKIE_ROLE_ID), discord.Object(id=FREE_PLAY_ROLE_ID),
+    ]
     if outcome == "expired":
-        cog.store.fail.assert_called_once()
+        assert prompt.edit.call_args.kwargs["embed"].title == "Review closed - personal Free Play only"
+        cog.store.fail.assert_not_called()
+        cog.records.save.assert_not_awaited()
+        thread.delete.assert_not_awaited()
+        cog.publisher.staff_alert.assert_not_awaited()
     else:
-        free_channel = free_channels[0]
-        assert free_channel.send.await_count == 1
-        assert free_channel.send.call_args.kwargs["content"] == (
-            f"<@&{ROOKIE_ROLE_ID}> <@&{FREE_PLAY_ROLE_ID}>"
-        )
-        assert free_channel.send.call_args.kwargs["allowed_mentions"].roles == [
-            discord.Object(id=ROOKIE_ROLE_ID), discord.Object(id=FREE_PLAY_ROLE_ID),
-        ]
         cog.records.save.assert_awaited_once_with(thread, cog.store.get.return_value)
         assert events == ["archive", "delete", "mark-deleted"]
 

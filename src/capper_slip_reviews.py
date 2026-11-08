@@ -783,9 +783,24 @@ class CapperSlipReviews(commands.Cog):
         embed = review_embed(row)
         embed.clear_fields()
         if decision["outcome"] == "expired":
-            await self.fail(message_id, "The earliest event has started. Late official posting is blocked.")
-            embed.title = "Review closed - event already started"
+            embed.title = "Review closed - personal Free Play only"
             await self.edit_prompt(channel, prompt, embed=embed, view=None)
+            expired_row = await asyncio.to_thread(self.store.get, message_id)
+            if (
+                expired_row["state"] != "failed"
+                or expired_row.get("error")
+                != "Event already started; no late official publication is permitted."
+            ):
+                raise RuntimeError("The expired capper review could not be verified before Free Play publication.")
+            try:
+                await self.publish_personal_free_play(channel.guild, expired_row)
+            except Exception as exc:
+                logger.exception("expired_free_play_publish_failed message=%s", message_id)
+                await self.publisher.staff_alert(
+                    f"expired_free_play:{message_id}",
+                    f"Expired slip {message_id} was not copied to Free Plays; its review thread was left intact. "
+                    f"Check bot logs. Error: {str(exc)[:1000]}",
+                )
         elif decision["outcome"] == "rejected":
             embed.title = "Review closed - personal only"
             counts = decision["counts"]
