@@ -58,7 +58,7 @@ for (const width of [390, 768, 1440]) {
 test('homepage shows all settled results in pages of ten without sport filters', async ({ page }) => {
   await mockSports(page)
   const results = Array.from({ length: 23 }, (_, index) => ({
-    settled_at: '2026-10-10T12:00:00Z', sport: index % 2 ? 'NFL' : 'NBA',
+    settled_at: '2026-10-10T12:00:00Z', sport: index % 2 ? 'NFL' : 'NBA', tracking_scope: 'official',
     capper: 'Test Capper', selection: `Ledger play ${index + 1}`, odds: -110,
     units: 1, status: index % 2 ? 'loss' : 'win', net_units: index % 2 ? -1 : 0.91,
   }))

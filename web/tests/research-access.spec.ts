@@ -151,7 +151,9 @@ test('guide navigation opens the canonical content for operators without mobile 
   await expect(page).toHaveURL(/\/guide$/)
   await expect(page).toHaveTitle('User Guide | Playmaker Picks')
   const guide = page.getByRole('article', { name: 'Playmaker user guide' })
-  await expect(guide.getByRole('heading', { level: 2 })).toHaveCount(20)
+  // Every section of the maintained guide renders; derive the count so guide edits don't break this.
+  await expect(guide.getByRole('heading', { level: 2 })).toHaveCount(guideContent.match(/<h2[\s>]/g)?.length ?? 0)
+  expect(guideContent.match(/<h2[\s>]/g)?.length).toBeGreaterThan(20)
   await expect(guide).toContainText('7,500')
   await expect(guide).toContainText('public_sport_model_events')
   await expect(guide).toContainText('Laboratory /model')
