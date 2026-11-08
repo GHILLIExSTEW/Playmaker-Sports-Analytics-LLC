@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from functools import lru_cache
 from html import escape
 from html.parser import HTMLParser
@@ -19,7 +20,19 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "Playmaker_Picks_User_Guide.pdf"
 DOCS_OUTPUT = ROOT / "docs" / "Playmaker_Bot_User_Guide.pdf"
 SOURCE = ROOT / "Playmaker_Picks_User_Guide.html"
-GUIDE_MIGRATION = ROOT / "supabase" / "migrations" / "20261022040000_official_capper_insights_guide.sql"
+MIGRATIONS = ROOT / "supabase" / "migrations"
+# Applied migrations never re-run, so each regeneration must ship as a NEW migration.
+# (This script used to overwrite 20261022040000_official_capper_insights_guide.sql in place,
+# which meant later guide edits never reached the deployed website.)
+GUIDE_MIGRATION_SUFFIX = "_user_guide_sync.sql"
+
+
+def guide_migration_path() -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    latest = max((path.name[:14] for path in MIGRATIONS.glob("*.sql")), default="0")
+    if stamp <= latest:
+        raise ValueError(f"Clock is behind the newest migration ({latest}); refusing to write an out-of-order migration.")
+    return MIGRATIONS / f"{stamp}{GUIDE_MIGRATION_SUFFIX}"
 EMOJI_FONT = r"C:\Windows\Fonts\seguiemj.ttf"
 # Segoe UI Emoji stores its color layers at 109px; other sizes render flat.
 EMOJI_RENDER_PX = 109
@@ -164,7 +177,7 @@ class GuideParser(HTMLParser):
         self.stack[-1].children.append(data)
 
 
-def build_pdf() -> None:
+def build_pdf() -> Path:
     parser = GuideParser()
     parser.feed(SOURCE.read_text(encoding="utf-8"))
     parser.close()
@@ -223,37 +236,23 @@ def build_pdf() -> None:
     delimiter = "$playmaker_guide$"
     if delimiter in guide_html:
         raise ValueError("Guide HTML contains its SQL dollar-quote delimiter.")
-    sql_literal = delimiter + guide_html + delimiter
-    GUIDE_MIGRATION.write_text(
+    sql_literal = delimiter + guide_html.replace("\r\n", "\n") + delimiter
+    migration = guide_migration_path()
+    # The table and operator_user_guide() already exist (20261011230000); only the content changes.
+    migration.write_text(
         "-- Generated from Playmaker_Picks_User_Guide.html by scripts/create_user_guide_pdf.py.\n"
         "begin;\n\n"
-        "create table if not exists public.operator_user_guide_content (\n"
-        "  id boolean primary key default true check (id),\n"
-        "  html text not null check (length(html) > 0)\n"
-        ");\n"
-        "alter table public.operator_user_guide_content enable row level security;\n"
-        "revoke all on table public.operator_user_guide_content from public, anon, authenticated;\n\n"
         f"insert into public.operator_user_guide_content (id, html) values (true, {sql_literal})\n"
         "on conflict (id) do update set html = excluded.html;\n\n"
-        "create or replace function public.operator_user_guide()\n"
-        "returns text language plpgsql stable security definer set search_path = ''\n"
-        "as $$\n"
-        "declare content text;\n"
-        "begin\n"
-        "  perform public.require_operator_research_access();\n"
-        "  select html into strict content from public.operator_user_guide_content where id;\n"
-        "  return content;\n"
-        "end;\n"
-        "$$;\n"
-        "revoke all on function public.operator_user_guide() from public, anon, authenticated;\n"
-        "grant execute on function public.operator_user_guide() to authenticated;\n\n"
         "commit;\n",
         encoding="utf-8",
+        newline="\n",
     )
+    return migration
 
 
 if __name__ == "__main__":
-    build_pdf()
+    migration = build_pdf()
     print(OUTPUT)
     print(DOCS_OUTPUT)
-    print(GUIDE_MIGRATION)
+    print(migration)

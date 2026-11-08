@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { PGlite } from '@electric-sql/pglite'
 
@@ -145,10 +145,24 @@ test('latest generated website guide matches the maintained HTML and documents s
   await db.exec(await readFile(new URL('../../supabase/migrations/20261021030000_live_membership_guide.sql', import.meta.url), 'utf8'))
   await db.exec(await readFile(new URL('../../supabase/migrations/20261021050000_subscription_options_guide.sql', import.meta.url), 'utf8'))
   await db.exec(await readFile(new URL('../../supabase/migrations/20261022020000_slip_review_guide.sql', import.meta.url), 'utf8'))
-  await db.exec(await readFile(new URL('../../supabase/migrations/20261022040000_official_capper_insights_guide.sql', import.meta.url), 'utf8'))
+  const migrations = new URL('../../supabase/migrations/', import.meta.url)
+  // Replay the real chain: the historic in-place edits, then every generated sync migration in order.
+  // The deployed guide is whatever the newest migration leaves behind, so it must equal the maintained HTML.
+  const syncs = (await readdir(migrations)).filter((name) => name.endsWith('_user_guide_sync.sql')).sort()
+  assert.ok(syncs.length > 0, 'regenerate the guide with scripts/create_user_guide_pdf.py')
+  for (const name of [
+    '20261022040000_official_capper_insights_guide.sql',
+    '20261028010000_capper_forum_guide.sql',
+    '20261029010000_discord_compatibility_guide.sql',
+    ...syncs,
+  ]) await db.exec(await readFile(new URL(name, migrations), 'utf8'))
+  const lf = (text) => text.replace(/\r\n/g, '\n')
   const html = await readFile(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8')
   const saved = (await db.query('select public.operator_user_guide() as html')).rows[0].html
-  assert.equal(saved, html.split('<main>')[1].split('</main>')[0])
+  assert.equal(lf(saved), lf(html.split('<main>')[1].split('</main>')[0]),
+    'Playmaker_Picks_User_Guide.html changed without a new guide migration; run scripts/create_user_guide_pdf.py')
+  assert.match(saved, /Discord compatibility and privacy<\/h2>/)
+  assert.match(saved, /expire 365 days after review completion/)
   assert.match(saved, /Confirm details \+ set cutoff/)
   assert.match(saved, /No response is not a No/)
   assert.match(saved, /1 = 1u; 2 = 2u; 3 or more = 3u maximum/)

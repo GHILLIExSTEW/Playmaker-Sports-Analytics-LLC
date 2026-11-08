@@ -88,8 +88,10 @@ test('research RPCs deny non-team roles and cannot bypass internal implementatio
     `)
     await load('20261011230000_operator_user_guide.sql')
     assert.equal((await db.query('select count(*)::int as count from public.operator_user_guide_content')).rows[0].count, 1)
-    const guideHtml = (await readFile(new URL('../../Playmaker_Picks_User_Guide.html', import.meta.url), 'utf8'))
-      .split('<main>')[1].split('</main>')[0]
+    // This test covers access control; content parity with the maintained HTML is checked
+    // against the full guide migration chain in dynamic-capper-votes.test.mjs.
+    const guideHtml = (await db.query('select html from public.operator_user_guide_content')).rows[0].html
+    assert.notEqual(guideHtml, 'Old guide content')
     const call = async (rpc, role = 'authenticated') => {
       await db.exec(`set role ${role}`)
       try { return (await db.query(`select * from public.${rpc}`)).rows }
