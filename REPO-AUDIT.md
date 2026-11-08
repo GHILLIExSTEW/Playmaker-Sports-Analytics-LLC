@@ -6,7 +6,7 @@ Audit date: October 31, 2026
 systems sharing one Supabase (Postgres) backend:
 
 1. **A Python Discord bot** (`src/`) — the operational core
-2. **A Supabase database + edge functions layer** (`supabase/`) — 81 migrations, 2 Deno edge functions
+2. **A Supabase database + edge functions layer** (`supabase/`) — 89 migrations (as of Nov 8), 2 Deno edge functions
 3. **A React/Vite public website** (`web/`) — deployed via AWS Amplify
 
 ---
@@ -56,8 +56,10 @@ records and model snapshots are excluded from the matchup card.
 
 ## 2. Service Layer (`src/services/`, 34 modules)
 
-- **Data plumbing:** `supabase_service.py` wraps the client with retries/pagination; connection
-  drops are replayed up to 3x with idempotent worker claim tokens
+- **Data plumbing:** `supabase_service.py` wraps the client with retries/pagination. Reads,
+  updates, upserts and deletes are replayed up to 3x after a dropped connection; plain inserts
+  are never replayed, and new plays use a unique `submission_key` so an uncertain insert is
+  resolved by reading the row back (see the November 8 review below)
 - **Sports data pipeline:** `api_sports_service.py` (NFL) + `api_sports_multi_service.py`
   (NBA/MLB/NHL/soccer/MMA/F1 etc.) fetch from API-Sports under a strict shared budget
   (`api_budget_service.py`, 7,500 requests/UTC day, atomic reservations) → normalized into
@@ -121,9 +123,10 @@ end-to-end or migration-correctness tests.
 
 1. **Fail-closed everywhere** — missing role evidence, unavailable budget checks, or unverified
    rosters deny access rather than defaulting open
-2. **Strict cost governance** — every API-Sports and OpenAI call passes through atomic
-   reservation RPCs with per-user, global, and shared daily ceilings; failures consume quota and
-   are never auto-retried
+2. **Strict cost governance** — every API-Sports call and the website's OpenAI calls pass through
+   atomic reservation RPCs with per-user, global, and shared daily ceilings. The bot's OpenAI slip
+   reads had no ceiling until November 8, 2026; they now reserve against
+   `reserve_openai_vision_request` (`OPENAI_VISION_DAILY_LIMIT`)
 3. **Idempotent distributed work** — claim tokens, replay-safe RPCs, and uncertain-outcome
    handling for the bot↔Supabase worker queues
 4. **Server-authoritative security** — the browser holds only the anon key; the bot holds
@@ -183,6 +186,36 @@ retain `can_manage_plays` access regardless.
   (acceptable for a public anon key)
 - Routing in `web/src/App.tsx` is manual pathname matching rather than declarative routes
 - `.env.example` embeds real production channel/role/plan IDs (non-secret, but identifying)
-- Pre-existing test-environment caveat: 4 tests in `tests/test_capper_insights.py` and
-  `tests/test_reaction_reconciliation.py` fail without `SUPABASE_URL`/`SUPABASE_KEY` configured;
-  unrelated to the security fix
+- ~~Pre-existing test-environment caveat: 4 tests fail without `SUPABASE_URL`/`SUPABASE_KEY`~~ —
+  corrected November 8: those tests had drifted from the code (and one made an unmocked database
+  call). Configuring credentials would have pointed them at production. Fixed; see below.
+
+---
+
+# Follow-up Review & Fixes (November 8, 2026)
+
+Verified on Windows with Python 3.12 / Node 26: **1,352 pytest, 127 Node unit and 152 Playwright
+tests pass**, plus `npm run lint` and `npm run build`. Re-verified: all 109 `SECURITY DEFINER`
+functions are revoked from PUBLIC and set `search_path = ''`; all 72 tables enable RLS.
+
+| # | Severity | Issue | Fix |
+|---|----------|-------|-----|
+| 1 | Medium | The test suite loaded the production `.env` and created a live Supabase client at import; any unmocked call reached production | `tests/conftest.py` disables `.env` loading (`PLAYMAKER_DISABLE_DOTENV`), drops live credentials and refuses non-loopback sockets |
+| 2 | Medium | Plain inserts were replayed after an ambiguous dropped connection, so `/play` could record the same play twice | Inserts are never blindly replayed; plays carry a unique `submission_key` (migration `20261108180000`) and uncertain inserts read back by key; legs always use a replay-safe upsert |
+| 3 | Medium | Bot OpenAI slip reads had no budget: up to 4 paid calls per image (2 models × 2 attempts, including retries of deterministic "unreadable" answers) | Shared daily ceiling (migration `20261108181000`, fail-closed); one read per model, same-model retry only for timeouts/429/5xx |
+| 4 | Medium | Website user guide was stale: the generator overwrote an already-applied migration, and `20261029010000` anchored on `</body>` (absent from stored content), silently dropping the privacy/retention section | Generator writes a new `*_user_guide_sync.sql` each run; `20261108173434` syncs the current guide; parity test replays every sync migration |
+| 5 | Low–Med | Settlement check-then-write race: two quick reactions could both settle, replacing a result after its BANG | `settle_play` is compare-and-set on `open`/`regraded`; losers raise `PlayAlreadySettled` and are handled quietly |
+| 6 | Low–Med | Editing a play deleted all legs before re-inserting; a failed insert left a play with no legs | Upsert legs in place, then trim surplus |
+| 7 | Low | Missing `OPENAI_API_KEY` sent `Bearer None` requests to every model | Fails fast |
+| 8 | Low | The public capper channel echoed raw provider error text | Generic public message; detail stays in staff alerts/logs |
+| 9 | Low | Bot ran as root | `scripts/discord-bot.service` runs as `discord-bot` with basic hardening (one-time VM setup in the unit file) |
+| 10 | Low | No CI; four web test files were not in any npm script; 6 Python + 4 web tests were stale | `.github/workflows/ci.yml`; `test:reviews` / `test:unit` scripts; stale tests fixed; `pytest` moved to `requirements-dev.txt`; `httpx` declared |
+
+**Deployment order:** apply migrations `20261108173434`, `20261108180000` and `20261108181000`
+*before* restarting the bot. New play inserts require `submission_key`, and slip reading fails
+closed without the vision budget RPC (or set `OPENAI_VISION_DAILY_LIMIT=0` to skip it).
+
+**Still open (design decisions, not changed):** cappers can self-grade personal plays by reaction;
+production role/channel IDs are hard-coded defaults in `src/config.py`; the research edge
+function defaults to `gpt-4.1-mini` while the bot uses `gpt-5.4-mini`; the web bundle exceeds
+500 kB (Vite warning).

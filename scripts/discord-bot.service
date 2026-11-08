@@ -1,10 +1,18 @@
 [Unit]
 Description=Official Play Discord Bot
-After=network.target
+After=network-online.target
+Wants=network-online.target
+
+# Runs as an unprivileged account instead of root. One-time setup on the VM:
+#   sudo useradd --system --home /opt/discord-bot --shell /usr/sbin/nologin discord-bot
+#   sudo chown -R discord-bot:discord-bot /opt/discord-bot
+#   sudo chmod 600 /opt/discord-bot/.env
+#   sudo systemctl daemon-reload && sudo systemctl restart discord-bot
 
 [Service]
 Type=simple
-User=root
+User=discord-bot
+Group=discord-bot
 WorkingDirectory=/opt/discord-bot
 ExecStart=/opt/discord-bot/.venv/bin/python3 -m src.bot
 Restart=always
@@ -12,6 +20,11 @@ RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal
+# Hardening: the bot only needs network access and its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
