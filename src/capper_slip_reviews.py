@@ -15,9 +15,10 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
-from src.config import CAPPER_BALLOT_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
+from src.config import CAPPER_BALLOT_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.interaction_views import PreparedModalView
 from src.forum_health import CheckedForum
+from src.play_presentation import capper_play_mentions
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
@@ -48,6 +49,8 @@ SUBMISSION_NOTICE = (
     "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
     "not training on Discord content. Check and correct the extracted details before confirming. "
     "Confirmation, voting and discussion stay in your post.\n\n"
+    "If the cappers do not approve your slip as an official pick, the bot automatically shares its sanitized image "
+    "and selections in Free Plays, pinging the ROOKIE and Free Plays roles; rejected slips are not added to personal tracking. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
     "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
@@ -798,6 +801,16 @@ class CapperSlipReviews(commands.Cog):
             rejected_row = await asyncio.to_thread(self.store.get, message_id)
             if rejected_row["state"] != "rejected":
                 raise RuntimeError("The rejected capper review could not be verified before thread deletion.")
+            try:
+                await self.publish_personal_free_play(channel.guild, rejected_row)
+            except Exception as exc:
+                logger.exception("rejected_free_play_publish_failed message=%s", message_id)
+                await self.publisher.staff_alert(
+                    f"rejected_free_play:{message_id}",
+                    f"Rejected slip {message_id} was not copied to Free Plays; its review thread was left intact. "
+                    f"Check bot logs. Error: {str(exc)[:1000]}",
+                )
+                return
             await self.records.save(channel, rejected_row)
             try:
                 await channel.delete(reason="Archived rejected capper review; no official play was published")
@@ -825,6 +838,32 @@ class CapperSlipReviews(commands.Cog):
             embed.title = "Review closed - official pick published"
             embed.add_field(name="Final decision", value=approval_text(decision, decision["units"]), inline=False)
             await self.edit_prompt(channel, prompt, embed=embed)
+
+    async def publish_personal_free_play(self, guild: discord.Guild, row: dict) -> discord.Message:
+        review = row["review"]
+        channel = await self.publisher.resolve_channel(
+            FREE_PLAYS_CHANNEL_ID, "FREE_PLAYS_CHANNEL_ID", required=True,
+        )
+        if channel is None or channel.guild.id != guild.id:
+            raise RuntimeError("The configured Free Plays channel is unavailable in the slip's guild.")
+
+        embed = discord.Embed(title="Free Play - Not an Official Pick", color=discord.Color.orange())
+        author_name = review.get("author_name") or "Capper"
+        embed.set_author(name=author_name)
+        embed.description = "\n".join(
+            f"{index}. {discord.utils.escape_markdown(leg['selection'])} ({int(leg['odds']):+d})"
+            for index, leg in enumerate(review["parsed"]["legs"], 1)
+        )[:4096]
+        image = discord.File(
+            BytesIO(base64.b64decode(review["slip_base64"], validate=True)),
+            filename=review.get("image_filename") or f"slip-{row['message_id']}.png",
+        )
+        try:
+            return await channel.send(
+                **capper_play_mentions(free_play=True), embed=embed, file=image,
+            )
+        finally:
+            image.close()
 
     async def reaction(self, payload, *, added: bool) -> None:
         if self.publisher.get_testing():

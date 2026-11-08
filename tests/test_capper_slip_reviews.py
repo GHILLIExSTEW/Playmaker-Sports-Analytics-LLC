@@ -11,6 +11,7 @@ from PIL import Image
 import pytest
 import discord
 
+from src.config import FREE_PLAY_ROLE_ID, ROOKIE_ROLE_ID
 import src.capper_slip_reviews as module
 import src.forum_health as health
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
@@ -270,6 +271,16 @@ def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
             store=SimpleNamespace(source_deleted=lambda _: events.append("mark-deleted")),
         )
         thread.delete.side_effect = delete_thread
+        free_channel = SimpleNamespace(
+            guild=thread.guild, send=AsyncMock(return_value=SimpleNamespace(id=1000)),
+        )
+        free_channels = []
+
+        async def resolve_channel(channel_id, *_args, **_kwargs):
+            free_channels.append(free_channel)
+            return free_channel if channel_id == module.FREE_PLAYS_CHANNEL_ID else thread
+
+        cog.publisher.resolve_channel = AsyncMock(side_effect=resolve_channel)
     cog.store.finalize.return_value = {
         "outcome": outcome, "counts": {"yes": 1, "no": 1, "pass": 0}, "roster_size": 5,
     }
@@ -280,6 +291,14 @@ def test_unqualified_or_expired_review_never_publishes(monkeypatch, outcome):
     if outcome == "expired":
         cog.store.fail.assert_called_once()
     else:
+        free_channel = free_channels[0]
+        assert free_channel.send.await_count == 1
+        assert free_channel.send.call_args.kwargs["content"] == (
+            f"<@&{ROOKIE_ROLE_ID}> <@&{FREE_PLAY_ROLE_ID}>"
+        )
+        assert free_channel.send.call_args.kwargs["allowed_mentions"].roles == [
+            discord.Object(id=ROOKIE_ROLE_ID), discord.Object(id=FREE_PLAY_ROLE_ID),
+        ]
         cog.records.save.assert_awaited_once_with(thread, cog.store.get.return_value)
         assert events == ["archive", "delete", "mark-deleted"]
 

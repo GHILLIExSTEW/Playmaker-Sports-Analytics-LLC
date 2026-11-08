@@ -16,7 +16,7 @@ def cog():
     presentation = PlayPresentation(
         Mock(user=SimpleNamespace(id=999)), official=Mock(), features=Mock(),
         get_testing=Mock(return_value=False), play_post_target=Mock(return_value=("CONFIRMATION_CHANNEL_ID", 101)),
-        resolve_channel=AsyncMock(return_value=SimpleNamespace(send=AsyncMock())),
+        resolve_channel=AsyncMock(return_value=SimpleNamespace(id=101, send=AsyncMock())),
         staff_alert=AsyncMock(),
     )
     presentation.capper_webhook = AsyncMock(return_value=SimpleNamespace(id=777, send=AsyncMock(), edit_message=AsyncMock()))
@@ -151,7 +151,7 @@ def test_publishing_preserves_author_image_and_explicit_target():
     assert embed.image.url == data["image_url"]
 
 
-def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play_cards):
+def test_publishing_capper_play_in_standard_channel_mentions_rookie_only(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
     presentation = cog()
@@ -171,6 +171,25 @@ def test_publishing_capper_play_mentions_rookie_role_only(monkeypatch, mock_play
     assert sent["embed"].description is None
     assert "file" in sent
     assert mock_play_cards.call_args.args[0]["tracking_scope"] == "capper"
+
+
+def test_publishing_capper_play_in_free_channel_mentions_rookie_and_free_plays(monkeypatch, mock_play_cards):
+    monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
+    monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
+    monkeypatch.setattr(module, "FREE_PLAY_ROLE_ID", 654)
+    monkeypatch.setattr(module, "FREE_PLAYS_CHANNEL_ID", 303)
+    presentation = cog()
+    presentation.resolve_channel.return_value.id = 303
+    request = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")),
+    )
+    asyncio.run(presentation.publish_play_message(
+        request, {**payload(), "tracking_scope": "capper"}, ("FREE_PLAYS_CHANNEL_ID", 303),
+    ))
+    sent = presentation.capper_webhook.return_value.send.call_args.kwargs
+    assert sent["content"] == "<@&456> <@&654>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [456, 654], "parse": []}
 
 
 @pytest.mark.parametrize("scope", ["capper", "official"])
@@ -267,20 +286,22 @@ def test_capper_card_regenerates_on_settlement_and_refresh(operation, mock_play_
 def test_capper_repost_renders_original_slip_and_preserves_capper_identity(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
+    monkeypatch.setattr(module, "FREE_PLAY_ROLE_ID", 654)
     presentation = cog()
     source = SimpleNamespace(
         content="", embeds=[], attachments=[SimpleNamespace(content_type="image/png", read=AsyncMock(return_value=b"original"))],
         delete=AsyncMock(),
     )
     channel = SimpleNamespace(
+        id=module.FREE_PLAYS_CHANNEL_ID,
         guild=SimpleNamespace(id=123), fetch_message=AsyncMock(return_value=source), send=AsyncMock(),
     )
     author = SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
     data = {**payload(), "tracking_scope": "capper"}
     asyncio.run(presentation.repost_official_play(channel, 500, data, author))
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
-    assert sent["content"] == "<@&456>"
-    assert sent["allowed_mentions"].to_dict() == {"roles": [456], "parse": []}
+    assert sent["content"] == "<@&456> <@&654>"
+    assert sent["allowed_mentions"].to_dict() == {"roles": [456, 654], "parse": []}
     assert sent["embed"].author.name is None
     assert sent["username"] == "Ace"
     assert sent["embed"].fields == []

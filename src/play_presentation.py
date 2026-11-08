@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import discord
 from discord.ext import commands
 
-from src.config import HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID
+from src.config import FREE_PLAY_ROLE_ID, FREE_PLAYS_CHANNEL_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID
 from src.play_settlement import SETTLEABLE_STATUSES
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_features_service import PlayFeaturesService
@@ -82,12 +82,16 @@ def build_engagement_view(play_id: int, tails: int) -> discord.ui.View:
     return view
 
 
-def capper_play_mentions() -> dict:
-    """Ping text and mention allowlist for capper plays; only ROOKIE can be notified."""
+def capper_play_mentions(*, free_play: bool = False) -> dict:
+    """Ping the Rookie role on capper plays and the Free Plays role on free-channel posts."""
+    role_ids = [ROOKIE_ROLE_ID]
+    if free_play and FREE_PLAY_ROLE_ID not in role_ids:
+        role_ids.append(FREE_PLAY_ROLE_ID)
     return {
-        "content": f"<@&{ROOKIE_ROLE_ID}>",
+        "content": " ".join(f"<@&{role_id}>" for role_id in role_ids),
         "allowed_mentions": discord.AllowedMentions(
-            everyone=False, users=False, roles=[discord.Object(id=ROOKIE_ROLE_ID)], replied_user=False,
+            everyone=False, users=False,
+            roles=[discord.Object(id=role_id) for role_id in role_ids], replied_user=False,
         ),
     }
 
@@ -181,7 +185,7 @@ class PlayPresentation(commands.Cog):
                     hook = await self.capper_webhook(channel)
                     return await hook.send(
                         username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
-                        **capper_play_mentions(), embed=embed, file=file,
+                        **capper_play_mentions(free_play=channel.id == FREE_PLAYS_CHANNEL_ID), embed=embed, file=file,
                     )
                 return await channel.send(embed=embed, file=file)
             finally:
@@ -290,7 +294,7 @@ class PlayPresentation(commands.Cog):
                 hook = await self.capper_webhook(channel)
                 repost = await hook.send(
                     username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
-                    **capper_play_mentions(),
+                    **capper_play_mentions(free_play=channel.id == FREE_PLAYS_CHANNEL_ID),
                     embed=embed, view=build_engagement_view(int(payload["play_id"]), 0), **kwargs,
                 )
             else:
