@@ -14,7 +14,11 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
     create table public.play_insights (play_id bigint primary key, justification text);
     create function public.website_member_access() returns jsonb language sql as
       $$ select jsonb_build_object('state',current_setting('test.access',true)) $$;
-    create function public.website_capper_ids() returns text[] language sql as $$ select array['111']::text[] $$;
+    create function public.website_capper_ids() returns text[] language sql as $$ select array['111','222']::text[] $$;
+    create function public.play_insight_author(p_play_id bigint) returns text language sql as $$ select null::text $$;
+    create schema auth;
+    create table auth.identities(user_id uuid, provider text, provider_id text);
+    create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
     create function public.website_current_picks_source(p_sport text, p_capper text)
     returns table (id bigint, created_at timestamptz, sport text, capper text, avatar_url text,
       selection text, analysis text, odds integer, units numeric)
@@ -95,4 +99,38 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   await assert.rejects(db.query('select * from public.archived_settled_results()'), /permission denied/)
   await assert.rejects(db.query('select * from public.display_plays'), /permission denied/)
   assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 2)
+  await db.exec('reset role')
+  await db.exec(`
+    create function public.public_capper_directory()
+    returns table(name text, avatar_url text) language sql as $$ select null::text,null::text where false $$;
+    insert into public.users(id,discord_user_id,display_name) values(3,'222','Bee');
+    alter table public.plays add column team_approval jsonb;
+    alter table public.capper_ballots add column author_id text;
+    insert into public.plays(id,user_id,sport_id,units,legs,odds,status,message_id,created_at,settled_at,tracking_scope,stars,ballot_message_id,team_approval)
+    values
+      (8,2,1,2,1,100,'win','108','2026-10-15T04:00:00Z','2026-10-16T04:00:00Z','official',4,'508',
+        '{"voter_choices":{"111":"yes","222":"yes","900":"no"}}'),
+      (9,2,1,2,1,100,'open','109','2026-10-15T04:00:00Z',null,'official',4,'509',
+        '{"voter_choices":{"111":"no","222":"yes"}}'),
+      (10,2,1,2,1,100,'loss','110','2026-10-15T04:00:00Z','2026-10-17T04:00:00Z','official',4,'510',
+        '{"voter_choices":{"111":"yes","222":"yes","900":"no"}}');
+    insert into public.capper_ballots(message_id,author_id) values('508','111'),('509','111'),('510','111');
+  `)
+  await load('../../supabase/migrations/20261109010000_team_play_author_records.sql')
+  const personalTeamRecords = (await db.query('select * from public.public_capper_settled_results()')).rows
+  assert.equal(personalTeamRecords.length, 4)
+  assert.deepEqual(personalTeamRecords.map((row) => row.capper).sort(), ['Ace', 'Ace', 'Bee', 'Bee'])
+  assert.equal(personalTeamRecords.filter((row) => row.status === 'win').length, 2)
+  assert.equal(personalTeamRecords.filter((row) => row.status === 'loss').length, 2)
+  assert.ok(personalTeamRecords.every((row) => Number(row.units) === 2 && row.capper_record))
+  assert.deepEqual((await db.query("select id,capper from public.member_current_picks(null,'Bee')")).rows, [
+    { id: 9, capper: 'Bee' },
+  ])
+  assert.deepEqual((await db.query('select name from public.public_capper_directory() order by name')).rows, [
+    { name: 'Ace' }, { name: 'Bee' },
+  ])
+  assert.deepEqual((await db.query('select capper_name from public.public_favorite_cappers() order by capper_name')).rows, [
+    { capper_name: 'Ace' }, { capper_name: 'Bee' },
+  ])
+  assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 4)
 })

@@ -73,13 +73,33 @@ def test_tracker_fetch_paginates_both_tables_without_truncation(monkeypatch):
     assert len(plays) == len(users) == 1001
     for query in queries.values():
         assert [call.args for call in query.range.call_args_list] == [(0, 999), (1000, 1999)]
-    assert queries["display_plays"].select.call_args.args[0].endswith(",stars")
+    assert queries["display_plays"].select.call_args.args[0].endswith(",team_approval")
 
 
 def test_tracker_fetch_database_error_propagates(monkeypatch):
     monkeypatch.setattr(module.supabase_service, "_ensure_client", Mock(side_effect=RuntimeError("offline")))
     with pytest.raises(RuntimeError, match="offline"):
         module.fetch_official_tracker_rows()
+
+
+def test_official_tracker_keeps_team_totals_once_and_breaks_out_every_yes_voter():
+    approved = play(
+        tracking_scope="official",
+        team_approval={"voter_choices": {"42": "yes", "84": "yes", "126": "no"}},
+    )
+    embed, top_lines, breakdown = build_official_tracker_embed(
+        [approved],
+        [
+            {"id": 1, "discord_user_id": "42", "display_name": "Ace"},
+            {"id": 2, "discord_user_id": "84", "display_name": "Bee"},
+            {"id": 3, "discord_user_id": "126", "display_name": "Cal"},
+        ],
+        now=datetime(2026, 10, 5, 12, tzinfo=TRACKER_TIMEZONE),
+    )
+
+    assert "1 settled" in embed.fields[3].value
+    assert len(top_lines) == 2
+    assert "Ace" in breakdown and "Bee" in breakdown and "Cal" not in breakdown
 
 
 def test_current_cutoff_is_read_on_each_build():

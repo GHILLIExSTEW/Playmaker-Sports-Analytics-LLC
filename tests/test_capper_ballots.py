@@ -83,7 +83,7 @@ def message(vote=None):
     )
     return SimpleNamespace(
         id=500, poll=vote or poll(), content="", attachments=[image],
-        author=SimpleNamespace(id=42, bot=False),
+        author=SimpleNamespace(id=42, bot=False, display_name="Ace"),
         guild=SimpleNamespace(id=123, get_member=Mock(return_value=SimpleNamespace(id=42))),
         channel=Mock(), jump_url="https://discord.com/channels/123/100/500",
     )
@@ -109,7 +109,8 @@ def test_approved_ballot_uses_team_identity_rating_and_vote_units(monkeypatch, y
     cog.official.create_play_record.return_value.update(units=yes - 2, stars=yes)
     asyncio.run(cog.evaluate(source))
     kwargs = cog.official.create_play_record.call_args.kwargs
-    assert kwargs["discord_user_id"] == "900" and kwargs["username"] == "Official Playmaker Picks"
+    assert kwargs["discord_user_id"] == "42" and kwargs["username"] == "Ace"
+    assert kwargs["team_approval"]["author_id"] == "42"
     assert kwargs["units"] == yes - 2 and kwargs["stars"] == yes
     assert kwargs["tracking_scope"] == "official" and kwargs["ballot_message_id"] == "500"
     cog.images.extract_play.assert_called_once_with("https://cdn/slip", "Home ML\n", require_readable=True)
@@ -368,7 +369,7 @@ def test_discovery_resumes_cursor_and_never_overwrites_saved_ballot_state():
         yield SimpleNamespace(id=102, poll=None, author=SimpleNamespace(bot=False))
 
     asyncio.run(cog.discover(SimpleNamespace(history=history, guild=SimpleNamespace(get_member=Mock()))))
-    cog.store.remember.assert_called_once_with(101, ["42", "43", "44", "45", "46"])
+    cog.store.remember.assert_called_once_with(101, ["42", "43", "44", "45", "46"], "42")
     assert [call.args[0] for call in cog.store.advance.call_args_list] == [101, 102]
 
 

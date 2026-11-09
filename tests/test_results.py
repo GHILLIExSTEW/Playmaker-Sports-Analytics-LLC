@@ -70,6 +70,20 @@ def test_filters_combine_sport_capper_result_and_sort_newest_then_id():
     assert not filter_rows(rows, sport="hockey")
 
 
+def test_official_results_filter_includes_yes_voters_as_individual_cappers():
+    approved = play(
+        1, tracking_scope="official",
+        team_approval={"voter_choices": {"42": "no", "43": "yes"}},
+    )
+    rows = filter_results([approved], USERS, SPORTS, operator_ids=None, capper_id=43, now=NOW)
+
+    assert len(rows) == 1
+    assert rows[0]["_display_user_id"] == "2"
+    embed = build_results_embed(rows, USERS, SPORTS, "Capper results", 0, {})
+    assert "Other" in embed.fields[0].name
+    assert not filter_results([approved], USERS, SPORTS, operator_ids=None, capper_id=42, now=NOW)
+
+
 def test_sport_alias_filter_and_result_label_use_canonical_league_name():
     rows = [play(1)]
     assert filter_rows(rows, sport="nba") == rows

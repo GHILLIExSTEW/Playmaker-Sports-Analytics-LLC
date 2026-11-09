@@ -25,6 +25,7 @@ from src.services.play_features_service import (
     previous_month,
     previous_week,
     SPORT_NAMES,
+    individual_capper_plays,
     settled_time,
     unique_published,
 )
@@ -71,7 +72,7 @@ def fetch_official_tracker_rows() -> tuple[list[dict], list[dict]]:
             offset += 1000
 
     return (
-        fetch("display_plays", "id,user_id,units,odds,status,message_id,created_at,settled_at,tracking_scope,stars"),
+        fetch("display_plays", "id,user_id,units,odds,status,message_id,created_at,settled_at,tracking_scope,stars,team_approval"),
         fetch("users", "id,discord_user_id,display_name,username"),
     )
 
@@ -93,7 +94,9 @@ def build_official_tracker_embed(
     linked_plays = {}
     for play in sorted(plays, key=lambda row: int(row["id"])):
         if play.get("message_id"):
-            linked_plays.setdefault(str(play["message_id"]), play)
+            message_id = str(play["message_id"])
+            key = (message_id, str(play.get("user_id"))) if play.get("_capper_record") else message_id
+            linked_plays.setdefault(key, play)
     plays = list(linked_plays.values())
     settled_statuses = {"win", "loss", "void", "partial"}
     settled = [play for play in plays if play.get("status") in settled_statuses]
@@ -113,6 +116,11 @@ def build_official_tracker_embed(
         settled = [play for play in settled if settled_time(play) >= cutoff_start]
         pending = [play for play in pending if settled_time(play) >= cutoff_start]
 
+    capper_settled = (
+        [play for play in settled if play.get("_capper_record")]
+        if any(play.get("_capper_record") for play in plays)
+        else individual_capper_plays(settled, users)
+    )
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -121,7 +129,7 @@ def build_official_tracker_embed(
 
     by_user = {}
     names = {str(user["id"]): user.get("display_name") or user.get("username") for user in users}
-    for play in settled:
+    for play in capper_settled:
         if not in_period(play, month_start):
             continue
         user_id = str(play["user_id"])
@@ -166,11 +174,16 @@ def build_official_tracker_embed(
 def operator_plays(plays: list[dict], users: list[dict], operator_ids: set[int] | None) -> list[dict]:
     if operator_ids is None:
         return plays
+    allowed_discord_ids = {str(operator_id) for operator_id in operator_ids}
     allowed = {
         str(user["id"]) for user in users
-        if str(user.get("discord_user_id") or "").isdigit() and int(user["discord_user_id"]) in operator_ids
+        if str(user.get("discord_user_id") or "") in allowed_discord_ids
     }
-    return [play for play in plays if str(play.get("user_id")) in allowed]
+    return [
+        play for play in plays
+        if str(play.get("user_id")) in allowed
+        or str(play.get("_capper_discord_user_id")) in allowed_discord_ids
+    ]
 
 
 def scoped_plays(plays: list[dict], scope: str) -> list[dict]:
@@ -596,13 +609,19 @@ class Reporting(commands.Cog):
             if operators is None:
                 raise RuntimeError("The capper roster is unavailable. Please retry.")
             plays, users = await asyncio.to_thread(self.tracker_rows)
-            plays = operator_plays(scoped_plays(plays, "capper"), users, operators)
+            plays = operator_plays(
+                individual_capper_plays(unique_published(plays), users), users, operators,
+            )
             if capper:
                 author_ids = {str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(capper.id)}
-                plays = [play for play in plays if str(play["user_id"]) in author_ids]
+                plays = [
+                    play for play in plays
+                    if str(play["user_id"]) in author_ids
+                    or str(play.get("_capper_discord_user_id")) == str(capper.id)
+                ]
             embed, _, _ = self.tracker_embed(plays, users)
             embed.title = "Individual Capper | Unit Summary"
-            embed.set_footer(text="Requested only • Capper plays only • Eastern Time")
+            embed.set_footer(text="Requested only • Individual capper plays • Eastern Time")
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as exc:
             logger.exception("capper_tracker_failed")

@@ -203,6 +203,33 @@ def unique_published(plays: list[dict]) -> list[dict]:
     return list(linked.values())
 
 
+def individual_capper_plays(plays: list[dict], users: list[dict]) -> list[dict]:
+    user_ids = {
+        str(user.get("discord_user_id")): str(user["id"])
+        for user in users
+        if str(user.get("discord_user_id") or "").isdigit() and user.get("id") is not None
+    }
+    records = []
+    for play in plays:
+        if play.get("tracking_scope", "capper") == "capper":
+            records.append({**play, "_capper_record": True})
+            continue
+        approval = play.get("team_approval")
+        choices = approval.get("voter_choices") if isinstance(approval, dict) else None
+        if play.get("tracking_scope") != "official" or not isinstance(choices, dict):
+            continue
+        for discord_user_id, choice in choices.items():
+            discord_user_id = str(discord_user_id)
+            if choice == "yes":
+                records.append({
+                    **play,
+                    "user_id": user_ids.get(discord_user_id, discord_user_id),
+                    "_capper_record": True,
+                    "_capper_discord_user_id": discord_user_id,
+                })
+    return records
+
+
 def build_recap(plays: list[dict], users: list[dict], sports: dict, start: datetime, end: datetime) -> dict:
     names = {str(user["id"]): user.get("display_name") or user.get("username") or str(user["id"]) for user in users}
     period = [
@@ -211,12 +238,14 @@ def build_recap(plays: list[dict], users: list[dict], sports: dict, start: datet
     ]
     history = [play for play in unique_published(plays) if play.get("status") in SETTLED_RESULTS and settled_time(play) < end]
 
+    capper_period = individual_capper_plays(period, users)
+    capper_history = individual_capper_plays(history, users)
     cappers = []
-    for user_id in sorted({str(play["user_id"]) for play in period}):
-        mine = [play for play in period if str(play["user_id"]) == user_id]
+    for user_id in sorted({str(play["user_id"]) for play in capper_period}):
+        mine = [play for play in capper_period if str(play["user_id"]) == user_id]
         summary = record_summary(mine)
         summary["name"] = names.get(user_id, user_id)
-        summary["streak"] = current_streak([play for play in history if str(play["user_id"]) == user_id])
+        summary["streak"] = current_streak([play for play in capper_history if str(play["user_id"]) == user_id])
         cappers.append(summary)
     cappers.sort(key=lambda row: row["net"], reverse=True)
 
@@ -309,7 +338,7 @@ class PlayFeaturesService:
     def history(self) -> tuple[list[dict], list[dict], dict]:
         client = self._client()
         plays = self._all(lambda: client.table("display_plays").select(
-            "id,user_id,sport_id,units,odds,status,message_id,created_at,settled_at,tracking_scope"
+            "id,user_id,sport_id,units,odds,status,message_id,created_at,settled_at,tracking_scope,team_approval"
         ).order("id"))
         users = self._all(lambda: client.table("users").select("id,discord_user_id,display_name,username").order("id"))
         return plays, users, self.sport_slugs()
@@ -339,7 +368,11 @@ class PlayFeaturesService:
 
         capper = None
         user_id = next((str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(discord_user_id)), None)
-        mine = [play for play in published if str(play["user_id"]) == user_id and play.get("tracking_scope") == "capper"] if user_id else []
+        mine = [
+            play for play in individual_capper_plays(published, users)
+            if str(play.get("_capper_discord_user_id")) == str(discord_user_id)
+            or user_id is not None and str(play["user_id"]) == user_id
+        ]
         if mine:
             by_sport = {}
             for play in mine:

@@ -1,4 +1,6 @@
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -10,10 +12,12 @@ from src.services.play_features_service import (
     current_streak,
     format_record,
     grade_leg,
+    individual_capper_plays,
     play_sport_slug,
     previous_month,
     previous_week,
     record_summary,
+    PlayFeaturesService,
     team_matches,
     vault_leaderboard,
 )
@@ -139,6 +143,69 @@ def test_build_recap_dedupes_messages_and_ranks_cappers():
     assert recap["cappers"][1]["streak"] == "L1"
     assert recap["sports"][0]["sport"] == "NFL"
     assert recap["best_play"]["id"] == 1
+
+
+def test_approved_team_play_is_also_an_individual_capper_record():
+    approved = play(1, 42, "win")
+    approved.update(tracking_scope="official", team_approval={
+        "voter_choices": {"42": "yes", "84": "yes", "126": "no"},
+    })
+    records = individual_capper_plays([approved], [
+        {"id": 2, "discord_user_id": "42"},
+        {"id": 3, "discord_user_id": "84"},
+        {"id": 4, "discord_user_id": "126"},
+    ])
+    assert [row["user_id"] for row in records] == ["2", "3"]
+    assert all(row["units"] == approved["units"] and row["status"] == "win" for row in records)
+    assert individual_capper_plays([
+        {**approved, "team_approval": {"voter_choices": {"42": "no"}}},
+        {**approved, "tracking_scope": "test"},
+    ], [{"id": 2, "discord_user_id": "42"}]) == []
+
+
+@pytest.mark.parametrize(("status", "wins", "losses", "net"), [
+    ("win", 1, 0, 2),
+    ("loss", 0, 1, -2),
+])
+def test_team_record_counts_once_but_full_stake_for_every_yes_voter(status, wins, losses, net):
+    approved = play(1, 99, status, units=2, odds=100, settled="2026-10-05T15:00:00+00:00")
+    approved.update(tracking_scope="official", team_approval={"voter_choices": {"42": "yes", "84": "yes"}})
+    users = [
+        {"id": 2, "discord_user_id": "42", "display_name": "Ace"},
+        {"id": 3, "discord_user_id": "84", "display_name": "Bee"},
+    ]
+
+    recap = build_recap(
+        [approved], users, {},
+        datetime(2026, 10, 1, tzinfo=EASTERN), datetime(2026, 10, 8, tzinfo=EASTERN),
+    )
+
+    assert recap["count"] == 1
+    assert recap["total"]["wins"] == wins
+    assert recap["total"]["losses"] == losses
+    assert [(row["name"], row["wins"], row["losses"], row["risked"], row["net"])
+            for row in recap["cappers"]] == [
+        ("Ace", wins, losses, 2, net), ("Bee", wins, losses, 2, net),
+    ]
+
+
+def test_personal_stats_credits_a_supporting_voter_not_only_the_play_owner():
+    approved = play(1, 1, "loss", units=2, odds=100, settled="2026-10-05T15:00:00+00:00")
+    approved.update(tracking_scope="official", team_approval={"voter_choices": {"111": "yes", "222": "yes"}})
+    service = PlayFeaturesService(database=Mock())
+    service.history = Mock(return_value=(
+        [approved],
+        [{"id": 1, "discord_user_id": "111"}, {"id": 2, "discord_user_id": "222"}],
+        {1: "nfl"},
+    ))
+    service.vault_bets = Mock(return_value=[])
+    service.db.select.return_value = SimpleNamespace(data=[])
+
+    stats = service.personal_stats(222, datetime(2026, 10, 5, 12, tzinfo=EASTERN))
+
+    assert stats["capper"]["all_time"]["losses"] == 1
+    assert stats["capper"]["all_time"]["risked"] == 2
+    assert stats["capper"]["all_time"]["net"] == -2
 
 
 def test_build_recap_groups_league_aliases_into_correct_records():

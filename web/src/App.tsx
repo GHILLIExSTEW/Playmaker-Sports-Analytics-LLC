@@ -27,6 +27,7 @@ type Result = {
   net_units: number
   avatar_url?: string | null
   tracking_scope: 'official' | 'capper'
+  capper_record: boolean
 }
 type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
 type CapperSummary = { name: string; slug: string; avatar_url?: string | null; plays: number; wins: number; losses: number; net_units: number }
@@ -78,14 +79,22 @@ async function fetchCapperDirectory(): Promise<CapperDirectoryEntry[]> {
 async function fetchPublicResults(): Promise<Result[]> {
   if (!supabase) throw new Error('Public Supabase configuration is missing.')
 
-  const results: Result[] = []
-  for (let offset = 0; ; offset += resultsPageSize) {
-    const { data, error } = await supabase.rpc('public_settled_results').range(offset, offset + resultsPageSize - 1)
-    if (error) throw error
-    if (!Array.isArray(data)) throw new Error('Unexpected results response.')
-    results.push(...data as unknown as Result[])
-    if (data.length < resultsPageSize) return results
+  const fetchAll = async (rpc: 'public_settled_results' | 'public_capper_settled_results') => {
+    const results: Result[] = []
+    for (let offset = 0; ; offset += resultsPageSize) {
+      const { data, error } = await supabase.rpc(rpc).range(offset, offset + resultsPageSize - 1)
+      if (error) throw error
+      if (!Array.isArray(data)) throw new Error('Unexpected results response.')
+      results.push(...data as unknown as Result[])
+      if (data.length < resultsPageSize) return results
+    }
   }
+  const [results, teamCapperResults] = await Promise.all([
+    fetchAll('public_settled_results'),
+    fetchAll('public_capper_settled_results'),
+  ])
+  return [...results, ...teamCapperResults].sort((first, second) =>
+    Date.parse(second.settled_at) - Date.parse(first.settled_at))
 }
 
 function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]): CapperSummary[] {
@@ -95,7 +104,7 @@ function summarizeCappers(results: Result[], directory: CapperDirectoryEntry[]):
       avatar_url: entry.avatar_url ?? getCapperAvatarUrl(entry.name), plays: 0, wins: 0, losses: 0, net_units: 0 })
   }
   for (const result of results) {
-    if (result.tracking_scope !== 'capper') continue
+    if (!result.capper_record) continue
     const summary = summaries.get(result.capper)
     if (!summary) continue
     summary.plays += 1
@@ -305,7 +314,7 @@ function Website() {
 
   const publicResults = results.filter(isPublicCapperResult)
   const sports: string[] = ['All', ...Array.from(new Set(publicResults.map((result) => result.sport)))]
-  const officialResults = publicResults.filter((result) => result.tracking_scope === 'official')
+  const officialResults = publicResults.filter((result) => result.tracking_scope === 'official' && !result.capper_record)
   const visibleResults = officialResults.filter((result) => sport === 'All' || result.sport === sport)
   const cappers = summarizeCappers(publicResults, directoryState === 'ready' ? directory : [])
   const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
@@ -353,7 +362,7 @@ function Website() {
         : 'Verified sports analysis, transparent play tracking, and the Playmaker Picks community.',
     )
   }, [routePath, selectedCapperName, sportRouteSlug, policyKind])
-  const capperResults = selectedCapper ? publicResults.filter((result) => result.tracking_scope === 'capper' && result.capper === selectedCapper.name) : []
+  const capperResults = selectedCapper ? publicResults.filter((result) => result.capper_record && result.capper === selectedCapper.name) : []
   const capperAnalytics = buildCapperAnalytics(capperResults)
   const capperWins = capperResults.filter((result) => result.status === 'win').length
   const capperLosses = capperResults.filter((result) => result.status === 'loss').length

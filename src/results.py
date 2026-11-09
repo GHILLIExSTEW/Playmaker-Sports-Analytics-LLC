@@ -36,13 +36,31 @@ def filter_results(
 ) -> list[dict]:
     now = now or datetime.now(EASTERN)
     authors = {str(user["id"]): str(user.get("discord_user_id") or "") for user in users}
+    user_ids = {discord_id: user_id for user_id, discord_id in authors.items() if discord_id}
     rows = []
     for play in unique_published(plays):
         author = authors.get(str(play["user_id"]), "")
-        if operator_ids is not None and (not author.isdecimal() or int(author) not in operator_ids):
-            continue
-        if capper_id is not None and author != str(capper_id):
-            continue
+        approval = play.get("team_approval")
+        voter_choices = approval.get("voter_choices") if isinstance(approval, dict) else None
+        yes_voters = {
+            str(voter_id) for voter_id, choice in voter_choices.items()
+            if choice == "yes"
+        } if isinstance(voter_choices, dict) else set()
+        if play.get("tracking_scope", "capper") == "official":
+            if operator_ids is not None and not any(
+                voter_id.isdecimal() and int(voter_id) in operator_ids for voter_id in yes_voters
+            ):
+                continue
+            if capper_id is not None and str(capper_id) not in yes_voters:
+                continue
+        else:
+            if operator_ids is not None and (not author.isdecimal() or int(author) not in operator_ids):
+                continue
+            if capper_id is not None and author != str(capper_id):
+                continue
+        if capper_id is not None and play.get("tracking_scope", "capper") == "official":
+            capper_discord_id = str(capper_id)
+            play = {**play, "_display_user_id": user_ids.get(capper_discord_id, capper_discord_id)}
         if play.get("status") not in SETTLED_RESULTS or (result and play["status"] != result):
             continue
         slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
@@ -66,7 +84,8 @@ def build_results_embed(rows: list[dict], users: list[dict], sports: dict, label
     names = {str(user["id"]): user.get("display_name") or user.get("username") or str(user["id"]) for user in users}
     for play in rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
         play_id = int(play["id"])
-        name = discord.utils.escape_markdown(str(names.get(str(play["user_id"]), "Unknown")))[:70]
+        display_user_id = str(play.get("_display_user_id", play["user_id"]))
+        name = discord.utils.escape_markdown(str(names.get(display_user_id, display_user_id)))[:70]
         slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"
         sport = SPORT_NAMES.get(slug, "Unspecified")
         value = (

@@ -46,9 +46,12 @@ class BallotStore:
     def advance(self, message_id: int) -> None:
         supabase_service.update("capper_ballot_scan", {"last_message_id": str(message_id)}, {"singleton": True})
 
-    def remember(self, message_id: int, eligible_voter_ids: list[str]) -> None:
+    def remember(self, message_id: int, eligible_voter_ids: list[str], author_id: str) -> None:
         supabase_service._execute(lambda: supabase_service._ensure_client().table("capper_ballots").upsert(
-            {"message_id": str(message_id), "eligible_voter_ids": eligible_voter_ids, "policy_version": POLICY_VERSION},
+            {
+                "message_id": str(message_id), "eligible_voter_ids": eligible_voter_ids,
+                "policy_version": POLICY_VERSION, "author_id": author_id,
+            },
             on_conflict="message_id", ignore_duplicates=True,
         ).execute())
 
@@ -148,6 +151,7 @@ class CapperBallots(commands.Cog):
                     else:
                         await asyncio.to_thread(
                             self.store.remember, message.id, sorted(str(member_id) for member_id in member_ids),
+                            str(message.author.id),
                         )
                 if reason is not None:
                     await asyncio.to_thread(self.store.hold, message.id, reason)
@@ -224,7 +228,8 @@ class CapperBallots(commands.Cog):
                 return
             stars, units = rating
             decision = {
-                "policy_version": POLICY_VERSION, "roster_size": len(roster), "yes": counts["yes"],
+                "policy_version": POLICY_VERSION, "author_id": str(message.author.id),
+                "roster_size": len(roster), "yes": counts["yes"],
                 "counts": counts, "voter_choices": votes, "native_voter_ids": sorted(native),
                 "chat_voter_ids": sorted(set(inferred) - set(native)), "stars": stars, "units": units,
             }
@@ -262,9 +267,14 @@ class CapperBallots(commands.Cog):
         channel = await self.resolve_channel(OFFICIAL_CHANNEL_ID, "OFFICIAL_CHANNEL_ID", required=True)
         if channel.guild.id != message.guild.id or self.bot.user is None:
             raise RuntimeError("Official channel or bot identity is unavailable.")
+        author_id = str(message.author.id)
+        decision_author_id = decision.get("author_id")
+        if decision_author_id is not None and str(decision_author_id) != author_id:
+            raise ValueError("The saved team approval author does not match the ballot author.")
+        author_name = getattr(message.author, "display_name", str(message.author))
         payload = await asyncio.to_thread(
             self.official.create_play_record,
-            discord_user_id=str(self.bot.user.id), username="Official Playmaker Picks",
+            discord_user_id=author_id, username=author_name,
             units=units, legs=len(legs),
             odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
             play_text="\n".join(
