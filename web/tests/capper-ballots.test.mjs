@@ -117,6 +117,9 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
     insert into public.capper_ballots(message_id,author_id) values('508','111'),('509','111'),('510','111');
   `)
   await load('../../supabase/migrations/20261109010000_team_play_author_records.sql')
+  await assert.rejects(db.query('select team_approval from public.display_plays'), /team_approval/)
+  await load('../../supabase/migrations/20261109020000_refresh_display_plays_team_approval.sql')
+  assert.equal((await db.query('select team_approval from public.display_plays where id=8')).rows.length, 1)
   const personalTeamRecords = (await db.query('select * from public.public_capper_settled_results()')).rows
   assert.equal(personalTeamRecords.length, 4)
   assert.deepEqual(personalTeamRecords.map((row) => row.capper).sort(), ['Ace', 'Ace', 'Bee', 'Bee'])
