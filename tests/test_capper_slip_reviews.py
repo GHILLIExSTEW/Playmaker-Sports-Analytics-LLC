@@ -11,7 +11,6 @@ from PIL import Image
 import pytest
 import discord
 
-from src.config import FREE_PLAY_ROLE_ID, ROOKIE_ROLE_ID
 import src.capper_slip_reviews as module
 import src.forum_health as health
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
@@ -32,13 +31,14 @@ def saved_row():
         "review": {
             "author_id": "42", "slip_base64": "c2xpcA==", "source_text": "",
             "source_edited_at": None, "attachment_ids": ["700"],
-            "parsed": {"legs": [{"selection": "Wolves ML", "odds": 100}]},
+            "parsed": {"units": 1.0, "legs": [{"selection": "Wolves ML", "odds": 100}]},
         },
     }
 
 
 def make_cog(monkeypatch):
     monkeypatch.setattr(module, "GUILD_ID", 123)
+    monkeypatch.setattr(module, "CONFIRMATION_CHANNEL_ID", 200)
     monkeypatch.setattr(health, "GUILD_ID", 123)
     channel = SimpleNamespace(
         id=module.CAPPER_BALLOT_CHANNEL_ID, guild=SimpleNamespace(id=123),
@@ -49,13 +49,31 @@ def make_cog(monkeypatch):
     channel.fetch_message.return_value = prompt
     store = Mock(get=Mock(return_value=saved_row()), finalize=Mock(return_value=None),
                  pending=Mock(return_value=[]), interrupted=Mock(return_value=[]),
-                 find=Mock(return_value=None), known_ids=Mock(return_value=set()), invalid_ids=Mock(return_value=[]))
+                 find=Mock(return_value=None), known_ids=Mock(return_value=set()), invalid_ids=Mock(return_value=[]),
+                 claim_personal_free_play=Mock(return_value=False),
+                 claim_personal_free_play_units_request=Mock(return_value=False),
+                 complete_personal_free_play_units_request=Mock(return_value=False),
+                 claim_personal_free_play_units=Mock(return_value=False),
+                 complete_personal_free_play=Mock(return_value=False))
+    author = SimpleNamespace(
+        id=42, display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png"),
+    )
+    guild = SimpleNamespace(id=123, get_member=Mock(return_value=author), fetch_member=AsyncMock(return_value=author))
+    official = Mock()
+    official.create_play_record.return_value = {
+        "play_id": 7, "tracking_scope": "capper", "units": 1.0, "legs": 1, "odds": 100,
+        "to_win": 1.0, "stars": None, "summary": "1u • 1-leg • +100",
+        "play_text": "Leg 1: Wolves ML (+100)", "leg_records": [{"selection": "Wolves ML", "odds": 100}],
+    }
+    published = SimpleNamespace(id=1000, jump_url="https://discord.com/channels/123/200/1000")
     cog = CapperSlipReviews(
-        Mock(user=SimpleNamespace(id=1), is_ready=Mock(return_value=True)), store=store,
-        official=Mock(), resolve_channel=AsyncMock(return_value=channel), is_tracked_operator=Mock(return_value=True),
+        Mock(user=SimpleNamespace(id=1), is_ready=Mock(return_value=True),
+             get_guild=Mock(return_value=guild)), store=store,
+        official=official, resolve_channel=AsyncMock(return_value=channel), is_tracked_operator=Mock(return_value=True),
         staff_alert=AsyncMock(), get_testing=Mock(return_value=False),
         tracked_operators=AsyncMock(return_value={42, 43, 44, 45, 46}), images=Mock(),
         request_insight=AsyncMock(return_value=True),
+        publish_free_play=AsyncMock(return_value=published),
     )
     cog.needs_reconciliation = False
     cog.submission_notice_ready = True
@@ -263,6 +281,8 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
             error="Event already started; no late official publication is permitted.",
         )
     cog.store.get.return_value = terminal_row
+    cog.store.claim_personal_free_play.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
     events = []
 
     async def save_record(*_):
@@ -276,16 +296,6 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
         store=SimpleNamespace(source_deleted=lambda _: events.append("mark-deleted")),
     )
     thread.delete.side_effect = delete_thread
-    free_channel = SimpleNamespace(
-        guild=thread.guild, send=AsyncMock(return_value=SimpleNamespace(id=1000)),
-    )
-    free_channels = []
-
-    async def resolve_channel(channel_id, *_args, **_kwargs):
-        free_channels.append(free_channel)
-        return free_channel if channel_id == module.FREE_PLAYS_CHANNEL_ID else thread
-
-    cog.publisher.resolve_channel = AsyncMock(side_effect=resolve_channel)
     cog.store.finalize.return_value = {
         "outcome": outcome, "counts": {"yes": 1, "no": 1, "pass": 0}, "roster_size": 5,
     }
@@ -293,14 +303,10 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
     cog.publisher.publish_approved.assert_not_awaited()
     cog.request_insight.assert_not_awaited()
     assert prompt.edit.call_args.kwargs["view"] is None
-    free_channel = free_channels[0]
-    assert free_channel.send.await_count == 1
-    assert free_channel.send.call_args.kwargs["content"] == (
-        f"<@&{ROOKIE_ROLE_ID}> <@&{FREE_PLAY_ROLE_ID}>"
-    )
-    assert free_channel.send.call_args.kwargs["allowed_mentions"].roles == [
-        discord.Object(id=ROOKIE_ROLE_ID), discord.Object(id=FREE_PLAY_ROLE_ID),
-    ]
+    cog.publish_free_play.assert_awaited_once()
+    assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
+    assert cog.publisher.official.create_play_record.call_args.kwargs["ballot_message_id"] == "500"
+    cog.store.complete_personal_free_play.assert_called_once_with(500, module.FREE_PLAYS_CHANNEL_ID, 1000, 7)
     if outcome == "expired":
         assert prompt.edit.call_args.kwargs["embed"].title == "Review closed - personal Free Play only"
         cog.store.fail.assert_not_called()
@@ -310,6 +316,190 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
     else:
         cog.records.save.assert_awaited_once_with(thread, cog.store.get.return_value)
         assert events == ["archive", "delete", "mark-deleted"]
+
+
+def test_technical_failure_posts_personal_free_play_once(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        row = saved_row()
+        row.update(state="failed", error="saved capper review thread is unavailable")
+        cog.store.get.return_value = row
+        cog.store.fail.side_effect = lambda *_: None
+        cog.store.claim_personal_free_play.return_value = True
+        cog.store.complete_personal_free_play.return_value = True
+
+        await cog.fail(500, "saved capper review thread is unavailable")
+
+        cog.store.claim_personal_free_play.assert_called_once_with(
+            500, module.FREE_PLAYS_CHANNEL_ID, "saved capper review thread is unavailable",
+        )
+        cog.publisher.publish_approved.assert_not_awaited()
+        assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
+        cog.publish_free_play.assert_awaited_once_with(
+            cog.bot.get_guild.return_value, cog.bot.get_guild.return_value.get_member.return_value,
+            cog.publisher.official.create_play_record.return_value, b"slip",
+        )
+        cog.store.complete_personal_free_play.assert_called_once_with(
+            500, module.FREE_PLAYS_CHANNEL_ID, 1000, 7,
+        )
+        assert "regular capper Free Play" in cog.publisher.staff_alert.call_args.args[1]
+    asyncio.run(check())
+
+
+def test_claimed_free_play_fallback_is_not_sent_again(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        row = saved_row()
+        row.update(state="failed", error="saved capper review thread is unavailable")
+        row["review"]["personal_free_play"] = {"state": "sending"}
+        cog.store.get.return_value = row
+        cog.store.claim_personal_free_play.return_value = False
+
+        await cog.fail(500, "saved capper review thread is unavailable")
+
+        cog.store.claim_personal_free_play.assert_not_called()
+        cog.publish_free_play.assert_not_awaited()
+        cog.store.complete_personal_free_play.assert_not_called()
+        assert "sending" in cog.publisher.staff_alert.call_args.args[1]
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    ("units", "error"),
+    [(None, "did not supply a unit stake"), (0, "greater than zero"), (4, "cannot exceed 3 units")],
+)
+def test_technical_failure_without_valid_capper_units_alerts_without_posting(monkeypatch, units, error):
+    async def check():
+        cog, channel, _ = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        row = saved_row()
+        row.update(state="failed", error="saved capper review thread is unavailable")
+        row["review"]["parsed"]["units"] = units
+        cog.store.get.return_value = row
+        cog.store.fail.side_effect = lambda *_: None
+        cog.store.claim_personal_free_play_units_request.return_value = True
+        cog.store.complete_personal_free_play_units_request.return_value = True
+
+        await cog.fail(500, "saved capper review thread is unavailable")
+
+        cog.store.claim_personal_free_play.assert_not_called()
+        cog.store.claim_personal_free_play_units_request.assert_called_once()
+        cog.publisher.official.create_play_record.assert_not_called()
+        cog.publish_free_play.assert_not_awaited()
+        assert error in cog.publisher.staff_alert.call_args.args[1]
+        assert channel.send.call_args.kwargs["view"].children[0].custom_id == "pm:freeplay_units:500"
+    asyncio.run(check())
+
+
+def test_units_request_button_is_authorized_and_opens_modal(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        row = saved_row()
+        row.update(state="failed", error="saved review unavailable")
+        row["review"]["parsed"]["units"] = None
+        row["review"]["personal_free_play"] = {
+            "state": "awaiting_units", "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        cog.store.get.return_value = row
+        interaction = SimpleNamespace(
+            data={"custom_id": "pm:freeplay_units:500"},
+            guild_id=123, channel_id=200, message=SimpleNamespace(id=900),
+            user=SimpleNamespace(id=42, bot=False),
+            response=SimpleNamespace(send_modal=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False)),
+        )
+
+        await cog.on_interaction(interaction)
+
+        interaction.response.send_modal.assert_awaited_once()
+        assert interaction.response.send_modal.call_args.args[0].ballot_id == 500
+        assert interaction.response.send_modal.call_args.args[0].prompt_id == 900
+        interaction.response.send_message.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_units_request_button_rejects_another_author(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        row = saved_row()
+        row.update(state="rejected", decision={"outcome": "rejected"})
+        row["review"]["personal_free_play"] = {
+            "state": "awaiting_units", "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        cog.store.get.return_value = row
+        interaction = SimpleNamespace(
+            data={"custom_id": "pm:freeplay_units:500"},
+            guild_id=123, channel_id=200, message=SimpleNamespace(id=900),
+            user=SimpleNamespace(id=43, bot=False),
+            response=SimpleNamespace(send_modal=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False)),
+        )
+
+        await cog.on_interaction(interaction)
+
+        interaction.response.send_modal.assert_not_awaited()
+        interaction.response.send_message.assert_awaited_once()
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"]
+    asyncio.run(check())
+
+
+def test_saved_unit_prompt_gets_button_restored(monkeypatch):
+    async def check():
+        cog, channel, prompt = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        prompt.author = cog.bot.user
+        prompt.components = []
+        cog.store.awaiting_personal_free_play_units.return_value = [{
+            "message_id": "500", "ballot_state": "failed",
+            "prompt_channel_id": "200", "prompt_message_id": "900",
+        }]
+
+        await cog.restore_free_play_units_buttons()
+
+        prompt.edit.assert_awaited_once()
+        assert prompt.edit.call_args.kwargs["view"].children[0].custom_id == "pm:freeplay_units:500"
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("units", ["0", "4", "nan"])
+def test_invalid_modal_units_do_not_claim_publication(monkeypatch, units):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        interaction = SimpleNamespace(guild_id=123, channel_id=200, user=SimpleNamespace(id=42))
+
+        with pytest.raises(ValueError):
+            await cog.submit_free_play_units(interaction, 500, 900, units)
+
+        cog.store.claim_personal_free_play_units.assert_not_called()
+        cog.publisher.official.create_play_record.assert_not_called()
+    asyncio.run(check())
+
+
+def test_author_supplied_units_publish_regular_tracked_free_play(monkeypatch):
+    async def check():
+        cog, channel, prompt = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        row = saved_row()
+        row.update(state="failed", error="saved review unavailable")
+        row["review"]["parsed"]["units"] = 1.5
+        row["review"]["personal_free_play"] = {
+            "state": "sending", "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        cog.store.get.return_value = row
+        cog.store.claim_personal_free_play_units.return_value = True
+        cog.store.complete_personal_free_play.return_value = True
+        interaction = SimpleNamespace(guild_id=123, channel_id=200, user=SimpleNamespace(id=42))
+
+        message, play_id = await cog.submit_free_play_units(interaction, 500, 900, "1.5")
+
+        assert message.id == 1000 and play_id == 7
+        cog.store.claim_personal_free_play_units.assert_called_once_with(
+            500, module.FREE_PLAYS_CHANNEL_ID, 42, 200, 900, 1.5,
+        )
+        assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1.5
+        assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
+        cog.store.complete_personal_free_play.assert_called_once_with(500, module.FREE_PLAYS_CHANNEL_ID, 1000, 7)
+        prompt.edit.assert_awaited_once()
+        assert "selected 1.5u" in prompt.edit.call_args.kwargs["content"]
+    asyncio.run(check())
 
 
 def test_changed_source_fails_closed(monkeypatch):
@@ -969,7 +1159,7 @@ def test_restart_recovery_resolves_and_reopens_saved_thread(monkeypatch):
     cog.publisher.resolve_channel.return_value = thread
     cog.reconcile_reactions = AsyncMock()
     asyncio.run(cog.process_row(forum_channel(), row, reconcile=True))
-    cog.publisher.resolve_channel.assert_awaited_with(500, "CAPPER_BALLOT_CHANNEL_ID", required=True)
+    cog.publisher.resolve_channel.assert_awaited_with(500, "saved capper review thread", required=True)
     thread.edit.assert_awaited_once()
     cog.reconcile_reactions.assert_awaited_once_with(thread, row)
 

@@ -154,6 +154,7 @@ def test_publishing_preserves_author_image_and_explicit_target():
 def test_publishing_capper_play_in_standard_channel_mentions_rookie_only(monkeypatch, mock_play_cards):
     monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
     monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
+    monkeypatch.setattr(module, "FREE_PLAY_ROLE_ID", 123)
     presentation = cog()
     request = SimpleNamespace(guild=SimpleNamespace(id=123), user=SimpleNamespace(display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png")))
     data = {**payload(), "tracking_scope": "capper"}
@@ -190,6 +191,34 @@ def test_publishing_capper_play_in_free_channel_mentions_rookie_and_free_plays(m
     sent = presentation.capper_webhook.return_value.send.call_args.kwargs
     assert sent["content"] == "<@&456> <@&654>"
     assert sent["allowed_mentions"].to_dict() == {"roles": [456, 654], "parse": []}
+
+
+def test_publishing_unqualified_ballot_uses_regular_capper_card(monkeypatch, mock_play_cards):
+    monkeypatch.setattr(module, "HIGHROLLER_ROLE_ID", 789)
+    monkeypatch.setattr(module, "ROOKIE_ROLE_ID", 456)
+    monkeypatch.setattr(module, "FREE_PLAY_ROLE_ID", 654)
+    monkeypatch.setattr(module, "FREE_PLAYS_CHANNEL_ID", 303)
+    presentation = cog()
+    presentation.resolve_channel.return_value = SimpleNamespace(id=303, guild=SimpleNamespace(id=123))
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(
+        display_name="Ace", display_avatar=SimpleNamespace(url="https://example.com/avatar.png"),
+    )
+    slip = b"saved sportsbook slip"
+
+    asyncio.run(presentation.publish_capper_free_play(
+        guild, author, {**payload(), "tracking_scope": "capper", "play_text": "Wolves ML (+100)"}, slip=slip,
+    ))
+
+    presentation.resolve_channel.assert_awaited_once_with(303, "FREE_PLAYS_CHANNEL_ID", required=True)
+    sent = presentation.capper_webhook.return_value.send.call_args.kwargs
+    assert sent["content"] == "<@&456> <@&654>"
+    assert sent["username"] == "Ace"
+    assert sent["embed"].title == "Play #7 • Open"
+    assert sent["embed"].fields == []
+    assert sent["embed"].description is None
+    assert sent["embed"].image.url.startswith("attachment://playmaker-card-")
+    assert mock_play_cards.call_args.kwargs["slip"] == slip
 
 
 @pytest.mark.parametrize("scope", ["capper", "official"])

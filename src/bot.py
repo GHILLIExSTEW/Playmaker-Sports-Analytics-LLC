@@ -137,7 +137,7 @@ class OfficialBot(commands.Bot):
             self, official=official_play_service, resolve_channel=resolve_channel,
             is_tracked_operator=is_tracked_operator, staff_alert=send_staff_alert,
             get_testing=get_testing_enabled, tracked_operators=tracked_operator_ids,
-            request_insight=send_insight_request,
+            request_insight=send_insight_request, publish_free_play=publish_capper_free_play,
         ))
         await self.add_cog(Reporting(
             self,
@@ -269,6 +269,12 @@ async def publish_play_message(
     target: tuple[str, int | None] | None = None,
 ) -> discord.Message:
     return await get_play_presentation().publish_play_message(interaction, payload, target)
+
+
+async def publish_capper_free_play(
+    guild: discord.Guild, author: discord.abc.User, payload: dict, slip: bytes,
+) -> discord.Message:
+    return await get_play_presentation().publish_capper_free_play(guild, author, payload, slip=slip)
 
 
 def is_tracked_operator(member) -> bool:

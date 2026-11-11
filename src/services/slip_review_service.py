@@ -266,6 +266,49 @@ class SlipReviewStore(BallotStore):
     def fail(self, message_id: int, reason: str) -> None:
         self.rpc("fail_capper_slip", p_message_id=str(message_id), p_reason=reason)
 
+    def claim_personal_free_play(self, message_id: int, channel_id: int, reason: str) -> bool:
+        return self.rpc(
+            "claim_capper_slip_free_play", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_reason=reason,
+        ) is True
+
+    def claim_personal_free_play_units_request(self, message_id: int, channel_id: int, reason: str) -> bool:
+        return self.rpc(
+            "claim_capper_slip_units_request", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_reason=reason,
+        ) is True
+
+    def complete_personal_free_play_units_request(
+        self, message_id: int, channel_id: int, prompt_channel_id: int, prompt_message_id: int,
+    ) -> bool:
+        return self.rpc(
+            "complete_capper_slip_units_request", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_prompt_channel_id=str(prompt_channel_id),
+            p_prompt_message_id=str(prompt_message_id),
+        ) is True
+
+    def claim_personal_free_play_units(
+        self, message_id: int, channel_id: int, author_id: int,
+        prompt_channel_id: int, prompt_message_id: int, units: float,
+    ) -> bool:
+        return self.rpc(
+            "claim_capper_slip_free_play_units", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_author_id=str(author_id),
+            p_prompt_channel_id=str(prompt_channel_id), p_prompt_message_id=str(prompt_message_id),
+            p_units=units,
+        ) is True
+
+    def awaiting_personal_free_play_units(self) -> list[dict]:
+        return self.rpc("capper_slip_unit_prompts") or []
+
+    def complete_personal_free_play(
+        self, message_id: int, channel_id: int, discord_message_id: int, play_id: int,
+    ) -> bool:
+        return self.rpc(
+            "complete_capper_slip_free_play", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_discord_message_id=str(discord_message_id), p_play_id=str(play_id),
+        ) is True
+
     def claim_reminder(self, message_id: int) -> bool:
         return bool(supabase_service.update(
             "capper_ballots", {"reminder_sent": True},

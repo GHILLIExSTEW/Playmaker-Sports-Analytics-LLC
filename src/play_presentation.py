@@ -147,30 +147,22 @@ class PlayPresentation(commands.Cog):
         channel = await self.resolve_channel(channel_id, setting_name, required=True)
         if channel is None:
             raise RuntimeError(f"{setting_name} is unavailable.")
-        embed = build_play_embed(payload)
         author = self.bot.user if payload.get("tracking_scope") == "official" else interaction.user
         if author is None:
             raise RuntimeError("Bot identity is unavailable.")
+        if payload.get("tracking_scope") == "capper":
+            slip = await asyncio.to_thread(download_artwork, payload["image_url"]) if payload.get("image_url") else None
+            return await self.publish_capper_card(channel, interaction.guild, author, payload, slip=slip)
+
+        embed = build_play_embed(payload)
         embed.set_author(
             name=author.display_name,
             icon_url=author.display_avatar.url,
         )
-        if payload.get("tracking_scope") == "capper":
-            role_mention = f"<@&{HIGHROLLER_ROLE_ID}>"
-            description = (embed.description or "").replace(role_mention, "").strip()
-            embed.description = description or (
-                f"{float(payload['units']):g}u • {int(payload['legs'])}-leg • {int(payload['odds']):+d}"
-            )
-            for index, field in enumerate(embed.fields):
-                value = field.value.replace(role_mention, "").strip()
-                if value != field.value:
-                    embed.set_field_at(index, name=field.name, value=value, inline=field.inline)
         if payload.get("image_url"):
             embed.set_image(url=payload["image_url"])
-        if payload.get("tracking_scope") in {"official", "capper"}:
+        if payload.get("tracking_scope") == "official":
             card_play = {**payload, "id": payload["play_id"], "status": "open"}
-            if payload["tracking_scope"] == "capper" and card_play.get("play_text"):
-                card_play["play_text"] = card_play["play_text"].replace(f"<@&{HIGHROLLER_ROLE_ID}>", "").strip()
             file = await play_card_service.file(
                 card_play, interaction.guild,
                 slip=await asyncio.to_thread(download_artwork, payload["image_url"]) if payload.get("image_url") else None,
@@ -180,17 +172,54 @@ class PlayPresentation(commands.Cog):
                 embed.clear_fields()
                 embed.description = None
                 embed.set_image(url=f"attachment://{file.filename}")
-                if payload["tracking_scope"] == "capper":
-                    embed.remove_author()
-                    hook = await self.capper_webhook(channel)
-                    return await hook.send(
-                        username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
-                        **capper_play_mentions(free_play=channel.id == FREE_PLAYS_CHANNEL_ID), embed=embed, file=file,
-                    )
                 return await channel.send(embed=embed, file=file)
             finally:
                 file.close()
         return await channel.send(embed=embed)
+
+    async def publish_capper_free_play(
+        self, guild: discord.Guild, author: discord.abc.User, payload: dict, *, slip: bytes,
+    ) -> discord.Message:
+        channel = await self.resolve_channel(FREE_PLAYS_CHANNEL_ID, "FREE_PLAYS_CHANNEL_ID", required=True)
+        if channel is None or channel.guild.id != guild.id:
+            raise RuntimeError("The configured Free Plays channel is unavailable in the slip's guild.")
+        return await self.publish_capper_card(channel, guild, author, payload, slip=slip)
+
+    async def publish_capper_card(
+        self, channel, guild: discord.Guild, author: discord.abc.User, payload: dict,
+        *, slip: bytes | None = None,
+    ) -> discord.Message:
+        embed = build_play_embed(payload)
+        embed.set_author(name=author.display_name, icon_url=author.display_avatar.url)
+        role_mention = f"<@&{HIGHROLLER_ROLE_ID}>"
+        description = (embed.description or "").replace(role_mention, "").strip()
+        embed.description = description or (
+            f"{float(payload['units']):g}u • {int(payload['legs'])}-leg • {int(payload['odds']):+d}"
+        )
+        for index, field in enumerate(embed.fields):
+            value = field.value.replace(role_mention, "").strip()
+            if value != field.value:
+                embed.set_field_at(index, name=field.name, value=value, inline=field.inline)
+        card_play = {**payload, "id": payload["play_id"], "status": "open"}
+        if card_play.get("play_text"):
+            card_play["play_text"] = card_play["play_text"].replace(role_mention, "").strip()
+        if slip is None and payload.get("image_url"):
+            slip = await asyncio.to_thread(download_artwork, payload["image_url"])
+        file = await play_card_service.file(
+            card_play, guild, slip=slip, legs=payload.get("leg_records"),
+        )
+        try:
+            embed.clear_fields()
+            embed.description = None
+            embed.set_image(url=f"attachment://{file.filename}")
+            embed.remove_author()
+            hook = await self.capper_webhook(channel)
+            return await hook.send(
+                username=author.display_name, avatar_url=author.display_avatar.url, wait=True,
+                **capper_play_mentions(free_play=channel.id == FREE_PLAYS_CHANNEL_ID), embed=embed, file=file,
+            )
+        finally:
+            file.close()
 
     async def update_play_message(self, message: discord.Message | None, play_id: int, result: str) -> None:
         if message is None:

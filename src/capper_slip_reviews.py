@@ -15,13 +15,13 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
-from src.config import CAPPER_BALLOT_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
+from src.config import CAPPER_BALLOT_CHANNEL_ID, CONFIRMATION_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.interaction_views import PreparedModalView
 from src.forum_health import CheckedForum
-from src.play_presentation import capper_play_mentions
 from src.services.ballot_vote_service import approval_text, slip_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
+from src.services.play_service import PlayService
 from src.services.photo_service import accepted_photo, sanitize_photo
 from src.services.supabase_service import supabase_service
 from src.capper_review_records import ReviewRecords
@@ -49,8 +49,8 @@ SUBMISSION_NOTICE = (
     "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
     "not training on Discord content. Check and correct the extracted details before confirming. "
     "Confirmation, voting and discussion stay in your post.\n\n"
-    "If the cappers do not approve your slip as an official pick, the bot automatically shares its sanitized image "
-    "and selections in Free Plays, pinging the ROOKIE and Free Plays roles; rejected slips are not added to personal tracking. "
+    "If not approved, your slip becomes a regular tracked Free Play, not an official pick. Missing units? "
+    "Choose a stake above 0 and up to 3u using the team-channel button; the card posts automatically. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
     "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
@@ -166,6 +166,47 @@ class SlipConfirmation(discord.ui.Modal, title="Confirm slip and set voting cuto
             await interaction.followup.send(f"Review not opened: {str(exc)[:1000]}", ephemeral=True)
 
 
+class FreePlayUnitsModal(discord.ui.Modal, title="Choose Free Play units"):
+    def __init__(self, cog: CapperSlipReviews, ballot_id: int, prompt_id: int) -> None:
+        super().__init__(timeout=300)
+        self.cog, self.ballot_id, self.prompt_id = cog, ballot_id, prompt_id
+        self.units = discord.ui.TextInput(
+            label="Unit stake (greater than 0, maximum 3u)",
+            placeholder="For example: 1 or 1.5",
+            min_length=1,
+            max_length=6,
+        )
+        self.add_item(self.units)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            message, play_id = await self.cog.submit_free_play_units(
+                interaction, self.ballot_id, self.prompt_id, str(self.units),
+            )
+        except ValueError as exc:
+            await interaction.followup.send(
+                f"{str(exc)[:500]} Click the button again to enter a valid stake.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            logger.exception("free_play_units_submission_failed ballot=%s", self.ballot_id)
+            await self.cog.publisher.staff_alert(
+                f"free_play_units:{self.ballot_id}",
+                f"Free Play units for slip {self.ballot_id} need reconciliation. "
+                f"Inspect the ballot and Free Plays before retrying. Error: {str(exc)[:800]}",
+            )
+            await interaction.followup.send(
+                "The Free Play could not be posted automatically. Staff have been alerted; please don't submit again.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"Posted as regular Free Play #{play_id}: {message.jump_url}",
+                ephemeral=True,
+            )
+
+
 class CapperSlipReviews(commands.Cog):
     def __init__(
         self, bot: commands.Bot, *, official: OfficialPlayService,
@@ -175,10 +216,12 @@ class CapperSlipReviews(commands.Cog):
         get_testing: Callable[[], bool],
         tracked_operators: Callable[[], Awaitable[set[int] | None]],
         request_insight: Callable[[int], Awaitable[bool]],
+        publish_free_play: Callable[[discord.Guild, discord.abc.User, dict, bytes], Awaitable[discord.Message]],
         images: ImagePlayService | None = None, store: SlipReviewStore | None = None,
     ) -> None:
         self.bot = bot
         self.request_insight = request_insight
+        self.publish_free_play = publish_free_play
         self.store = store if store is not None else SlipReviewStore()
         self.publisher = CapperBallots(
             bot, store=self.store, official=official, resolve_channel=resolve_channel,
@@ -213,6 +256,90 @@ class CapperSlipReviews(commands.Cog):
         self.refresh_records.cancel()
         self.intake_worker.cancel()
 
+    async def free_play_units_button(self, interaction: discord.Interaction, message_id: int) -> None:
+        try:
+            row = await asyncio.to_thread(self.store.get, message_id)
+            review = row.get("review") or {}
+            delivery = review.get("personal_free_play") or {}
+            if (
+                interaction.guild_id != GUILD_ID
+                or interaction.channel_id != CONFIRMATION_CHANNEL_ID
+                or interaction.user.bot
+                or self.publisher.get_testing()
+                or interaction.message is None
+                or str(interaction.message.id) != delivery.get("prompt_message_id")
+                or str(interaction.channel_id) != delivery.get("prompt_channel_id")
+                or str(interaction.user.id) != str(review.get("author_id"))
+                or delivery.get("state") != "awaiting_units"
+                or row.get("state") not in {"failed", "rejected"}
+            ):
+                await interaction.response.send_message(
+                    "This Free Play unit request is closed or does not belong to you.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_modal(
+                FreePlayUnitsModal(self, message_id, int(interaction.message.id)),
+            )
+        except Exception as exc:
+            logger.exception("free_play_units_button_failed ballot=%s", message_id)
+            await self.publisher.staff_alert(
+                f"free_play_units:{message_id}",
+                f"Free Play unit request for slip {message_id} needs reconciliation: {str(exc)[:800]}",
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "The unit request could not be opened. Staff have been alerted.",
+                    ephemeral=True,
+                )
+
+    @staticmethod
+    def free_play_units_view(message_id: int) -> discord.ui.View:
+        view = discord.ui.View(timeout=None)
+        view.add_item(discord.ui.Button(
+            label="Choose Free Play units",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"pm:freeplay_units:{message_id}",
+        ))
+        return view
+
+    async def restore_free_play_units_buttons(self) -> None:
+        rows = await asyncio.to_thread(self.store.awaiting_personal_free_play_units)
+        for row in rows:
+            message_id = int(row["message_id"])
+            try:
+                if (
+                    CONFIRMATION_CHANNEL_ID is None
+                    or str(row["prompt_channel_id"]) != str(CONFIRMATION_CHANNEL_ID)
+                ):
+                    raise RuntimeError("Saved unit prompt is not in the configured team discussion channel.")
+                channel = await self.publisher.resolve_channel(
+                    CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID", required=True,
+                )
+                if channel.guild.id != GUILD_ID:
+                    raise RuntimeError("Saved unit prompt belongs to a different guild.")
+                prompt = await channel.fetch_message(int(row["prompt_message_id"]))
+                if prompt.author.id != self.bot.user.id:
+                    raise RuntimeError("Saved unit prompt is not bot-owned.")
+                custom_id = f"pm:freeplay_units:{message_id}"
+                existing_ids = {
+                    item.custom_id
+                    for action_row in prompt.components
+                    for item in action_row.children
+                    if item.custom_id
+                }
+                if custom_id in existing_ids:
+                    continue
+                if existing_ids:
+                    raise RuntimeError("Saved unit prompt has unexpected controls; it was not overwritten.")
+                await prompt.edit(view=self.free_play_units_view(message_id))
+            except Exception as exc:
+                logger.exception("free_play_units_button_restore_failed ballot=%s", message_id)
+                await self.publisher.staff_alert(
+                    f"free_play_units_button_restore:{message_id}",
+                    f"Saved unit request for slip {message_id} needs reconciliation: {str(exc)[:800]}",
+                )
+
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         self.needs_reconciliation = True
@@ -226,6 +353,14 @@ class CapperSlipReviews(commands.Cog):
             self.submission_notice_ready = False
             logger.exception("capper_submission_notice_failed")
             await self.publisher.staff_alert("capper_submission_notice", f"Submission notice needs attention: {str(exc)[:1500]}")
+        try:
+            await self.restore_free_play_units_buttons()
+        except Exception as exc:
+            logger.exception("free_play_units_button_restore_failed")
+            await self.publisher.staff_alert(
+                "free_play_units_button_restore",
+                f"Saved Free Play unit prompts could not be refreshed: {str(exc)[:1000]}",
+            )
         if not self.process_reviews.is_running():
             self.process_reviews.start()
         if not self.scan_slips.is_running():
@@ -387,7 +522,7 @@ class CapperSlipReviews(commands.Cog):
     async def channel(self, row: dict | None = None):
         channel_id = self.source_channel_id(row) if row is not None else CAPPER_BALLOT_CHANNEL_ID
         channel = await self.checked_forum.resolve() if channel_id == CAPPER_BALLOT_CHANNEL_ID else await self.publisher.resolve_channel(
-            channel_id, "CAPPER_BALLOT_CHANNEL_ID", required=True,
+            channel_id, "saved capper review thread", required=True,
         )
         if channel.guild.id != GUILD_ID:
             raise RuntimeError("Slip reviews must use the configured guild.")
@@ -483,12 +618,76 @@ class CapperSlipReviews(commands.Cog):
         logger.error("slip_review_failed message=%s reason=%s", message_id, reason)
         try:
             await asyncio.to_thread(self.store.fail, message_id, reason[:1500])
-        finally:
+            row = await asyncio.to_thread(self.store.get, message_id)
+        except Exception as exc:
+            logger.exception("slip_review_failure_fallback_claim_failed message=%s", message_id)
             await self.publisher.staff_alert(
                 f"slip:{message_id}",
                 f"Slip review {message_id} needs reconciliation: {reason[:1500]}. "
-                "Check the saved play and official channel before retrying; no automatic duplicate will be sent.",
+                f"Could not confirm the failure or Free Play state. Inspect the saved play and both "
+                f"Discord channels before retrying. Error: {str(exc)[:800]}",
             )
+            raise
+
+        if row["state"] != "failed":
+            await self.publisher.staff_alert(
+                f"slip:{message_id}",
+                f"Slip review {message_id} failed: {reason[:800]}. Its saved state is {row['state']}; "
+                "no Free Play was sent. Reconcile before retrying.",
+            )
+            return
+        if FREE_PLAYS_CHANNEL_ID is None:
+            await self.publisher.staff_alert(
+                f"slip:{message_id}",
+                f"Slip review {message_id} failed: {reason[:800]}. FREE_PLAYS_CHANNEL_ID is not configured; "
+                "no Free Play was sent.",
+            )
+            return
+        unit_error = self.capper_units_error(row)
+        if unit_error:
+            try:
+                await self.request_personal_free_play_units(row, reason)
+            except Exception as exc:
+                logger.exception("free_play_units_request_failed message=%s", message_id)
+                await self.publisher.staff_alert(
+                    f"slip:{message_id}",
+                    f"Slip review {message_id} failed: {reason[:800]}. {unit_error} "
+                    f"Could not ask the capper for units; no Free Play was sent. Error: {str(exc)[:500]}",
+                )
+                return
+            await self.publisher.staff_alert(
+                f"slip:{message_id}",
+                f"Slip review {message_id} failed: {reason[:800]}. {unit_error} "
+                "The author was asked to choose units in the team channel; the regular Free Play will post after submission.",
+            )
+            return
+        delivery = (row.get("review") or {}).get("personal_free_play")
+        if delivery:
+            await self.publisher.staff_alert(
+                f"slip:{message_id}",
+                f"Slip review {message_id} needs reconciliation: {reason[:800]}. A regular Free Play is "
+                f"already marked {delivery.get('state', 'in flight')}; inspect Free Plays before retrying.",
+            )
+            return
+
+        try:
+            message, play_id = await self.send_personal_free_play(row, reason)
+        except Exception as exc:
+            logger.exception("slip_review_free_play_fallback_failed message=%s", message_id)
+            delivery = (row.get("review") or {}).get("personal_free_play")
+            state = delivery.get("state") if delivery else "unclaimed"
+            await self.publisher.staff_alert(
+                f"slip:{message_id}",
+                f"Slip review {message_id} failed: {reason[:800]}. Standard Free Play delivery is {state}; "
+                f"inspect Free Plays and play #{delivery.get('play_id', 'unknown') if delivery else 'unknown'} "
+                f"before retrying. Error: {str(exc)[:500]}",
+            )
+            raise
+        await self.publisher.staff_alert(
+            f"slip:{message_id}",
+            f"Slip review {message_id} failed: {reason[:800]}. Posted as regular capper Free Play "
+            f"#{play_id}, not an official pick: {message.jump_url}",
+        )
 
     async def valid_source(self, channel, row: dict) -> bool:
         try:
@@ -793,12 +992,12 @@ class CapperSlipReviews(commands.Cog):
             ):
                 raise RuntimeError("The expired capper review could not be verified before Free Play publication.")
             try:
-                await self.publish_personal_free_play(channel.guild, expired_row)
+                await self.post_or_request_personal_free_play(expired_row, "review expired after event start")
             except Exception as exc:
                 logger.exception("expired_free_play_publish_failed message=%s", message_id)
                 await self.publisher.staff_alert(
                     f"expired_free_play:{message_id}",
-                    f"Expired slip {message_id} was not copied to Free Plays; its review thread was left intact. "
+                    f"Expired slip {message_id} was not posted as a regular Free Play; its review thread was left intact. "
                     f"Check bot logs. Error: {str(exc)[:1000]}",
                 )
         elif decision["outcome"] == "rejected":
@@ -817,21 +1016,20 @@ class CapperSlipReviews(commands.Cog):
             if rejected_row["state"] != "rejected":
                 raise RuntimeError("The rejected capper review could not be verified before thread deletion.")
             try:
-                await self.publish_personal_free_play(channel.guild, rejected_row)
+                posted = await self.post_or_request_personal_free_play(
+                    rejected_row, "review did not qualify for an official pick",
+                )
             except Exception as exc:
                 logger.exception("rejected_free_play_publish_failed message=%s", message_id)
                 await self.publisher.staff_alert(
                     f"rejected_free_play:{message_id}",
-                    f"Rejected slip {message_id} was not copied to Free Plays; its review thread was left intact. "
+                    f"Rejected slip {message_id} was not posted as a regular Free Play; its review thread was left intact. "
                     f"Check bot logs. Error: {str(exc)[:1000]}",
                 )
                 return
-            await self.records.save(channel, rejected_row)
-            try:
-                await channel.delete(reason="Archived rejected capper review; no official play was published")
-            except discord.NotFound:
-                logger.info("rejected_capper_review_thread_already_deleted thread=%s", channel.id)
-            await asyncio.to_thread(self.records.store.source_deleted, str(message_id))
+            if posted is None:
+                return
+            await self.archive_rejected_personal_free_play(rejected_row, channel)
         else:
             embed.title = "Review locked - publishing"
             await self.edit_prompt(channel, prompt, final=False, embed=embed, view=None)
@@ -854,31 +1052,198 @@ class CapperSlipReviews(commands.Cog):
             embed.add_field(name="Final decision", value=approval_text(decision, decision["units"]), inline=False)
             await self.edit_prompt(channel, prompt, embed=embed)
 
-    async def publish_personal_free_play(self, guild: discord.Guild, row: dict) -> discord.Message:
-        review = row["review"]
-        channel = await self.publisher.resolve_channel(
-            FREE_PLAYS_CHANNEL_ID, "FREE_PLAYS_CHANNEL_ID", required=True,
-        )
-        if channel is None or channel.guild.id != guild.id:
-            raise RuntimeError("The configured Free Plays channel is unavailable in the slip's guild.")
+    @staticmethod
+    def capper_units_error(row: dict) -> str | None:
+        units = ((row.get("review") or {}).get("parsed") or {}).get("units")
+        if units is None or str(units).strip() == "":
+            return "The capper did not supply a unit stake."
+        error = PlayService.validate_capper_units(units)
+        if error:
+            return error
+        if float(units) <= 0:
+            return "Units must be greater than zero."
+        return None
 
-        embed = discord.Embed(title="Free Play - Not an Official Pick", color=discord.Color.orange())
-        author_name = review.get("author_name") or "Capper"
-        embed.set_author(name=author_name)
-        embed.description = "\n".join(
-            f"{index}. {discord.utils.escape_markdown(leg['selection'])} ({int(leg['odds']):+d})"
-            for index, leg in enumerate(review["parsed"]["legs"], 1)
-        )[:4096]
-        image = discord.File(
-            BytesIO(base64.b64decode(review["slip_base64"], validate=True)),
-            filename=review.get("image_filename") or f"slip-{row['message_id']}.png",
-        )
-        try:
-            return await channel.send(
-                **capper_play_mentions(free_play=True), embed=embed, file=image,
+    async def post_or_request_personal_free_play(
+        self, row: dict, reason: str,
+    ) -> tuple[discord.Message, int] | None:
+        if unit_error := self.capper_units_error(row):
+            prompt = await self.request_personal_free_play_units(row, reason)
+            delivery = (row.get("review") or {}).get("personal_free_play") or {}
+            prompt_url = prompt.jump_url if prompt is not None else (
+                f"https://discord.com/channels/{GUILD_ID}/{delivery.get('prompt_channel_id')}/"
+                f"{delivery.get('prompt_message_id')}"
+                if delivery.get("prompt_message_id") else "the saved team-channel prompt"
             )
-        finally:
-            image.close()
+            await self.publisher.staff_alert(
+                f"free_play_units:{row['message_id']}",
+                f"Slip {row['message_id']} needs a valid capper unit stake ({unit_error}); "
+                f"the author was asked to choose it before Free Plays publication: {prompt_url}",
+            )
+            return None
+        return await self.send_personal_free_play(row, reason)
+
+    async def send_personal_free_play(self, row: dict, reason: str) -> tuple[discord.Message, int]:
+        if unit_error := self.capper_units_error(row):
+            raise ValueError(f"{unit_error} No regular Free Play can be created.")
+        if FREE_PLAYS_CHANNEL_ID is None:
+            raise RuntimeError("FREE_PLAYS_CHANNEL_ID is not configured.")
+        claimed = await asyncio.to_thread(
+            self.store.claim_personal_free_play, int(row["message_id"]), FREE_PLAYS_CHANNEL_ID, reason[:1000],
+        )
+        if not claimed:
+            raise RuntimeError("The one-time regular Free Play delivery claim was not available.")
+        return await self.publish_claimed_personal_free_play(row)
+
+    async def publish_claimed_personal_free_play(self, row: dict) -> tuple[discord.Message, int]:
+        guild = self.bot.get_guild(GUILD_ID)
+        if guild is None:
+            raise RuntimeError("The configured guild is unavailable to the bot.")
+        message, play_id = await self.publish_personal_free_play(guild, row)
+        completed = await asyncio.to_thread(
+            self.store.complete_personal_free_play,
+            int(row["message_id"]), FREE_PLAYS_CHANNEL_ID, message.id, play_id,
+        )
+        if not completed:
+            raise RuntimeError("The Free Play was sent, but its delivery marker was not completed.")
+        return message, play_id
+
+    async def archive_rejected_personal_free_play(self, row: dict, channel=None) -> None:
+        if row.get("state") != "rejected":
+            return
+        review_channel = channel or await self.channel(row)
+        await self.records.save(review_channel, row)
+        try:
+            await review_channel.delete(reason="Archived rejected capper review; no official play was published")
+        except discord.NotFound:
+            logger.info("rejected_capper_review_thread_already_deleted thread=%s", review_channel.id)
+        await asyncio.to_thread(self.records.store.source_deleted, str(row["message_id"]))
+
+    async def request_personal_free_play_units(self, row: dict, reason: str) -> discord.Message | None:
+        if FREE_PLAYS_CHANNEL_ID is None or CONFIRMATION_CHANNEL_ID is None:
+            raise RuntimeError("Free Plays or team discussion channel is not configured.")
+        delivery = (row.get("review") or {}).get("personal_free_play") or {}
+        if delivery.get("state") == "awaiting_units":
+            return None
+        if delivery:
+            raise RuntimeError(f"Free Play delivery is already marked {delivery.get('state', 'in flight')}.")
+        claimed = await asyncio.to_thread(
+            self.store.claim_personal_free_play_units_request,
+            int(row["message_id"]), FREE_PLAYS_CHANNEL_ID, reason[:1000],
+        )
+        if not claimed:
+            raise RuntimeError("The one-time unit request claim was not available.")
+        channel = await self.publisher.resolve_channel(
+            CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID", required=True,
+        )
+        if channel is None or channel.guild.id != GUILD_ID:
+            raise RuntimeError("The configured team discussion channel is unavailable.")
+        author_id = int(row["review"]["author_id"])
+        prompt = await channel.send(
+            f"<@{author_id}> this slip did not qualify as an official pick. "
+            "Choose the unit stake for its regular Free Plays card below; it will post automatically after you submit "
+            "(maximum 3u).",
+            view=self.free_play_units_view(int(row["message_id"])),
+            allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=author_id)]),
+        )
+        completed = await asyncio.to_thread(
+            self.store.complete_personal_free_play_units_request,
+            int(row["message_id"]), FREE_PLAYS_CHANNEL_ID, channel.id, prompt.id,
+        )
+        if not completed:
+            raise RuntimeError("The unit prompt was sent, but its message marker was not saved.")
+        return prompt
+
+    async def submit_free_play_units(
+        self, interaction: discord.Interaction, message_id: int, prompt_id: int, units_text: str,
+    ) -> tuple[discord.Message, int]:
+        try:
+            units = float(units_text.strip())
+        except ValueError as exc:
+            raise ValueError("Enter a numeric unit stake greater than 0 and no more than 3.") from exc
+        if error := PlayService.validate_capper_units(units):
+            raise ValueError(error)
+        if units <= 0:
+            raise ValueError("Units must be greater than zero.")
+        if FREE_PLAYS_CHANNEL_ID is None or CONFIRMATION_CHANNEL_ID is None:
+            raise RuntimeError("Free Plays or team discussion channel is not configured.")
+        if interaction.guild_id != GUILD_ID or interaction.channel_id != CONFIRMATION_CHANNEL_ID:
+            raise ValueError("This unit request is outside the configured team discussion channel.")
+        claimed = await asyncio.to_thread(
+            self.store.claim_personal_free_play_units,
+            message_id, FREE_PLAYS_CHANNEL_ID, interaction.user.id, CONFIRMATION_CHANNEL_ID, prompt_id, units,
+        )
+        if not claimed:
+            raise RuntimeError("This unit request is closed, already submitted, or does not belong to you.")
+        row = await asyncio.to_thread(self.store.get, message_id)
+        try:
+            message, play_id = await self.publish_claimed_personal_free_play(row)
+        except Exception as exc:
+            raise RuntimeError(
+                "The unit stake was saved, but the regular Free Play could not be completed; staff must reconcile it."
+            ) from exc
+        try:
+            await self.archive_rejected_personal_free_play(row)
+        except Exception as exc:
+            logger.exception("rejected_free_play_archive_failed message=%s", message_id)
+            await self.publisher.staff_alert(
+                f"rejected_free_play_archive:{message_id}",
+                f"Regular Free Play #{play_id} was posted, but rejected slip {message_id} could not be archived: "
+                f"{str(exc)[:800]}",
+            )
+        try:
+            prompt_channel = await self.publisher.resolve_channel(
+                CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID", required=True,
+            )
+            prompt = await prompt_channel.fetch_message(prompt_id)
+            await prompt.edit(
+                content=f"<@{interaction.user.id}> selected {units:g}u. "
+                        f"Regular Free Play posted: {message.jump_url}",
+                view=None,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception as exc:
+            logger.exception("free_play_units_prompt_update_failed ballot=%s", message_id)
+            await self.publisher.staff_alert(
+                f"free_play_units_prompt:{message_id}",
+                f"Free Play #{play_id} was posted, but its unit prompt could not be updated: {str(exc)[:800]}",
+            )
+        return message, play_id
+
+    async def publish_personal_free_play(self, guild: discord.Guild, row: dict) -> tuple[discord.Message, int]:
+        review = row["review"]
+        parsed = review["parsed"]
+        if unit_error := self.capper_units_error(row):
+            raise ValueError(f"{unit_error} No regular Free Play can be created.")
+        legs = parsed["legs"]
+        author = guild.get_member(int(review["author_id"]))
+        if author is None:
+            author = await guild.fetch_member(int(review["author_id"]))
+        payload = await asyncio.to_thread(
+            self.publisher.official.create_play_record,
+            discord_user_id=str(author.id),
+            username=author.display_name,
+            units=parsed["units"],
+            legs=len(legs),
+            odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
+            play_text="\n".join(
+                f"Leg {index}: {leg['selection']} ({int(leg['odds']):+d})"
+                for index, leg in enumerate(legs, start=1)
+            ),
+            team_name=parsed.get("team_name"),
+            leg_records=legs,
+            tracking_scope="capper",
+            ballot_message_id=str(row["message_id"]),
+        )
+        if payload.get("error"):
+            raise ValueError(payload["error"])
+        if not payload.get("play_id"):
+            raise RuntimeError("The capper Free Play record was not created.")
+        message = await self.publish_free_play(
+            guild, author, payload, base64.b64decode(review["slip_base64"], validate=True),
+        )
+        await asyncio.to_thread(self.publisher.official.attach_message_id, payload["play_id"], message.id)
+        return message, int(payload["play_id"])
 
     async def reaction(self, payload, *, added: bool) -> None:
         if self.publisher.get_testing():
@@ -992,6 +1357,10 @@ class CapperSlipReviews(commands.Cog):
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         custom_id = str((interaction.data or {}).get("custom_id") or "")
+        units_match = re.fullmatch(r"pm:freeplay_units:(\d{1,20})", custom_id)
+        if units_match is not None:
+            await self.free_play_units_button(interaction, int(units_match.group(1)))
+            return
         if not custom_id.startswith("pm:sr:"):
             return
         try:
