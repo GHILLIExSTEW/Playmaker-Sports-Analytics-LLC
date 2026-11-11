@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -8,7 +9,7 @@ import pytest
 
 import src.capper_review_records as module
 import src.forum_health as health
-from src.capper_review_records import ReviewRecords, record_content, record_text
+from src.capper_review_records import ReviewRecords, evidence_expired, record_content, record_text
 
 
 def ballot():
@@ -185,6 +186,56 @@ def expired_record(forum):
         "evidence_eligible_at": (datetime.now(timezone.utc) - timedelta(days=366)).isoformat(),
         "evidence_removed_at": None,
     }
+
+
+@pytest.mark.parametrize("field", ["evidence_eligible_at", "source_checked_at", "created_at", "source_created_at"])
+def test_postgres_timestamps_work_with_python310_parser(monkeypatch, field):
+    records, forum, _, _, store = make_records(monkeypatch)
+    timestamp = "2026-11-11T08:00:08.81717+00:00"
+
+    def parse(value):
+        fraction = re.search(r"\.(\d+)", value)
+        if fraction and len(fraction.group(1)) not in {3, 6}:
+            raise ValueError(f"Invalid isoformat string: {value!r}")
+        return datetime.fromisoformat(value)
+
+    clock = Mock(wraps=datetime)
+    clock.fromisoformat.side_effect = parse
+    clock.now.return_value = datetime(2026, 11, 12, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(module, "datetime", clock)
+    if field in {"created_at", "source_created_at"}:
+        row = ballot()
+        target = row if field == "created_at" else row["review"]
+        target[field] = timestamp
+        asyncio.run(records.save(SimpleNamespace(id=500), row))
+        assert forum.create_thread.call_args.kwargs["name"] == "2026-11-11"
+    else:
+        record = expired_record(forum)
+        record[field] = timestamp
+        if field == "source_checked_at":
+            record["source_deleted_at"] = None
+            record["evidence_eligible_at"] = None
+            records.check_source_deleted = AsyncMock()
+        store.snapshots.return_value = [record]
+        store.snapshot.return_value = record
+        asyncio.run(records.refresh())
+        if field == "source_checked_at":
+            records.check_source_deleted.assert_awaited_once_with(record)
+        else:
+            store.begin_expiry.assert_not_called()
+        store.complete.assert_called_once()
+
+
+@pytest.mark.parametrize("past_cutoff", [False, True])
+def test_fractional_timestamp_preserves_exact_retention_cutoff(monkeypatch, past_cutoff):
+    _, forum, _, _, _ = make_records(monkeypatch)
+    record = expired_record(forum)
+    record["evidence_eligible_at"] = "2026-11-11T08:00:08.81717+00:00"
+    eligible = datetime(2026, 11, 11, 8, 0, 8, 817170, tzinfo=timezone.utc)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = eligible + timedelta(days=365, microseconds=0 if past_cutoff else -1)
+    monkeypatch.setattr(module, "datetime", clock)
+    assert evidence_expired(record) is past_cutoff
 
 
 def test_retention_replaces_attachments_with_bet_summary_before_scrubbing_database(monkeypatch):

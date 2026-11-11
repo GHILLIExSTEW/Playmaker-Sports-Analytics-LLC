@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands
 
 from src.config import CAPPER_RECORD_CHANNEL_ID, GUILD_ID, OFFICIAL_CHANNEL_ID
+from src.datetime_utils import parse_iso_datetime
 from src.forum_health import CheckedForum
 from src.services.supabase_service import supabase_service
 
@@ -134,7 +135,7 @@ def evidence_expired(record: dict) -> bool:
     return (
         record.get("evidence_removed_at") is None and record.get("source_deleted_at") is not None
         and eligible is not None
-        and datetime.fromisoformat(eligible) <= datetime.now(timezone.utc) - timedelta(days=365)
+        and parse_iso_datetime(eligible) <= datetime.now(timezone.utc) - timedelta(days=365)
     )
 
 
@@ -199,7 +200,7 @@ class ReviewRecords:
             record = await asyncio.to_thread(self.store.record, message_id)
             if record and record.get("evidence_removed_at"):
                 raise RuntimeError("This review's evidence has expired; never recreate deleted evidence.")
-            submitted = datetime.fromisoformat(row["review"].get("source_created_at") or row["created_at"])
+            submitted = parse_iso_datetime(row["review"].get("source_created_at") or row["created_at"])
             date = record["record_date"] if record else submitted.astimezone(EASTERN).date().isoformat()
             thread = await self.dated_thread(forum, date)
             play = await asyncio.to_thread(self.store.play, message_id)
@@ -256,7 +257,7 @@ class ReviewRecords:
                 try:
                     if "source_deleted_at" in record and record["source_deleted_at"] is None:
                         checked = record.get("source_checked_at")
-                        if checked is None or datetime.fromisoformat(checked) <= datetime.now(timezone.utc) - timedelta(days=1):
+                        if checked is None or parse_iso_datetime(checked) <= datetime.now(timezone.utc) - timedelta(days=1):
                             await self.check_source_deleted(record)
                     expired = evidence_expired(record)
                     if expired:
