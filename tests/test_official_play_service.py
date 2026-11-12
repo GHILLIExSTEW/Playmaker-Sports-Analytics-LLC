@@ -54,6 +54,7 @@ def test_new_play_carries_unique_submission_key_and_idempotent_insert(monkeypatc
     service = OfficialPlayService()
     monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
     monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(service, "free_play_conflict", lambda *args: None)
     monkeypatch.setattr(official_play_module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
     insert = Mock(return_value=SimpleNamespace(data=[{"id": 7}]))
     upsert = Mock()
@@ -131,11 +132,81 @@ def test_personal_capper_play_over_three_units_is_rejected():
     assert result == {"error": "Personal capper plays cannot exceed 3 units."}
 
 
+def test_capper_parlay_above_one_unit_is_rejected():
+    service = OfficialPlayService()
+    result = service.create_play_record(
+        "900", "Ace", 2, 2, "+264", tracking_scope="capper",
+        leg_records=[{"selection": "A ML", "odds": 100}, {"selection": "B ML", "odds": 100}],
+    )
+    assert result == {"error": "Parlays can never be staked above 1 unit, official or not."}
+
+
+def make_conflict_tables(monkeypatch, tables):
+    class FakeQuery:
+        def __init__(self, data):
+            self._data = data
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+
+        def execute(self):
+            return SimpleNamespace(data=self._data)
+
+    client = SimpleNamespace(table=lambda name: FakeQuery(tables[name]))
+    monkeypatch.setattr(official_play_module.supabase_service, "_ensure_client", lambda: client)
+    monkeypatch.setattr(official_play_module.supabase_service, "_execute", lambda operation: operation())
+
+
+def test_free_play_conflict_blocks_open_official_legs_for_everyone(monkeypatch):
+    service = OfficialPlayService()
+    make_conflict_tables(monkeypatch, {
+        "plays": [{"id": 11}],
+        "play_legs": [{"play_id": 11, "selection": "Wolves  ML"}],
+        "capper_ballots": [],
+    })
+    conflict = service.free_play_conflict("43", [{"selection": "wolves ml"}])
+    assert "open official play #11" in conflict
+    assert service.free_play_conflict("43", [{"selection": "Heat ML"}]) is None
+
+
+def test_free_play_conflict_blocks_legs_cancelled_from_review_today(monkeypatch):
+    service = OfficialPlayService()
+    make_conflict_tables(monkeypatch, {
+        "plays": [],
+        "play_legs": [],
+        "capper_ballots": [{"message_id": "500", "review": {"parsed": {"legs": [{"selection": "Wolves ML"}]}}}],
+    })
+    conflict = service.free_play_conflict("42", [{"selection": "Wolves ML"}])
+    assert "cancelled a team review" in conflict.casefold()
+
+
+def test_tail_policy_official_stake_must_match_tail_rating(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_ensure_default_sport", lambda: 1)
+    monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(official_play_module.supabase_service, "select", Mock(return_value=SimpleNamespace(data=[])))
+    monkeypatch.setattr(official_play_module.supabase_service, "insert", Mock(return_value=SimpleNamespace(data=[{"id": 7}])))
+    monkeypatch.setattr(official_play_module.supabase_service, "upsert", Mock())
+    decision = {
+        "policy_version": "slip-v2", "author_id": "42", "voter_choices": {"42": "yes", "43": "yes"},
+        "yes": 2, "roster_size": 5, "counts": {"yes": 2}, "units": 2, "stars": 4,
+    }
+    result = service.create_play_record(
+        "900", "Official", 2, 1, "-110", stars=4, ballot_message_id="500", team_approval=decision,
+    )
+    assert result["units"] == 2 and result["team_approval"] == decision
+    with pytest.raises(ValueError, match="must match"):
+        service.create_play_record(
+            "900", "Official", 3, 1, "-110", stars=5, ballot_message_id="500", team_approval=decision,
+        )
+
+
 @pytest.mark.parametrize("scope", ["capper", "official"])
 def test_created_play_returns_saved_team_details_for_card_artwork(monkeypatch, scope):
     service = OfficialPlayService()
     monkeypatch.setattr(service, "_ensure_sport", lambda _: 1)
     monkeypatch.setattr(service, "_ensure_user", lambda *args: 2)
+    monkeypatch.setattr(service, "free_play_conflict", lambda *args: None)
     monkeypatch.setattr(
         official_play_module.supabase_service, "select",
         Mock(return_value=SimpleNamespace(data=[])),

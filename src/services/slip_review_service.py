@@ -5,8 +5,9 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.capper_ballots import BallotStore
+from src.config import CAPPER_DAILY_REVIEW_LIMIT
 from src.datetime_utils import parse_iso_datetime
-from src.services.ballot_vote_service import SLIP_POLICY_VERSION
+from src.services.ballot_vote_service import TAIL_POLICY_VERSION
 from src.services.play_service import PlayService
 from src.services.supabase_service import supabase_service
 
@@ -232,7 +233,7 @@ class SlipReviewStore(BallotStore):
 
     def pending(self) -> list[dict]:
         return supabase_service.select(
-            "capper_ballots", "*", {"state": "pending", "policy_version": SLIP_POLICY_VERSION},
+            "capper_ballots", "*", {"state": "pending", "policy_version": TAIL_POLICY_VERSION},
         ).data or []
 
     def update_review(self, message_id: int, **values) -> None:
@@ -247,6 +248,7 @@ class SlipReviewStore(BallotStore):
             "open_capper_slip", p_message_id=str(message_id), p_author_id=str(author_id),
             p_roster=sorted(str(voter) for voter in roster), p_parsed=parsed,
             p_start=start.isoformat(), p_cutoff=cutoff.isoformat(),
+            p_daily_limit=CAPPER_DAILY_REVIEW_LIMIT,
         )
 
     def respond(self, message_id: int, voter_id: int, action: str) -> str:

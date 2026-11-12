@@ -6,6 +6,9 @@ from src.services.supabase_service import supabase_service
 
 POLICY_VERSION = "roster-v1"
 SLIP_POLICY_VERSION = "slip-v1"
+TAIL_POLICY_VERSION = "slip-v2"
+MAX_OFFICIAL_LEGS = 2
+MAX_PARLAY_UNITS = 1
 
 
 def slip_rating(yes: int, no: int, roster_size: int) -> tuple[int, int] | None:
@@ -14,6 +17,16 @@ def slip_rating(yes: int, no: int, roster_size: int) -> tuple[int, int] | None:
     if yes < 2 or yes <= no:
         return None
     units = min(yes - 1, 3)
+    return units + 2, units
+
+
+def tail_rating(tails: int, roster_size: int, legs: int) -> tuple[int, int] | None:
+    """Tails include the author's confirmation; one more capper makes 2u, two make 3u, parlays stay 1u."""
+    if roster_size < 2 or not 0 <= tails <= roster_size or legs < 1:
+        raise ValueError("Invalid tail count, eligible roster, or leg count.")
+    if tails < 2 or legs > MAX_OFFICIAL_LEGS:
+        return None
+    units = MAX_PARLAY_UNITS if legs >= 2 else min(tails, 3)
     return units + 2, units
 
 
@@ -62,6 +75,13 @@ def statement_matches_ballot(text: str, question: str) -> bool:
 def approval_text(approval: dict | None, units: float) -> str | None:
     if not approval:
         return None
+    if approval.get("policy_version") == TAIL_POLICY_VERSION:
+        tails, size = approval["counts"]["yes"], approval["roster_size"]
+        unanimity = " | Every capper tailed" if tails == size else ""
+        return (
+            f"{tails} of {size} cappers tailed (author included) | {size - tails} did not tail"
+            f" | Official stake: {float(units):g}u{unanimity}"
+        )
     if approval.get("policy_version") == SLIP_POLICY_VERSION:
         counts = approval["counts"]
         missing = approval["roster_size"] - sum(counts.values())

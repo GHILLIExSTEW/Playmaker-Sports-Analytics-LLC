@@ -18,7 +18,7 @@ from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
 from src.config import CAPPER_BALLOT_CHANNEL_ID, CONFIRMATION_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
 from src.interaction_views import PreparedModalView
 from src.forum_health import CheckedForum
-from src.services.ballot_vote_service import approval_text, slip_rating
+from src.services.ballot_vote_service import approval_text, tail_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
@@ -30,8 +30,7 @@ from src.services.slip_review_service import (
 )
 
 logger = logging.getLogger("official_play_bot")
-SUPPORT = "\N{THUMBS UP SIGN}"
-OPPOSE = "\N{THUMBS DOWN SIGN}"
+TAIL = "\N{THUMBS UP SIGN}"
 ACKNOWLEDGEMENT_THREAD_ID = 1565183972244201622
 ACKNOWLEDGEMENT_EMOJI = "\N{HANDSHAKE}"
 SUBMISSION_NOTICE = (
@@ -50,7 +49,7 @@ SUBMISSION_NOTICE = (
     "not training on Discord content. Check and correct the extracted details before confirming. "
     "Confirmation, voting and discussion stay in your post.\n\n"
     "If not approved, your slip becomes a regular tracked Free Play, not an official pick. Missing units? "
-    "Choose a stake above 0 and up to 3u using the team-channel button; the card posts automatically. "
+    "Choose a stake above 0 and up to 3u (parlays never above 1u) using the team-channel button; the card posts automatically. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
     "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
@@ -62,8 +61,7 @@ SUBMISSION_NOTICE = (
 def review_view(message_id: int, *, draft: bool = False) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     for action, label, style in (
-        [("confirm", "Confirm details + set cutoff", discord.ButtonStyle.primary)]
-        if draft else [("pass", "Pass / not reviewed", discord.ButtonStyle.secondary)]
+        [("confirm", "Confirm details + set cutoff", discord.ButtonStyle.primary)] if draft else []
     ) + [("cancel", "Cancel (author only)", discord.ButtonStyle.danger)]:
         view.add_item(discord.ui.Button(
             label=label, style=style, custom_id=f"pm:sr:{message_id}:{action}",
@@ -98,13 +96,12 @@ def review_embed(row: dict) -> discord.Embed:
             inline=False,
         )
         choices = response_choices(row)
-        counts = {choice: sum(value == choice for value in choices.values()) for choice in ("yes", "no", "pass")}
+        tails = sum(value == "yes" for value in choices.values())
         size = len(row["eligible_voter_ids"])
-        rating = slip_rating(counts["yes"], counts["no"], size)
+        rating = tail_rating(tails, size, len(parsed["legs"]))
         embed.add_field(
             name="Live responses",
-            value=f"{counts['yes']} supported | {counts['no']} opposed | {counts['pass']} passed"
-                  f" | {size - len(choices)} did not respond",
+            value=f"{tails} tailed (author included) | {size - tails} have not tailed",
             inline=False,
         )
         embed.add_field(
@@ -114,10 +111,11 @@ def review_embed(row: dict) -> discord.Embed:
         )
         embed.add_field(
             name="How to respond",
-            value=f"{SUPPORT} Support | {OPPOSE} Oppose | Pass button\n"
-                  "Use only one reaction. Both reactions count as unresolved; remove one to choose."
-                  " The author's confirmation is their Yes. Missing responses are not No votes."
-                  " Locks at the cutoff or when everyone responds. Published units never change.",
+            value=f"{TAIL} Tail this slip if you would play it; the author's confirmation is their tail.\n"
+                  "There is no down vote or pass - not reacting simply means no tail."
+                  " One tail from another capper publishes the official at 2u; two or more lock the 3u maximum."
+                  " Parlays never exceed 1u, and slips with 3+ legs cannot go official."
+                  " Locks at the cutoff or when every capper has tailed. Published units never change.",
             inline=False,
         )
     return embed
@@ -171,7 +169,7 @@ class FreePlayUnitsModal(discord.ui.Modal, title="Choose Free Play units"):
         super().__init__(timeout=300)
         self.cog, self.ballot_id, self.prompt_id = cog, ballot_id, prompt_id
         self.units = discord.ui.TextInput(
-            label="Unit stake (greater than 0, maximum 3u)",
+            label="Unit stake (above 0, max 3u; parlays 1u)",
             placeholder="For example: 1 or 1.5",
             min_length=1,
             max_length=6,
@@ -928,6 +926,11 @@ class CapperSlipReviews(commands.Cog):
                 raise ValueError("The original slip was edited or deleted. Submit a fresh slip.")
             parsed = {**row["review"]["parsed"]}
             parsed["legs"] = confirmed_legs(legs_text, parsed["legs"])
+            if len(parsed["legs"]) > 2:
+                raise ValueError(
+                    "Slips with 3 or more legs can never become official picks. Resubmit with at most 2 legs, "
+                    "or cancel this review and post it as a personal Free Play (1u maximum) tomorrow."
+                )
             roster = await self.publisher.tracked_operators()
             if roster is None or len(roster) < 2 or interaction.user.id not in roster:
                 raise ValueError("Cannot verify an eligible roster containing you and another capper.")
@@ -937,11 +940,10 @@ class CapperSlipReviews(commands.Cog):
                 prompt = await channel.fetch_message(int(row["review_message_id"]))
                 await self.edit_prompt(channel, prompt, embed=review_embed(row), view=review_view(message_id))
                 await prompt.clear_reactions()
-                for emoji in (SUPPORT, OPPOSE):
-                    await prompt.add_reaction(emoji)
+                await prompt.add_reaction(TAIL)
                 await channel.send(
                     f"<@&{TRACKER_ROLE_ID}> [Slip review is open]({prompt.jump_url}). "
-                    f"Author-set cutoff: <t:{int(cutoff.timestamp())}:F>. React {SUPPORT} / {OPPOSE} or choose Pass.",
+                    f"Author-set cutoff: <t:{int(cutoff.timestamp())}:F>. React {TAIL} to tail this slip.",
                     allowed_mentions=discord.AllowedMentions(
                         everyone=False, users=False, roles=[discord.Object(id=TRACKER_ROLE_ID)],
                     ),
@@ -949,7 +951,7 @@ class CapperSlipReviews(commands.Cog):
             except Exception as exc:
                 await self.fail(message_id, str(exc))
                 raise
-            await interaction.followup.send("Review opened. Your Yes is recorded and your cutoff is locked.", ephemeral=True)
+            await interaction.followup.send("Review opened. Your tail is recorded and your cutoff is locked.", ephemeral=True)
 
     async def evaluate(self, channel, row: dict) -> None:
         message_id = int(row["message_id"])
@@ -1005,8 +1007,7 @@ class CapperSlipReviews(commands.Cog):
             counts = decision["counts"]
             embed.add_field(
                 name="Final responses",
-                value=f"{counts['yes']} supported | {counts['no']} opposed | {counts['pass']} passed"
-                      f" | {decision['roster_size'] - sum(counts.values())} did not respond",
+                value=f"{counts['yes']} tailed | {decision['roster_size'] - counts['yes']} did not tail",
                 inline=False,
             )
             await self.edit_prompt(channel, prompt, embed=embed, view=None)
@@ -1054,7 +1055,8 @@ class CapperSlipReviews(commands.Cog):
 
     @staticmethod
     def capper_units_error(row: dict) -> str | None:
-        units = ((row.get("review") or {}).get("parsed") or {}).get("units")
+        parsed = ((row.get("review") or {}).get("parsed") or {})
+        units = parsed.get("units")
         if units is None or str(units).strip() == "":
             return "The capper did not supply a unit stake."
         error = PlayService.validate_capper_units(units)
@@ -1062,6 +1064,8 @@ class CapperSlipReviews(commands.Cog):
             return error
         if float(units) <= 0:
             return "Units must be greater than zero."
+        if len(parsed.get("legs") or []) >= 2 and float(units) > 1:
+            return "Parlays can never be staked above 1 unit."
         return None
 
     async def post_or_request_personal_free_play(
@@ -1165,6 +1169,9 @@ class CapperSlipReviews(commands.Cog):
             raise ValueError(error)
         if units <= 0:
             raise ValueError("Units must be greater than zero.")
+        preview = await asyncio.to_thread(self.store.get, message_id)
+        if len((((preview.get("review") or {}).get("parsed") or {}).get("legs")) or []) >= 2 and units > 1:
+            raise ValueError("Parlays can never be staked above 1 unit.")
         if FREE_PLAYS_CHANNEL_ID is None or CONFIRMATION_CHANNEL_ID is None:
             raise RuntimeError("Free Plays or team discussion channel is not configured.")
         if interaction.guild_id != GUILD_ID or interaction.channel_id != CONFIRMATION_CHANNEL_ID:
@@ -1251,7 +1258,7 @@ class CapperSlipReviews(commands.Cog):
             return
         if (
             payload.guild_id != GUILD_ID
-            or str(payload.emoji) not in {SUPPORT, OPPOSE}
+            or str(payload.emoji) != TAIL
             or self.needs_reconciliation
             or (self.bot.user and payload.user_id == self.bot.user.id)
         ):
@@ -1264,19 +1271,12 @@ class CapperSlipReviews(commands.Cog):
             if row is None:
                 return
             async with self.review_lock(int(row["message_id"])):
-                choice = "yes" if str(payload.emoji) == SUPPORT else "no"
                 status = await asyncio.to_thread(
                     self.store.respond, int(row["message_id"]), payload.user_id,
-                    f"{choice}_{'add' if added else 'remove'}",
+                    f"yes_{'add' if added else 'remove'}",
                 )
                 logger.info("slip_response message=%s voter=%s result=%s", row["message_id"], payload.user_id, status)
-                if status == "conflict":
-                    channel = await self.channel(row)
-                    await channel.send(
-                        f"<@{payload.user_id}>, both reactions are selected. Remove one to record your response.",
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                if status in {"saved", "conflict"}:
+                if status == "saved":
                     await self.evaluate(await self.channel(row), await asyncio.to_thread(self.store.get, int(row["message_id"])))
         except Exception as exc:
             logger.exception("slip_reaction_failed")
@@ -1293,26 +1293,24 @@ class CapperSlipReviews(commands.Cog):
             await self.fail(int(row["message_id"]), "Reaction availability was interrupted across the voting cutoff.")
             return
         prompt = await channel.fetch_message(int(row["review_message_id"]))
-        actual = {"yes": set(), "no": set()}
+        tailed: set[str] = set()
         for reaction in prompt.reactions:
-            choice = {SUPPORT: "yes", OPPOSE: "no"}.get(str(reaction.emoji))
-            if choice:
+            if str(reaction.emoji) == TAIL:
                 async for user in reaction.users(limit=None):
                     if not user.bot:
-                        actual[choice].add(str(user.id))
+                        tailed.add(str(user.id))
         # Do not finalize until the complete roster is synchronized.
         for voter in row["eligible_voter_ids"]:
-            for choice in ("yes", "no"):
-                present = voter in actual[choice]
-                saved = row["response_states"].get(voter, {}).get(choice, False)
-                if present != saved:
-                    status = await asyncio.to_thread(
-                        self.store.respond, int(row["message_id"]), int(voter),
-                        f"{choice}_{'add' if present else 'remove'}",
-                    )
-                    if status == "closed":
-                        await self.fail(int(row["message_id"]), "Voting cutoff passed during reaction recovery.")
-                        return
+            present = voter in tailed
+            saved = row["response_states"].get(voter, {}).get("yes", False)
+            if present != saved:
+                status = await asyncio.to_thread(
+                    self.store.respond, int(row["message_id"]), int(voter),
+                    f"yes_{'add' if present else 'remove'}",
+                )
+                if status == "closed":
+                    await self.fail(int(row["message_id"]), "Voting cutoff passed during reaction recovery.")
+                    return
 
     async def cleared_reactions(self, payload) -> None:
         if self.publisher.get_testing():
@@ -1320,7 +1318,7 @@ class CapperSlipReviews(commands.Cog):
             return
         if (
             payload.guild_id != GUILD_ID
-            or (hasattr(payload, "emoji") and str(payload.emoji) not in {SUPPORT, OPPOSE})
+            or (hasattr(payload, "emoji") and str(payload.emoji) != TAIL)
         ):
             return
         row = None
@@ -1364,7 +1362,7 @@ class CapperSlipReviews(commands.Cog):
         if not custom_id.startswith("pm:sr:"):
             return
         try:
-            match = re.fullmatch(r"pm:sr:(\d{1,20}):(confirm|pass|cancel)", custom_id)
+            match = re.fullmatch(r"pm:sr:(\d{1,20}):(confirm|cancel)", custom_id)
             if (
                 match is None or interaction.guild_id != GUILD_ID
                 or interaction.user.bot or self.publisher.get_testing()
@@ -1391,24 +1389,15 @@ class CapperSlipReviews(commands.Cog):
                 row = await asyncio.to_thread(self.store.get, message_id)
                 if row["state"] != "pending":
                     raise ValueError("This review is already closed.")
-                if action == "cancel":
-                    if str(interaction.user.id) != row["review"]["author_id"]:
-                        raise ValueError("Only the author can cancel their review.")
-                    if not await asyncio.to_thread(self.store.cancel, message_id, interaction.user.id):
-                        raise ValueError("The review is already locked or closed; it cannot be cancelled.")
-                    await interaction.message.edit(content="Review cancelled by its author.", view=None)
-                    result = "Review cancelled. No official pick will be published."
-                else:
-                    if self.needs_reconciliation:
-                        raise ValueError("Reaction recovery is in progress. Try again shortly.")
-                    status = await asyncio.to_thread(self.store.respond, message_id, interaction.user.id, "pass")
-                    if status != "saved":
-                        raise ValueError(f"Pass not recorded: {status}.")
-                    # Remove visible reactions after saving Pass. Remove events do not undo Pass.
-                    for emoji in (SUPPORT, OPPOSE):
-                        await interaction.message.remove_reaction(emoji, interaction.user)
-                    await self.evaluate(await self.channel(row), await asyncio.to_thread(self.store.get, message_id))
-                    result = "Pass recorded. It is not an opposing vote."
+                if str(interaction.user.id) != row["review"]["author_id"]:
+                    raise ValueError("Only the author can cancel their review.")
+                if not await asyncio.to_thread(self.store.cancel, message_id, interaction.user.id):
+                    raise ValueError("The review is already locked or closed; it cannot be cancelled.")
+                await interaction.message.edit(content="Review cancelled by its author.", view=None)
+                result = (
+                    "Review cancelled. No official pick will be published, and its plays "
+                    "cannot be posted as your Free Plays until tomorrow."
+                )
             await interaction.followup.send(result, ephemeral=True)
         except Exception as exc:
             logger.exception("slip_control_failed")

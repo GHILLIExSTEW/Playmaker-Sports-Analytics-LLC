@@ -3,14 +3,19 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
-from src.services.ballot_vote_service import POLICY_VERSION, SLIP_POLICY_VERSION, ballot_rating, slip_rating
+from src.services.ballot_vote_service import (
+    MAX_PARLAY_UNITS, POLICY_VERSION, SLIP_POLICY_VERSION, TAIL_POLICY_VERSION,
+    ballot_rating, slip_rating, tail_rating,
+)
 from src.services.settlement_service import SettlementService
 from src.services.supabase_service import supabase_service
 
 
+EASTERN = ZoneInfo("America/New_York")
 SETTLEABLE_STATUSES = frozenset({"open", "regraded"})
 
 
@@ -77,6 +82,43 @@ class OfficialPlayService:
             "discord_user_id": discord_user_id,
         })
 
+    @staticmethod
+    def _normalized_selection(value) -> str:
+        return " ".join(str(value or "").casefold().split())
+
+    def free_play_conflict(self, discord_user_id: str, leg_records: list[dict]) -> str | None:
+        """Free Plays may not reuse open official legs or legs the author cancelled from team review today."""
+        selections = {self._normalized_selection(leg.get("selection")) for leg in leg_records} - {""}
+        if not selections:
+            return None
+        client = supabase_service._ensure_client()
+        officials = supabase_service._execute(lambda: client.table("plays").select("id").eq(
+            "tracking_scope", "official").in_("status", sorted(SETTLEABLE_STATUSES)).execute()).data or []
+        play_ids = [int(play["id"]) for play in officials]
+        for offset in range(0, len(play_ids), 100):
+            batch = play_ids[offset:offset + 100]
+            legs = supabase_service._execute(lambda chunk=batch: client.table("play_legs").select(
+                "play_id,selection").in_("play_id", chunk).execute()).data or []
+            for leg in legs:
+                if self._normalized_selection(leg.get("selection")) in selections:
+                    return (
+                        f"'{leg['selection']}' is already part of open official play #{leg['play_id']}. "
+                        "Official plays cannot be reposted in Free Plays, singly or inside a parlay, by any capper."
+                    )
+        today_start = datetime.now(EASTERN).replace(hour=0, minute=0, second=0, microsecond=0)
+        cancelled = supabase_service._execute(lambda: client.table("capper_ballots").select(
+            "message_id,review").eq("state", "rejected").eq("error", "Cancelled by author.")
+            .eq("review->>author_id", str(discord_user_id))
+            .gte("cancelled_at", today_start.isoformat()).execute()).data or []
+        for row in cancelled:
+            for leg in (((row.get("review") or {}).get("parsed") or {}).get("legs") or []):
+                if self._normalized_selection(leg.get("selection")) in selections:
+                    return (
+                        f"You cancelled a team review containing '{leg['selection']}' today. "
+                        "Cancelled review plays cannot be reposted as Free Plays the same day."
+                    )
+        return None
+
     def create_play_record(
         self,
         discord_user_id: str,
@@ -100,19 +142,30 @@ class OfficialPlayService:
             capper_units_error = self.play_service.validate_capper_units(units)
             if capper_units_error:
                 return {"error": capper_units_error}
+            try:
+                if int(legs) >= 2 and float(units) > MAX_PARLAY_UNITS:
+                    return {"error": f"Parlays can never be staked above {MAX_PARLAY_UNITS} unit, official or not."}
+            except (TypeError, ValueError):
+                pass  # validate_play reports the malformed value below.
+            conflict = self.free_play_conflict(discord_user_id, leg_records or [])
+            if conflict:
+                return {"error": conflict}
         if team_approval is not None:
             if tracking_scope != "official" or not ballot_message_id:
                 raise ValueError("Team approval requires an official ballot.")
             version = team_approval.get("policy_version", POLICY_VERSION)
-            if version not in {POLICY_VERSION, SLIP_POLICY_VERSION}:
+            if version not in {POLICY_VERSION, SLIP_POLICY_VERSION, TAIL_POLICY_VERSION}:
                 raise ValueError("Unknown official approval policy.")
-            if version == SLIP_POLICY_VERSION and (
+            if version in {SLIP_POLICY_VERSION, TAIL_POLICY_VERSION} and (
                 team_approval.get("voter_choices", {}).get(team_approval.get("author_id")) != "yes"
             ):
                 raise ValueError("Slip approval requires the author's confirmed support.")
-            rating = (slip_rating if version == SLIP_POLICY_VERSION else ballot_rating)(
-                team_approval["yes"], team_approval["counts"]["no"], team_approval["roster_size"],
-            )
+            if version == TAIL_POLICY_VERSION:
+                rating = tail_rating(team_approval["yes"], team_approval["roster_size"], int(legs))
+            else:
+                rating = (slip_rating if version == SLIP_POLICY_VERSION else ballot_rating)(
+                    team_approval["yes"], team_approval["counts"]["no"], team_approval["roster_size"],
+                )
             if rating != (stars, units) or team_approval["units"] != units or team_approval["stars"] != stars:
                 raise ValueError("Official units and stars must match the saved team approval.")
         validation_error = self.play_service.validate_play(units, legs, odds)
@@ -228,7 +281,7 @@ class OfficialPlayService:
         play = self._fetch_play(play_id)
         if play.get("team_approval") and float(units) != float(play["units"]):
             raise ValueError("Ballot-assigned units cannot be edited. Reconcile the ballot instead.")
-        if (play.get("team_approval") or {}).get("policy_version") == SLIP_POLICY_VERSION:
+        if (play.get("team_approval") or {}).get("policy_version") in {SLIP_POLICY_VERSION, TAIL_POLICY_VERSION}:
             saved_legs = self.get_play_legs(play_id)
             if (
                 selections != [leg["selection"] for leg in saved_legs]

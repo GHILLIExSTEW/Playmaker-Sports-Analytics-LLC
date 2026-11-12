@@ -14,7 +14,7 @@ import discord
 import src.capper_slip_reviews as module
 import src.forum_health as health
 from src.capper_slip_reviews import CapperSlipReviews, SlipConfirmation, review_embed
-from src.services.ballot_vote_service import approval_text, slip_rating
+from src.services.ballot_vote_service import approval_text, slip_rating, tail_rating
 from src.services.slip_review_service import (
     confirmed_legs, parse_cutoff, parse_event_start, response_choices, review_time,
 )
@@ -23,7 +23,7 @@ from src.services.slip_review_service import (
 def saved_row():
     now = datetime.now(timezone.utc)
     return {
-        "message_id": "500", "state": "pending", "policy_version": "slip-v1",
+        "message_id": "500", "state": "pending", "policy_version": "slip-v2",
         "review_message_id": "900", "eligible_voter_ids": ["42", "43", "44", "45", "46"],
         "cutoff_at": (now + timedelta(minutes=5)).isoformat(),
         "event_starts_at": (now + timedelta(minutes=10)).isoformat(),
@@ -97,6 +97,21 @@ def test_invalid_counts_raise(counts):
         slip_rating(*counts)
 
 
+@pytest.mark.parametrize("size", range(2, 9))
+def test_tail_thresholds_cap_units_and_parlays(size):
+    for tails in range(size + 1):
+        units = min(tails, 3)
+        assert tail_rating(tails, size, 1) == ((units + 2, units) if tails >= 2 else None)
+        assert tail_rating(tails, size, 2) == ((3, 1) if tails >= 2 else None)
+        assert tail_rating(tails, size, 3) is None
+
+
+@pytest.mark.parametrize("args", [(1, 1, 1), (-1, 5, 1), (6, 5, 1), (2, 5, 0)])
+def test_invalid_tail_counts_raise(args):
+    with pytest.raises(ValueError):
+        tail_rating(*args)
+
+
 def test_cutoff_requires_timezone_and_converts_to_utc():
     assert review_time("2026-10-22T19:00-04:00").isoformat() == "2026-10-22T23:00:00+00:00"
     with pytest.raises(ValueError, match="timezone"):
@@ -137,7 +152,8 @@ def test_conflicts_are_unresolved_and_missing_never_means_no():
     row["response_states"]["44"] = {"pass": True}
     assert response_choices(row) == {"42": "yes", "44": "pass"}
     fields = {field.name: field.value for field in review_embed(row).fields}
-    assert fields["Live responses"] == "1 supported | 0 opposed | 1 passed | 3 did not respond"
+    assert fields["Live responses"] == "1 tailed (author included) | 4 have not tailed"
+    assert fields["Provisional result"] == "Does not currently qualify - personal only"
 
 
 def test_approval_distinguishes_respondent_and_team_unanimity():
@@ -149,6 +165,15 @@ def test_approval_distinguishes_respondent_and_team_unanimity():
     assert approval_text(approval, 3).endswith("Unanimous team approval")
     approval["counts"] = {"yes": 3, "no": 0, "pass": 2}
     assert "Unanimous" not in approval_text(approval, 2)
+
+
+def test_tail_approval_text_reports_tails_and_unanimity():
+    approval = {"policy_version": "slip-v2", "roster_size": 5, "counts": {"yes": 2}}
+    assert approval_text(approval, 2) == (
+        "2 of 5 cappers tailed (author included) | 3 did not tail | Official stake: 2u"
+    )
+    approval["counts"]["yes"] = 5
+    assert approval_text(approval, 3).endswith("Every capper tailed")
 
 
 def test_author_modal_requires_start_but_cutoff_is_optional(monkeypatch):
@@ -195,7 +220,7 @@ def test_confirm_saves_author_cutoff_and_frozen_roster(monkeypatch):
         assert args[:3] == (500, 42, {42, 43, 44, 45, 46})
         assert args[-2:] == (start, cutoff)
         prompt.clear_reactions.assert_awaited_once()
-        assert prompt.add_reaction.await_count == 2
+        prompt.add_reaction.assert_awaited_once_with(module.TAIL)
         channel.send.assert_awaited_once()
         assert str(int(cutoff.timestamp())) in channel.send.call_args.args[0]
     asyncio.run(check())
@@ -232,7 +257,14 @@ def test_threshold_crossing_alone_does_not_publish(monkeypatch):
     cog, channel, prompt = make_cog(monkeypatch)
     asyncio.run(cog.evaluate(channel, saved_row()))
     cog.publisher.publish_approved.assert_not_awaited()
-    assert "projected 1u" in str(prompt.edit.call_args.kwargs["embed"].to_dict())
+    assert "projected 2u" in str(prompt.edit.call_args.kwargs["embed"].to_dict())
+
+
+def test_parlay_projection_is_capped_at_one_unit():
+    row = saved_row()
+    row["review"]["parsed"]["legs"].append({"selection": "Heat ML", "odds": -110})
+    fields = {field.name: field.value for field in review_embed(row).fields}
+    assert "projected 1u" in fields["Provisional result"]
 
 
 def test_approved_review_uses_saved_original_and_existing_publisher(monkeypatch):
@@ -578,7 +610,7 @@ def test_intake_keeps_private_original_and_displays_slip_on_review_message(monke
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("action", ["pass", "cancel", "confirm"])
+@pytest.mark.parametrize("action", ["cancel", "confirm"])
 def test_controls_acknowledge_before_slow_database_and_prepare_modal_safely(monkeypatch, action):
     async def check():
         cog, _, prompt = make_cog(monkeypatch)
@@ -807,7 +839,7 @@ def test_publication_failure_is_durable_and_never_retried_by_reaction(monkeypatc
     cog.evaluate = AsyncMock(side_effect=RuntimeError("uncertain send"))
     payload = SimpleNamespace(
         guild_id=123, channel_id=module.CAPPER_BALLOT_CHANNEL_ID, message_id=900,
-        emoji=module.SUPPORT, user_id=43,
+        emoji=module.TAIL, user_id=43,
     )
     asyncio.run(cog.reaction(payload, added=True))
     cog.store.fail.assert_called_once_with(500, "uncertain send")
@@ -821,7 +853,7 @@ def test_review_reactions_do_not_dispatch_settlement_and_ignore_other_channels(m
     cog.store.respond.return_value = "saved"
     cog.evaluate = AsyncMock()
     payload = SimpleNamespace(guild_id=123, channel_id=module.CAPPER_BALLOT_CHANNEL_ID,
-                              message_id=900, emoji=module.SUPPORT, user_id=43)
+                              message_id=900, emoji=module.TAIL, user_id=43)
     asyncio.run(cog.reaction(payload, added=True))
     cog.store.respond.assert_called_once_with(500, 43, "yes_add")
     cog.publisher.official.settle_play.assert_not_called()
@@ -950,7 +982,7 @@ def test_acknowledgement_checks_live_reaction_users_on_exact_notice(monkeypatch,
         async def users(**kwargs):
             yield user
         reaction = SimpleNamespace(
-            emoji=module.OPPOSE if kind == "wrong-emoji" else module.ACKNOWLEDGEMENT_EMOJI,
+            emoji="\N{THUMBS DOWN SIGN}" if kind == "wrong-emoji" else module.ACKNOWLEDGEMENT_EMOJI,
             users=users,
         )
         thread.fetch_message.return_value = SimpleNamespace(
@@ -1140,7 +1172,7 @@ def test_forum_reactions_route_to_saved_thread_and_ignore_sibling_posts(monkeypa
     cog.store.respond.return_value = "saved"
     cog.publisher.resolve_channel.return_value = thread
     cog.evaluate = AsyncMock()
-    payload = SimpleNamespace(guild_id=123, channel_id=500, message_id=900, emoji=module.SUPPORT, user_id=43)
+    payload = SimpleNamespace(guild_id=123, channel_id=500, message_id=900, emoji=module.TAIL, user_id=43)
     asyncio.run(cog.reaction(payload, added=True))
     cog.store.respond.assert_called_once_with(500, 43, "yes_add")
     assert cog.evaluate.call_args.args[0] is thread

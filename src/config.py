@@ -82,6 +82,8 @@ FREE_PLAY_ROLE_ID = get_int("FREE_PLAY_ROLE_ID") or 1569044278397632742
 # Members holding this role submit capper plays and review official slips.
 TRACKER_ROLE_ID = get_int("TRACKER_ROLE_ID") or 1328120848992960543
 TRACKER_START_DATE = get_str("TRACKER_START_DATE")
+# Confirmed slip reviews each capper may open per Eastern day; cancelled reviews count.
+CAPPER_DAILY_REVIEW_LIMIT = max(1, get_int("CAPPER_DAILY_REVIEW_LIMIT", 2) or 2)
 
 OFFICIAL_ROLE_IDS = {
     int(role_id.strip())
