@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   ArrowRight, Menu,
   MessageCircle, X,
@@ -31,6 +31,7 @@ type Result = {
 }
 type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
 type CapperSummary = { name: string; slug: string; avatar_url?: string | null; plays: number; wins: number; losses: number; net_units: number }
+type PublicResultsQuery = { capper?: string; sport?: string; officialOnly?: boolean }
 
 const resultsPageSize = 1000
 const maxCapperUnits = 3
@@ -76,13 +77,17 @@ async function fetchCapperDirectory(): Promise<CapperDirectoryEntry[]> {
   }
 }
 
-async function fetchPublicResults(): Promise<Result[]> {
+async function fetchPublicResults(options: PublicResultsQuery = {}): Promise<Result[]> {
   if (!supabase) throw new Error('Public Supabase configuration is missing.')
 
   const fetchAll = async (rpc: 'public_settled_results' | 'public_capper_settled_results') => {
     const results: Result[] = []
     for (let offset = 0; ; offset += resultsPageSize) {
-      const { data, error } = await supabase.rpc(rpc).range(offset, offset + resultsPageSize - 1)
+      let request = supabase.rpc(rpc)
+      if (options.capper) request = request.eq('capper', options.capper)
+      if (options.officialOnly) request = request.eq('tracking_scope', 'official').eq('capper_record', false)
+      if (options.sport) request = request.eq('sport', options.sport)
+      const { data, error } = await request.range(offset, offset + resultsPageSize - 1)
       if (error) throw error
       if (!Array.isArray(data)) throw new Error('Unexpected results response.')
       results.push(...data as unknown as Result[])
@@ -91,7 +96,7 @@ async function fetchPublicResults(): Promise<Result[]> {
   }
   const [results, teamCapperResults] = await Promise.all([
     fetchAll('public_settled_results'),
-    fetchAll('public_capper_settled_results'),
+    options.officialOnly ? Promise.resolve([]) : fetchAll('public_capper_settled_results'),
   ])
   return [...results, ...teamCapperResults].sort((first, second) =>
     Date.parse(second.settled_at) - Date.parse(first.settled_at))
@@ -270,28 +275,92 @@ function Website() {
   const routePath = location.pathname.replace(/\/+$/, '') || '/'
   const policyKind: PolicyKind | null = routePath === '/terms' ? 'terms' : routePath === '/privacy' ? 'privacy' : routePath === '/refunds' ? 'refunds' : null
   const sportRouteSlug = routePath.startsWith('/sports/') ? routePath.slice('/sports/'.length) : null
+  const profileSlug = routePath.startsWith('/cappers/') ? decodeURIComponent(routePath.slice('/cappers/'.length).replace(/\/$/, '')) : null
+  const sportRouteName = sportsCatalog.find((item) => item.slug === sportRouteSlug)?.name
   const [menuOpen, setMenuOpen] = useState(false)
   const [sport, setSport] = useState('All')
   const [resultsPage, setResultsPage] = useState(0)
   const [results, setResults] = useState<Result[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
-  const [retryCount, setRetryCount] = useState(0)
+  const [directoryRetryCount, setDirectoryRetryCount] = useState(0)
+  const [resultsRetryCount, setResultsRetryCount] = useState(0)
   const [directory, setDirectory] = useState<CapperDirectoryEntry[]>([])
   const [directoryState, setDirectoryState] = useState<LoadState>('loading')
+  const needsDirectory = routePath === '/' || routePath === '/cappers' || routePath.startsWith('/cappers/')
+  const needsPublicResults = needsDirectory || routePath === '/results' || Boolean(sportRouteSlug)
+  const profileCapperName = profileSlug
+    ? directory.find((entry) => capperSlug(entry.name) === profileSlug)?.name
+    : undefined
+  const publicResultsMode = !needsPublicResults
+    ? null
+    : profileSlug && directoryState === 'loading'
+      ? null
+      : profileCapperName
+        ? `capper:${profileCapperName}`
+        : routePath === '/results'
+          ? 'official'
+          : sportRouteSlug
+            ? `sport:${sportRouteName ?? ''}`
+            : 'all'
+  const directoryLoaded = useRef(false)
+  const publicResultsCache = useRef(new Map<string, Result[]>())
+  const retryResults = () => {
+    publicResultsCache.current.clear()
+    setResultsRetryCount((count) => count + 1)
+  }
+  const retryPublicData = () => {
+    directoryLoaded.current = false
+    setDirectoryRetryCount((count) => count + 1)
+    retryResults()
+  }
   useEffect(() => {
+    if (!needsDirectory || directoryLoaded.current) return
     let cancelled = false
     fetchCapperDirectory().then((entries) => {
-      if (!cancelled) { setDirectory(entries); setDirectoryState('ready') }
+      if (!cancelled) {
+        directoryLoaded.current = true
+        setDirectory(entries)
+        setDirectoryState('ready')
+      }
     }).catch(() => {
       if (!cancelled) setDirectoryState('error')
     })
     return () => { cancelled = true }
-  }, [retryCount])
+  }, [needsDirectory, directoryRetryCount])
   useEffect(() => {
+    if (!publicResultsMode) return
+    const cached = publicResultsCache.current.get(publicResultsMode)
+    if (cached) {
+      setResults(cached)
+      setLoadState('ready')
+      return
+    }
+    const fullHistory = publicResultsCache.current.get('all')
+    if (fullHistory) {
+      const projected = publicResultsMode === 'official'
+        ? fullHistory.filter((result) => result.tracking_scope === 'official' && !result.capper_record)
+        : publicResultsMode.startsWith('sport:')
+          ? fullHistory.filter((result) =>
+            result.tracking_scope === 'official' && !result.capper_record && result.sport === sportRouteName)
+          : fullHistory.filter((result) => result.capper === profileCapperName)
+      publicResultsCache.current.set(publicResultsMode, projected)
+      setResults(projected)
+      setLoadState('ready')
+      return
+    }
     let cancelled = false
-    fetchPublicResults()
+    setLoadState('loading')
+    const options: PublicResultsQuery = publicResultsMode.startsWith('capper:')
+      ? { capper: profileCapperName }
+      : publicResultsMode === 'official'
+        ? { officialOnly: true }
+        : publicResultsMode.startsWith('sport:')
+          ? { officialOnly: true, sport: sportRouteName }
+          : {}
+    fetchPublicResults(options)
       .then((loadedResults) => {
         if (!cancelled) {
+          publicResultsCache.current.set(publicResultsMode, loadedResults)
           setResults(loadedResults)
           setLoadState('ready')
         }
@@ -301,7 +370,7 @@ function Website() {
       })
 
     return () => { cancelled = true }
-  }, [retryCount])
+  }, [publicResultsMode, resultsRetryCount, profileCapperName, sportRouteName])
 
   useEffect(() => {
     if (location.pathname !== '/') {
@@ -316,8 +385,7 @@ function Website() {
   const sports: string[] = ['All', ...Array.from(new Set(publicResults.map((result) => result.sport)))]
   const officialResults = publicResults.filter((result) => result.tracking_scope === 'official' && !result.capper_record)
   const visibleResults = officialResults.filter((result) => sport === 'All' || result.sport === sport)
-  const cappers = summarizeCappers(publicResults, directoryState === 'ready' ? directory : [])
-  const profileSlug = location.pathname.startsWith('/cappers/') ? decodeURIComponent(location.pathname.slice('/cappers/'.length).replace(/\/$/, '')) : null
+  const cappers = summarizeCappers(publicResults, directory)
   const memberHandle = routePath.startsWith('/members/') ? decodeURIComponent(routePath.slice('/members/'.length)) : null
   const selectedCapper = cappers.find((capper) => capper.slug === profileSlug)
   const selectedCapperName = selectedCapper?.name
@@ -373,7 +441,7 @@ function Website() {
   const retryCapperDirectory = () => {
     setDirectoryState('loading')
     setLoadState('loading')
-    setRetryCount((count) => count + 1)
+    retryPublicData()
   }
   const capperDirectory = <CapperDirectory cappers={cappers} directoryState={directoryState} loadState={loadState} onRetry={retryCapperDirectory} standalone={routePath === '/cappers'} />
   const sectionHref = (section: string) => routePath === '/' ? `#${section}` : `/#${section}`
@@ -453,7 +521,7 @@ function Website() {
               sport={sport}
               loadState={loadState}
               onSportChange={setSport}
-              onRetry={() => { setLoadState('loading'); setRetryCount((count) => count + 1) }}
+              onRetry={() => { setLoadState('loading'); retryResults() }}
             />
           </Suspense>
         ) : routePath === '/cappers' ? (
@@ -469,7 +537,7 @@ function Website() {
               </div>
             </div>
             <Suspense fallback={<p className="account-state">Loading capper profile...</p>}>
-              <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onAppearance={updateCapperBackground} onSaved={() => setRetryCount((count) => count + 1)} />
+              <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onAppearance={updateCapperBackground} onSaved={retryPublicData} />
             </Suspense>
             <CapperSections order={capperBackground?.name === selectedCapper.name ? capperBackground.theme.appearance.section_order : ['stats', 'picks', 'charts', 'results']} sections={{
             stats: <div className="capper-profile-metrics">
@@ -513,7 +581,7 @@ function Website() {
             }} />
           </section>
         ) : profileSlug ? (
-          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); setRetryCount((count) => count + 1) }}>Retry capper directory</button>}<Link to="/cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
+          <section className="capper-not-found"><p className="eyebrow">Capper profile</p><h1>{loadState === 'loading' || directoryState === 'loading' ? 'Loading record' : loadState === 'error' || directoryState === 'error' ? 'Record unavailable' : 'Profile not found'}</h1>{directoryState === 'error' && <button className="account-secondary-button" onClick={() => { setDirectoryState('loading'); retryPublicData() }}>Retry capper directory</button>}<Link to="/cappers">Return to all cappers <ArrowRight size={16} /></Link></section>
         ) : routePath !== '/' ? (
           <section className="capper-not-found"><p className="eyebrow">Page not found</p><h1>This page isn't on the board.</h1><Link to="/">Return home <ArrowRight size={16} /></Link></section>
         ) : (
@@ -545,7 +613,7 @@ function Website() {
           </div>
           <div className="results-toolbar">
             <span aria-live="polite">{loadState === 'ready' ? officialResults.length > 0 ? `Showing ${homepagePage * 10 + 1}-${homepagePage * 10 + homepageResults.length} of ${officialResults.length} settled plays` : '0 settled plays' : loadState === 'loading' ? 'Loading results' : loadState === 'configuration' ? 'Supabase setup required' : 'Results unavailable'}</span>
-            {loadState === 'error' && <button className="results-retry" type="button" onClick={() => { setLoadState('loading'); setRetryCount((count) => count + 1) }}>Retry</button>}
+            {loadState === 'error' && <button className="results-retry" type="button" onClick={() => { setLoadState('loading'); retryResults() }}>Retry</button>}
           </div>
           {loadState === 'configuration' && <p className="data-notice">Add the public Supabase URL and anon key to <code>web/.env.local</code>, then apply the public-results SQL migration.</p>}
           {loadState === 'error' && <p className="data-notice">Live results could not be loaded. Check the Supabase public-results migration and project settings, then retry.</p>}

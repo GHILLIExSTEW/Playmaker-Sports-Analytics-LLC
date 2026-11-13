@@ -291,8 +291,9 @@ class PlaySettlement(commands.Cog):
             if channel is None:
                 return
             candidates = await asyncio.to_thread(self.features.suggestion_candidates)
+            event_cache = {}
             for play in candidates:
-                suggestion = await asyncio.to_thread(self.features.suggest, play)
+                suggestion = await asyncio.to_thread(self.features.suggest, play, event_cache)
                 if suggestion is None:
                     continue
                 await channel.send(

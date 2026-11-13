@@ -343,6 +343,17 @@ class PlayFeaturesService:
         users = self._all(lambda: client.table("users").select("id,discord_user_id,display_name,username").order("id"))
         return plays, users, self.sport_slugs()
 
+    def personal_history(self, discord_user_id: int) -> tuple[list[dict], list[dict], dict]:
+        users = self.db.select(
+            "users", "id,discord_user_id,display_name,username",
+            {"discord_user_id": str(discord_user_id)},
+        ).data or []
+        plays = self._all(lambda: self._client().rpc(
+            "member_personal_stats_plays",
+            {"p_discord_user_id": str(discord_user_id)},
+        ).order("id"))
+        return plays, users[:1], self.sport_slugs()
+
     def vault_bets(self, owner_id: str | None = None) -> list[dict]:
         client = self._client()
 
@@ -363,7 +374,7 @@ class PlayFeaturesService:
     def personal_stats(self, discord_user_id: int, now: datetime | None = None) -> dict:
         now = (now or datetime.now(EASTERN)).astimezone(EASTERN)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        plays, users, sports = self.history()
+        plays, users, sports = self.personal_history(discord_user_id)
         published = [play for play in unique_published(plays) if play.get("status") in SETTLED_RESULTS]
 
         capper = None
@@ -424,8 +435,13 @@ class PlayFeaturesService:
         legs = self.db._execute(lambda: client.table("play_legs").select(
             "play_id,leg_number,selection,odds,details"
         ).in_("play_id", ids).execute()).data or []
+        legs_by_play = {}
+        for leg in legs:
+            legs_by_play.setdefault(int(leg["play_id"]), []).append(leg)
         for play in plays:
-            play["leg_records"] = sorted((leg for leg in legs if int(leg["play_id"]) == int(play["id"])), key=lambda leg: leg["leg_number"])
+            play["leg_records"] = sorted(
+                legs_by_play.get(int(play["id"]), []), key=lambda leg: leg["leg_number"],
+            )
         # Only plays whose every leg has structured details from the image reader can be graded.
         return [
             play for play in plays
@@ -433,7 +449,10 @@ class PlayFeaturesService:
             and all((leg.get("details") or {}).get("sport") in GRADABLE_SPORTS for leg in play["leg_records"])
         ]
 
-    def find_event(self, details: dict, created_at: str) -> tuple[dict, bool] | None:
+    def find_event(
+        self, details: dict, created_at: str,
+        event_cache: dict[tuple[str, str, str], list[dict]] | None = None,
+    ) -> tuple[dict, bool] | None:
         sport = details.get("sport")
         if sport not in GRADABLE_SPORTS or not details.get("home_name") or not details.get("away_name"):
             return None
@@ -445,21 +464,26 @@ class PlayFeaturesService:
             if posted.tzinfo is None:
                 posted = posted.replace(tzinfo=timezone.utc)
             start, end = posted - timedelta(hours=12), posted + timedelta(days=4)
-        client = self._client()
-        if sport == "nfl":
-            rows = self.db._execute(lambda: client.table("api_sports_nfl_games").select(
-                "game_id,kickoff_at,home_team_name,away_team_name,status_short,home_score,away_score"
-            ).gte("kickoff_at", start.isoformat()).lt("kickoff_at", end.isoformat()).execute()).data or []
-            events = [{
-                "id": str(row["game_id"]), "start_at": row["kickoff_at"], "home_name": row["home_team_name"],
-                "away_name": row["away_team_name"], "status_code": row["status_short"],
-                "home_score": row["home_score"], "away_score": row["away_score"],
-            } for row in rows]
-        else:
-            rows = self.db._execute(lambda: client.table("api_sports_events").select(
-                "event_id,start_at,home_name,away_name,status_code,home_score,away_score"
-            ).eq("sport_slug", sport).gte("start_at", start.isoformat()).lt("start_at", end.isoformat()).execute()).data or []
-            events = [{**row, "id": str(row["event_id"])} for row in rows]
+        cache_key = (sport, start.isoformat(), end.isoformat())
+        events = event_cache.get(cache_key) if event_cache is not None else None
+        if events is None:
+            client = self._client()
+            if sport == "nfl":
+                rows = self.db._execute(lambda: client.table("api_sports_nfl_games").select(
+                    "game_id,kickoff_at,home_team_name,away_team_name,status_short,home_score,away_score"
+                ).gte("kickoff_at", start.isoformat()).lt("kickoff_at", end.isoformat()).execute()).data or []
+                events = [{
+                    "id": str(row["game_id"]), "start_at": row["kickoff_at"], "home_name": row["home_team_name"],
+                    "away_name": row["away_team_name"], "status_code": row["status_short"],
+                    "home_score": row["home_score"], "away_score": row["away_score"],
+                } for row in rows]
+            else:
+                rows = self.db._execute(lambda: client.table("api_sports_events").select(
+                    "event_id,start_at,home_name,away_name,status_code,home_score,away_score"
+                ).eq("sport_slug", sport).gte("start_at", start.isoformat()).lt("start_at", end.isoformat()).execute()).data or []
+                events = [{**row, "id": str(row["event_id"])} for row in rows]
+            if event_cache is not None:
+                event_cache[cache_key] = events
 
         matches = []
         for event in events:
@@ -469,11 +493,13 @@ class PlayFeaturesService:
                 matches.append((event, True))
         return matches[0] if len(matches) == 1 else None
 
-    def suggest(self, play: dict) -> dict | None:
+    def suggest(
+        self, play: dict, event_cache: dict[tuple[str, str, str], list[dict]] | None = None,
+    ) -> dict | None:
         results, notes = [], []
         for leg in play["leg_records"]:
             details = dict(leg.get("details") or {})
-            found = self.find_event(details, play["created_at"])
+            found = self.find_event(details, play["created_at"], event_cache)
             if found is None:
                 results.append(None)
                 continue

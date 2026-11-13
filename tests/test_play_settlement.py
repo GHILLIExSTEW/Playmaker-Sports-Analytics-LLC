@@ -302,6 +302,7 @@ def test_suggestion_job_marks_only_after_send(load_settlement):
     cog.features.mark_suggested.side_effect = lambda play_id: events.append(("mark", play_id))
     asyncio.run(cog.auto_settle_suggestions.coro(cog))
     assert events == ["send", ("mark", 8)]
+    assert cog.features.suggest.call_args_list[0].args[1] is cog.features.suggest.call_args_list[1].args[1]
     assert [item.custom_id for item in channel.send.call_args.kwargs["view"].children] == ["pm:as:8:win", "pm:asx:8"]
 
 

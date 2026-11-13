@@ -193,7 +193,7 @@ def test_personal_stats_credits_a_supporting_voter_not_only_the_play_owner():
     approved = play(1, 1, "loss", units=2, odds=100, settled="2026-10-05T15:00:00+00:00")
     approved.update(tracking_scope="official", team_approval={"voter_choices": {"111": "yes", "222": "yes"}})
     service = PlayFeaturesService(database=Mock())
-    service.history = Mock(return_value=(
+    service.personal_history = Mock(return_value=(
         [approved],
         [{"id": 1, "discord_user_id": "111"}, {"id": 2, "discord_user_id": "222"}],
         {1: "nfl"},
@@ -206,6 +206,85 @@ def test_personal_stats_credits_a_supporting_voter_not_only_the_play_owner():
     assert stats["capper"]["all_time"]["losses"] == 1
     assert stats["capper"]["all_time"]["risked"] == 2
     assert stats["capper"]["all_time"]["net"] == -2
+
+
+def test_personal_history_uses_the_scoped_database_rpc():
+    user = {"id": 2, "discord_user_id": "222", "display_name": "Bee", "username": "bee"}
+    play_rows = [play(index, 1, "loss") for index in range(1, 1002)]
+    client = Mock()
+    client.rpc.return_value.order.return_value = client.rpc.return_value
+    client.rpc.return_value.range.side_effect = [
+        SimpleNamespace(execute=Mock(return_value=SimpleNamespace(data=play_rows[:1000]))),
+        SimpleNamespace(execute=Mock(return_value=SimpleNamespace(data=play_rows[1000:]))),
+    ]
+    service = PlayFeaturesService(database=Mock())
+    service.db._ensure_client.return_value = client
+    service.db._execute.side_effect = lambda operation: operation()
+    service.db.select.side_effect = [
+        SimpleNamespace(data=[user]),
+        SimpleNamespace(data=[{"id": 1, "api_slug": "nfl"}]),
+    ]
+
+    plays, users, sports = service.personal_history(222)
+
+    assert plays == play_rows
+    assert users == [user]
+    assert sports == {1: "nfl"}
+    assert client.rpc.call_args_list[0].args == (
+        "member_personal_stats_plays", {"p_discord_user_id": "222"},
+    )
+    assert client.rpc.return_value.range.call_args_list == [
+        ((0, 999),), ((1000, 1999),),
+    ]
+    assert client.rpc.return_value.order.call_count == 2
+    assert service.db.select.call_args_list[0].args == (
+        "users", "id,discord_user_id,display_name,username", {"discord_user_id": "222"},
+    )
+
+
+def test_find_event_reuses_cached_candidates_for_the_same_window():
+    event = {
+        "event_id": 11, "start_at": "2026-10-05T19:00:00Z",
+        "home_name": "Lakers", "away_name": "Celtics", "status_code": "FT",
+        "home_score": 110, "away_score": 100,
+    }
+
+    class Query:
+        def __init__(self):
+            self.rows = [event]
+
+        def select(self, *_args):
+            return self
+
+        def eq(self, *_args):
+            return self
+
+        def gte(self, *_args):
+            return self
+
+        def lt(self, *_args):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self.rows)
+
+    client = Mock()
+    client.table.return_value = Query()
+    service = PlayFeaturesService(database=Mock())
+    service.db._ensure_client.return_value = client
+    service.db._execute.side_effect = lambda operation: operation()
+    details = {
+        "sport": "basketball", "home_name": "Los Angeles Lakers",
+        "away_name": "Boston Celtics", "event_date": "2026-10-05",
+    }
+    cache = {}
+
+    first = service.find_event(details, "2026-10-05T12:00:00Z", cache)
+    second = service.find_event(details, "2026-10-05T12:00:00Z", cache)
+
+    assert first == second
+    assert first[0]["id"] == "11"
+    client.table.assert_called_once_with("api_sports_events")
 
 
 def test_build_recap_groups_league_aliases_into_correct_records():

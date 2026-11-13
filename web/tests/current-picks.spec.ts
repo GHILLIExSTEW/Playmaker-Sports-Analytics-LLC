@@ -336,6 +336,27 @@ test('capper directory shows loading, retryable errors and an empty roster', asy
   await expect(page.locator('.capper-card')).toHaveCount(0)
 })
 
+test('public history requests wait until a route needs them', async ({ page }) => {
+  await mockApi(page)
+  const historyRequests: string[] = []
+  page.on('request', (request) => {
+    if (/\/rpc\/public_(capper_directory|settled_results|capper_settled_results)/.test(request.url())) {
+      historyRequests.push(request.url())
+    }
+  })
+
+  await page.goto('/terms')
+  await expect(page.getByRole('heading', { name: 'Terms of Service' })).toBeVisible()
+  expect(historyRequests).toHaveLength(0)
+
+  await page.goto('/results')
+  await expect(page.getByRole('heading', { name: 'Settled results.' })).toBeVisible()
+  await expect.poll(() => historyRequests.length).toBeGreaterThan(0)
+  const officialQuery = new URL(historyRequests.find((url) => url.includes('/rpc/public_settled_results'))!).searchParams
+  expect(officialQuery.get('tracking_scope')).toBe('eq.official')
+  expect(officialQuery.get('capper_record')).toBe('eq.false')
+})
+
 test('capper directory keeps profiles accessible when performance records fail', async ({ page }) => {
   await mockApi(page)
   await page.route('**/rest/v1/rpc/public_settled_results*', (route) => route.fulfill({ status: 500, json: { message: 'Results unavailable' } }))
