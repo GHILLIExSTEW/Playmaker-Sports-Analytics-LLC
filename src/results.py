@@ -7,8 +7,8 @@ from datetime import date, datetime
 import discord
 
 from src.services.play_features_service import (
-    EASTERN, SETTLED_RESULTS, SPORT_NAMES, normalize_sport_slug, record_summary, settled_time, signed_units,
-    unique_published,
+    EASTERN, SETTLED_RESULTS, SPORT_NAMES, capped_tail_play, normalize_sport_slug, record_summary, settled_time,
+    signed_units, unique_published,
 )
 
 PAGE_SIZE = 10
@@ -61,6 +61,10 @@ def filter_results(
         if capper_id is not None and play.get("tracking_scope", "capper") == "official":
             capper_discord_id = str(capper_id)
             play = {**play, "_display_user_id": user_ids.get(capper_discord_id, capper_discord_id)}
+            # Tailing cappers record officials at a 1u max stake; the author keeps the full stake.
+            approval_author = str(approval.get("author_id") or "") if isinstance(approval, dict) else ""
+            if capper_discord_id not in {approval_author, author}:
+                play = capped_tail_play(play)
         if play.get("status") not in SETTLED_RESULTS or (result and play["status"] != result):
             continue
         slug = normalize_sport_slug(sports.get(play.get("sport_id"))) or "official"

@@ -146,8 +146,9 @@ def test_build_recap_dedupes_messages_and_ranks_cappers():
 
 
 def test_approved_team_play_is_also_an_individual_capper_record():
-    approved = play(1, 42, "win")
+    approved = play(1, 42, "win", units=3)
     approved.update(tracking_scope="official", team_approval={
+        "author_id": "42",
         "voter_choices": {"42": "yes", "84": "yes", "126": "no"},
     })
     records = individual_capper_plays([approved], [
@@ -156,20 +157,24 @@ def test_approved_team_play_is_also_an_individual_capper_record():
         {"id": 4, "discord_user_id": "126"},
     ])
     assert [row["user_id"] for row in records] == ["2", "3"]
-    assert all(row["units"] == approved["units"] and row["status"] == "win" for row in records)
+    assert all(row["status"] == "win" for row in records)
+    # The author keeps the full official stake; the tailing capper is capped at 1u.
+    assert [row["units"] for row in records] == [3, 1.0]
     assert individual_capper_plays([
         {**approved, "team_approval": {"voter_choices": {"42": "no"}}},
         {**approved, "tracking_scope": "test"},
     ], [{"id": 2, "discord_user_id": "42"}]) == []
 
 
-@pytest.mark.parametrize(("status", "wins", "losses", "net"), [
-    ("win", 1, 0, 2),
-    ("loss", 0, 1, -2),
+@pytest.mark.parametrize(("status", "expected"), [
+    ("win", [("Ace", 1, 0, 2, 2.0), ("Bee", 1, 0, 1, 1.0)]),
+    ("loss", [("Bee", 0, 1, 1, -1.0), ("Ace", 0, 1, 2, -2.0)]),
 ])
-def test_team_record_counts_once_but_full_stake_for_every_yes_voter(status, wins, losses, net):
+def test_team_record_counts_once_with_full_stake_for_the_author_and_1u_for_tails(status, expected):
     approved = play(1, 99, status, units=2, odds=100, settled="2026-10-05T15:00:00+00:00")
-    approved.update(tracking_scope="official", team_approval={"voter_choices": {"42": "yes", "84": "yes"}})
+    approved.update(tracking_scope="official", team_approval={
+        "author_id": "42", "voter_choices": {"42": "yes", "84": "yes"},
+    })
     users = [
         {"id": 2, "discord_user_id": "42", "display_name": "Ace"},
         {"id": 3, "discord_user_id": "84", "display_name": "Bee"},
@@ -181,15 +186,13 @@ def test_team_record_counts_once_but_full_stake_for_every_yes_voter(status, wins
     )
 
     assert recap["count"] == 1
-    assert recap["total"]["wins"] == wins
-    assert recap["total"]["losses"] == losses
+    assert recap["total"]["wins"] == expected[0][1]
+    assert recap["total"]["losses"] == expected[0][2]
     assert [(row["name"], row["wins"], row["losses"], row["risked"], row["net"])
-            for row in recap["cappers"]] == [
-        ("Ace", wins, losses, 2, net), ("Bee", wins, losses, 2, net),
-    ]
+            for row in recap["cappers"]] == expected
 
 
-def test_personal_stats_credits_a_supporting_voter_not_only_the_play_owner():
+def test_personal_stats_credits_a_supporting_voter_at_a_1u_capped_stake():
     approved = play(1, 1, "loss", units=2, odds=100, settled="2026-10-05T15:00:00+00:00")
     approved.update(tracking_scope="official", team_approval={"voter_choices": {"111": "yes", "222": "yes"}})
     service = PlayFeaturesService(database=Mock())
@@ -204,8 +207,28 @@ def test_personal_stats_credits_a_supporting_voter_not_only_the_play_owner():
     stats = service.personal_stats(222, datetime(2026, 10, 5, 12, tzinfo=EASTERN))
 
     assert stats["capper"]["all_time"]["losses"] == 1
-    assert stats["capper"]["all_time"]["risked"] == 2
-    assert stats["capper"]["all_time"]["net"] == -2
+    assert stats["capper"]["all_time"]["risked"] == 1
+    assert stats["capper"]["all_time"]["net"] == -1
+
+    author = service.personal_stats(111, datetime(2026, 10, 5, 12, tzinfo=EASTERN))
+
+    assert author["capper"]["all_time"]["risked"] == 2
+    assert author["capper"]["all_time"]["net"] == -2
+
+
+def test_capper_tail_stats_cap_each_tailed_play_at_1u():
+    tailed = play(9, 1, "win", units=3, odds=100)
+    service = PlayFeaturesService(database=Mock())
+    service.history = Mock(return_value=([tailed], [], {}))
+    service.vault_bets = Mock(return_value=[])
+    service.db.select.return_value = SimpleNamespace(data=[{"play_id": 9}])
+
+    when = datetime(2026, 10, 5, 12, tzinfo=EASTERN)
+    member = service.personal_stats(555, when)
+    capper = service.personal_stats(555, when, is_capper=True)
+
+    assert (member["tails"]["risked"], member["tails"]["net"], member["tails"]["capped"]) == (3, 3, False)
+    assert (capper["tails"]["risked"], capper["tails"]["net"], capper["tails"]["capped"]) == (1, 1, True)
 
 
 def test_personal_history_uses_the_scoped_database_rpc():

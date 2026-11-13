@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.config import FREE_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID, VIP_CHAT_CHANNEL_ID
+from src.config import FREE_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID, TRACKER_ROLE_ID, VIP_CHAT_CHANNEL_ID
 from src.reporting import MEDALS, TRACKER_TIMEZONE, clip_lines, record_line
 from src.services.membership_service import MembershipService
 from src.services.play_features_service import PlayFeaturesService, vault_leaderboard
@@ -34,7 +34,11 @@ def build_mystats_embed(member: discord.abc.User, stats: dict) -> discord.Embed:
         )[:1024], inline=False)
     tails = stats["tails"]
     tail_text = f"{record_line(tails)}\nOpen tails: {tails['open']}" if tails["count"] else "You haven't tailed any plays yet — tap 🎯 Tail under a play."
-    embed.add_field(name="🎯 Plays You Tailed (at the capper's units)", value=tail_text, inline=False)
+    tail_label = (
+        "🎯 Plays You Tailed (cappers record tails at 1u max)"
+        if tails.get("capped") else "🎯 Plays You Tailed (at the capper's units)"
+    )
+    embed.add_field(name=tail_label, value=tail_text, inline=False)
     vault = stats["vault"]
     vault_text = (
         f"This month: {record_line(vault['month'])}\nAll-time: {record_line(vault)}"
@@ -43,6 +47,10 @@ def build_mystats_embed(member: discord.abc.User, stats: dict) -> discord.Embed:
     embed.add_field(name="🏦 Your Vault", value=vault_text, inline=False)
     embed.set_footer(text="Eastern Time")
     return embed
+
+
+def member_is_capper(member) -> bool:
+    return bool(TRACKER_ROLE_ID) and any(role.id == TRACKER_ROLE_ID for role in getattr(member, "roles", []))
 
 
 def find_share_role(guild, role_id: int | None, role_name: str):
@@ -164,7 +172,9 @@ class MemberActivity(commands.Cog):
     async def mystats_command(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            stats = await asyncio.to_thread(self.features.personal_stats, interaction.user.id)
+            stats = await asyncio.to_thread(
+                self.features.personal_stats, interaction.user.id, is_capper=member_is_capper(interaction.user),
+            )
             embed = build_mystats_embed(interaction.user, stats)
         except Exception as exc:
             logger.exception("mystats_failed user=%s", interaction.user.id)

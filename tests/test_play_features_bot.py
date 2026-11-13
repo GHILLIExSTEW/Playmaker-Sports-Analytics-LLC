@@ -81,6 +81,12 @@ def test_mystats_embed_sections():
     assert names[0] == "📣 Your Official Plays"
     assert "W2" in embed.fields[0].value
     assert "Open tails: 1" in embed.fields[1].value
+    assert embed.fields[1].name == "🎯 Plays You Tailed (at the capper's units)"
+
+    capped = activity_module.build_mystats_embed(SimpleNamespace(display_name="Ace"), {
+        **stats, "tails": {**stats["tails"], "capped": True},
+    })
+    assert capped.fields[1].name == "🎯 Plays You Tailed (cappers record tails at 1u max)"
 
     empty = activity_module.build_mystats_embed(SimpleNamespace(display_name="New"), {
         "capper": None,

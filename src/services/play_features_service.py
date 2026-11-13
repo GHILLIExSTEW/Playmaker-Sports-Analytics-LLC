@@ -27,6 +27,12 @@ FINAL_CODES = {"FT", "AOT", "AP"}
 LEG_TEXT_FIELDS = ("sport", "home_name", "away_name", "event_date", "market", "side", "scope")
 SETTLED_RESULTS = {"win", "loss", "void", "partial"}
 SUGGEST_LOOKBACK = timedelta(days=14)
+# Cappers tailing a play they did not author record it at a maximum 1u stake, win or lose.
+TAIL_RECORD_UNIT_CAP = 1.0
+
+
+def capped_tail_play(play: dict) -> dict:
+    return {**play, "units": min(float(play["units"]), TAIL_RECORD_UNIT_CAP)}
 
 
 def normalize_sport_slug(value: str | None) -> str | None:
@@ -218,15 +224,21 @@ def individual_capper_plays(plays: list[dict], users: list[dict]) -> list[dict]:
         choices = approval.get("voter_choices") if isinstance(approval, dict) else None
         if play.get("tracking_scope") != "official" or not isinstance(choices, dict):
             continue
+        author_discord_id = str(approval.get("author_id") or "")
         for discord_user_id, choice in choices.items():
             discord_user_id = str(discord_user_id)
             if choice == "yes":
-                records.append({
+                user_id = user_ids.get(discord_user_id, discord_user_id)
+                record = {
                     **play,
-                    "user_id": user_ids.get(discord_user_id, discord_user_id),
+                    "user_id": user_id,
                     "_capper_record": True,
                     "_capper_discord_user_id": discord_user_id,
-                })
+                }
+                # The author keeps the full official stake; tailing cappers record at most 1u.
+                if discord_user_id != author_discord_id and user_id != str(play["user_id"]):
+                    record = capped_tail_play(record)
+                records.append(record)
     return records
 
 
@@ -371,7 +383,7 @@ class PlayFeaturesService:
         rows = self.db.select("users", "id", {"discord_user_id": str(discord_user_id)}).data
         return int(rows[0]["id"]) if rows else None
 
-    def personal_stats(self, discord_user_id: int, now: datetime | None = None) -> dict:
+    def personal_stats(self, discord_user_id: int, now: datetime | None = None, *, is_capper: bool = False) -> dict:
         now = (now or datetime.now(EASTERN)).astimezone(EASTERN)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         plays, users, sports = self.personal_history(discord_user_id)
@@ -398,11 +410,14 @@ class PlayFeaturesService:
 
         tailed_ids = {int(row["play_id"]) for row in self.db.select("play_tails", "play_id", {"discord_user_id": str(discord_user_id)}).data or []}
         tailed = [play for play in published if int(play["id"]) in tailed_ids]
+        if is_capper:
+            # Cappers record tails at a maximum 1u stake; members keep the capper's published units.
+            tailed = [capped_tail_play(play) for play in tailed]
         open_tails = len(tailed_ids) - len(tailed)
         vault = self.vault_bets(str(discord_user_id))
         return {
             "capper": capper,
-            "tails": {**record_summary(tailed), "open": open_tails, "count": len(tailed_ids)},
+            "tails": {**record_summary(tailed), "open": open_tails, "count": len(tailed_ids), "capped": is_capper},
             "vault": {**record_summary(vault), "count": len(vault), "month": record_summary([bet for bet in vault if bet.get("settled_at") and settled_time(bet) >= month_start])},
         }
 

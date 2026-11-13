@@ -44,13 +44,21 @@ def test_mystats_retains_private_response_and_share_destination(vip, tier):
     cog.membership.has_paid_access.return_value = vip
     interaction = request()
     asyncio.run(cog.mystats_command.callback(cog, interaction))
-    cog.features.personal_stats.assert_called_once_with(42)
+    cog.features.personal_stats.assert_called_once_with(42, is_capper=False)
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     kwargs = interaction.followup.send.call_args.kwargs
     assert kwargs["ephemeral"] is True
     assert kwargs["embed"].title == "📈 Stats for Ace"
     assert kwargs["view"].tier == tier
     assert kwargs["view"].activity is cog
+
+
+def test_mystats_caps_tail_records_for_capper_role_holders():
+    cog = activity()
+    interaction = request()
+    interaction.user.roles = [SimpleNamespace(id=activity_module.TRACKER_ROLE_ID)]
+    asyncio.run(cog.mystats_command.callback(cog, interaction))
+    cog.features.personal_stats.assert_called_once_with(42, is_capper=True)
 
 
 def test_mystats_membership_failure_keeps_stats_private_without_public_share(caplog):

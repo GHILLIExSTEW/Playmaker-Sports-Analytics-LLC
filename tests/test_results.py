@@ -84,6 +84,18 @@ def test_official_results_filter_includes_yes_voters_as_individual_cappers():
     assert not filter_results([approved], USERS, SPORTS, operator_ids=None, capper_id=42, now=NOW)
 
 
+def test_capper_filtered_official_rows_cap_tailing_cappers_at_1u_but_not_the_author():
+    approved = play(
+        1, tracking_scope="official",
+        team_approval={"author_id": "42", "voter_choices": {"42": "yes", "43": "yes"}},
+    )
+    author_rows = filter_results([approved], USERS, SPORTS, operator_ids=None, capper_id=42, now=NOW)
+    tail_rows = filter_results([approved], USERS, SPORTS, operator_ids=None, capper_id=43, now=NOW)
+
+    assert author_rows[0]["units"] == 2
+    assert tail_rows[0]["units"] == 1.0
+
+
 def test_sport_alias_filter_and_result_label_use_canonical_league_name():
     rows = [play(1)]
     assert filter_rows(rows, sport="nba") == rows

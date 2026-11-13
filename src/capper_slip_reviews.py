@@ -115,7 +115,8 @@ def review_embed(row: dict) -> discord.Embed:
                   "There is no down vote or pass - not reacting simply means no tail."
                   " One tail from another capper publishes the official at 2u; two or more lock the 3u maximum."
                   " Parlays never exceed 1u, and slips with 3+ legs cannot go official."
-                  " Locks at the cutoff or when every capper has tailed. Published units never change.",
+                  " Locks at the cutoff or when every capper has tailed. Published units never change."
+                  " The author records the full official stake; tailing cappers record at most 1u, win or lose.",
             inline=False,
         )
     return embed
