@@ -769,5 +769,58 @@ test(`website member access and current picks enforce server authorization (${ha
     assert.equal(await paid(), false)
     assert.deepEqual(await roleRows(), [])
   })
+  await t.test('a new paid period restores departed members while manual removals stay blocked', async () => {
+    await load('../../supabase/migrations/20261113180000_departure_block_payment_restoration.sql')
+    const state = (hasRole, departed = false) => call(
+      `select public.record_highroller_access_state('986001',${hasRole},false,${departed})`, 'service_role',
+    )
+    const paid = async () => (await call("select public.discord_has_paid_access('986001') as allowed", 'service_role'))[0].allowed
+    const roleRows = () => call(
+      "select * from public.highroller_role_entitlements('biz_rCNwfXRlnl0bFU',array['plan_test'],array[]::text[])", 'service_role',
+    )
+    const blockReason = async () => (await db.query(
+      "select block_reason from public.highroller_access_states where discord_user_id='986001'",
+    )).rows[0].block_reason
+    // Blocks that predate reason tracking stay persistent, even against a newer paid period.
+    assert.equal(await blockReason(), 'role_removed')
+    await db.exec(`
+      update public.highroller_access_states set blocked_at=now()-interval '1 hour';
+      update public.whop_memberships set paid_from=now()-interval '10 minutes', verified_at=now()
+        where membership_id='revocation-paid';
+    `)
+    assert.deepEqual(await roleRows(), [])
+    // Staff re-adding the role clears the block and restores the entitlement.
+    await state(true)
+    assert.equal(await blockReason(), null)
+    assert.equal(await paid(), true)
+    assert.equal((await roleRows()).some(row => row.source === 'whop'), true)
+    // Leaving the server blocks again; the pre-departure paid period cannot lift it.
+    await state(false, true)
+    assert.equal(await blockReason(), 'departed')
+    assert.equal(await paid(), false)
+    await db.exec(`
+      update public.highroller_access_states set blocked_at=now()-interval '5 minutes';
+      update public.whop_memberships set verified_at=now() where membership_id='revocation-paid';
+    `)
+    assert.deepEqual(await roleRows(), [])
+    // A verified paid period that started after the departure restores the role
+    // entitlement; access itself still waits for the bot to re-assign the role.
+    await db.exec(`
+      insert into public.whop_memberships
+        (membership_id,discord_user_id,account_id,plan_id,status,paid_from,paid_through,
+         payment_id,paid,cancel_at_period_end,source_updated_at,verified_at,verification_reason)
+      values ('departure-return','986001','biz_rCNwfXRlnl0bFU','plan_test','active',now()-interval '1 minute',
+        now()+interval '29 days','return-payment',true,false,now(),now(),'Departure return test')
+    `)
+    assert.equal((await roleRows()).some(row => row.source === 'whop'), true)
+    assert.equal(await paid(), false)
+    await state(true)
+    assert.equal(await blockReason(), null)
+    assert.equal(await paid(), true)
+    // Roster reconciliation marks absent members as departed, blocking until they pay again.
+    await call("select public.sync_highroller_access_states('[]'::jsonb)", 'service_role')
+    assert.equal(await blockReason(), 'departed')
+    assert.deepEqual(await roleRows(), [])
+  })
 })
 }

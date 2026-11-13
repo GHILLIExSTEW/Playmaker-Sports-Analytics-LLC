@@ -152,14 +152,20 @@ Look for `highroller_grandfather_captured` in the journal and use
 Manual HIGHROLLER removal now revokes ordinary website, stats and Vault access,
 including paid/trial and grandfather entitlements, and persistently blocks automatic
 Whop role restoration. Manually adding HIGHROLLER back clears the block and restores
-otherwise-valid membership access. Cappers and existing owner/admin privileges are
+otherwise-valid membership access. Leaving the server (or being recorded as departed
+by roster reconciliation) blocks restoration the same way, but a departure block lifts
+on its own once a new verified paid period starts after the departure: the next sync
+re-assigns HIGHROLLER and clears the block. Paid periods that began before the
+departure never lift it, and manual-removal blocks (including blocks that predate
+departure tracking) always require a staff re-add. Cappers and existing owner/admin
+privileges are
 exempt from the role requirement; exemption does not create owner/research privileges
 or fabricate a paid entitlement. Bots are never exempt.
 
 Role/member gateway updates save current Discord state immediately; the complete
 roster is reconciled every five minutes and after role changes. Missing or older
 than 15-minute role evidence denies member access. Full-roster reconciliation also
-revokes departed members, and persistent blocks survive restarts and fresh Whop
+revokes departed members, and manual-removal blocks survive restarts and fresh Whop
 payments. Existing grandfather members already missing HIGHROLLER at deployment are
 blocked on the first snapshot. Apply the migration and deploy/restart together:
 until the bot publishes a verified roster, ordinary access fails closed.

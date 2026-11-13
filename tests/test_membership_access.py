@@ -156,7 +156,15 @@ def test_live_role_changes_publish_current_state_not_stale_event(grandfather_syn
 def test_member_leaving_revokes_access_and_blocks_restoration(grandfather_sync):
     sync, guild, _, _ = grandfather_sync
     asyncio.run(sync.on_member_remove(SimpleNamespace(id=123, guild=guild)))
-    sync.service.record_highroller_access.assert_called_once_with(123, False, False)
+    sync.service.record_highroller_access.assert_called_once_with(123, False, False, True)
+
+
+def test_vanished_member_is_recorded_as_departed(grandfather_sync):
+    sync, guild, members, _ = grandfather_sync
+    guild.fetch_member = AsyncMock(side_effect=discord.NotFound(Mock(status=404), "Unknown Member"))
+    event = SimpleNamespace(id=members[0].id, guild=guild, roles=[])
+    asyncio.run(sync.on_member_update(event, event))
+    sync.service.record_highroller_access.assert_called_once_with(members[0].id, False, False, True)
 
 
 def test_roster_failure_prevents_all_role_changes(grandfather_sync):

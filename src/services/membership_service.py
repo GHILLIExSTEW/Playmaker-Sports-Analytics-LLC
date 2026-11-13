@@ -83,10 +83,13 @@ class MembershipService:
             {int(row["discord_user_id"]) for row in rows if row["source"] == "grandfather"},
         )
 
-    def record_highroller_access(self, member_id: int, has_role: bool, exempt: bool) -> None:
+    def record_highroller_access(
+        self, member_id: int, has_role: bool, exempt: bool, departed: bool = False,
+    ) -> None:
         result = self.db._execute(lambda: self.db._ensure_client().rpc(
             "record_highroller_access_state", {
                 "p_discord_user_id": str(member_id), "p_has_role": has_role, "p_exempt": exempt,
+                "p_departed": departed,
             },
         ).execute()).data
         if result is not True:

@@ -42,7 +42,7 @@ class MembershipRoleSync:
                     self.service.record_highroller_access, current.id, state["has_role"], state["exempt"],
                 )
             except discord.NotFound:
-                await asyncio.to_thread(self.service.record_highroller_access, after.id, False, False)
+                await asyncio.to_thread(self.service.record_highroller_access, after.id, False, False, True)
             except Exception:
                 logger.exception("highroller_access_update_failed member=%s", after.id)
                 raise
@@ -51,7 +51,7 @@ class MembershipRoleSync:
         if member.guild.id != self.guild_id or self.role_id != HIGHROLLER_ROLE_ID:
             return
         async with self.lock:
-            await asyncio.to_thread(self.service.record_highroller_access, member.id, False, False)
+            await asyncio.to_thread(self.service.record_highroller_access, member.id, False, False, True)
 
     @staticmethod
     def excluded_from_highroller(member, guild) -> bool:
