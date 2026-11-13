@@ -10,6 +10,7 @@ type Result = {
   units: number
   status: 'win' | 'loss' | 'void' | 'partial'
   net_units: number
+  analysis?: string
 }
 
 type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
@@ -67,7 +68,7 @@ export default function AllResultsPage({
         {results.map((result, index) => (
           <div className="result-row" role="row" key={`${result.settled_at}-${result.capper}-${index}`}>
             <span className="result-date">{formatDate(result.settled_at)}<small>{result.sport}</small></span>
-            <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small></span>
+            <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small>{!!result.analysis?.trim() && <details className="result-insight"><summary>Capper insight</summary><p>{result.analysis}</p></details>}</span>
             <span>{result.capper}</span><span>{formatUnits(result.units)}</span>
             <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
             <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(result.net_units)}</span>

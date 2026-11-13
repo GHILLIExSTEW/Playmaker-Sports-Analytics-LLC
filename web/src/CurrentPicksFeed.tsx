@@ -5,6 +5,7 @@ import { MemberAccessNotice } from './MemberAccess'
 import { useMemberAccess } from './memberAccessContext'
 import { supabase } from './supabaseClient'
 import PickInsightEditor from './PickInsightEditor'
+import PastPicksFeed from './PastPicksFeed'
 
 type CurrentPick = {
   id: number
@@ -188,5 +189,6 @@ export default function CurrentPicksFeed({ capper }: { capper?: string }) {
         </article>)}</div>}
       {ready && !error && filtered.length > visibleCount && <button className="account-secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Show more picks</button>}
     </>}
+    {!capper && <PastPicksFeed />}
   </section>
 }

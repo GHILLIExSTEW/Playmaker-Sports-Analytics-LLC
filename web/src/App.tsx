@@ -25,6 +25,7 @@ type Result = {
   units: number
   status: ResultStatus
   net_units: number
+  analysis?: string
   avatar_url?: string | null
   tracking_scope: 'official' | 'capper'
   capper_record: boolean
@@ -567,7 +568,7 @@ function Website() {
                 {visibleCapperResults.map((result, index) => (
                   <div className="result-row" role="row" key={`${result.settled_at}-${index}`}>
                     <span className="result-date">{formatDate(result.settled_at)}<small>{result.sport}</small></span>
-                    <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small></span>
+                    <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small>{!!result.analysis?.trim() && <details className="result-insight"><summary>Capper insight</summary><p>{result.analysis}</p></details>}</span>
                     <span>{result.capper}</span><span>{formatUnits(result.units)}</span>
                     <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
                     <span className={capperNetUnits(result) > 0 ? 'net-positive' : capperNetUnits(result) < 0 ? 'net-negative' : ''}>{formatNetUnits(capperNetUnits(result))}</span>
@@ -622,7 +623,7 @@ function Website() {
             {homepageResults.map((result, index) => (
               <div className="result-row" role="row" key={`${result.settled_at}-${result.capper}-${index}`}>
                 <span className="result-date">{formatDate(result.settled_at)}<small>{result.sport}</small></span>
-                <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small></span>
+                <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small>{!!result.analysis?.trim() && <details className="result-insight"><summary>Capper insight</summary><p>{result.analysis}</p></details>}</span>
                 <span>{result.capper}</span><span>{formatUnits(result.units)}</span>
                 <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
                 <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(result.net_units)}</span>

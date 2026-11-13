@@ -126,6 +126,15 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   assert.equal(personalTeamRecords.filter((row) => row.status === 'win').length, 2)
   assert.equal(personalTeamRecords.filter((row) => row.status === 'loss').length, 2)
   assert.ok(personalTeamRecords.every((row) => Number(row.units) === 2 && row.capper_record))
+  await load('../../supabase/migrations/20261112190000_capper_tail_record_unit_cap.sql')
+  const cappedTeamRecords = (await db.query('select * from public.public_capper_settled_results()')).rows
+  assert.equal(cappedTeamRecords.length, 4)
+  assert.ok(cappedTeamRecords.every((row) => row.capper_record))
+  // Ace authored ballots 508/510 and keeps the 2u stake; Bee tailed and is capped at 1u.
+  assert.deepEqual(
+    cappedTeamRecords.map((row) => [row.capper, row.status, Number(row.units), Number(row.net_units)]).sort(),
+    [['Ace', 'loss', 2, -2], ['Ace', 'win', 2, 2], ['Bee', 'loss', 1, -1], ['Bee', 'win', 1, 1]],
+  )
   assert.deepEqual((await db.query("select id,capper from public.member_current_picks(null,'Bee')")).rows, [
     { id: 9, capper: 'Bee' },
   ])
@@ -136,4 +145,23 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
     { capper_name: 'Ace' }, { capper_name: 'Bee' },
   ])
   assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 4)
+  await load('../../supabase/migrations/20261113190000_public_play_writeup_history.sql')
+  await db.exec("insert into public.play_insights values(8,'Team writeup'),(2,'Ace personal writeup')")
+  const writeupLedger = (await db.query('select * from public.public_settled_results()')).rows
+  assert.equal(writeupLedger.length, 4)
+  assert.ok(writeupLedger.every((row) => typeof row.analysis === 'string'))
+  assert.deepEqual(
+    writeupLedger.filter((row) => row.analysis !== '').map((row) => [row.capper, row.analysis]).sort(),
+    [['Ace', 'Ace personal writeup'], ['Official Playmaker Picks', 'Team writeup']],
+  )
+  // Every tailing capper's personal record row carries the same play writeup.
+  const writeupCapperLedger = (await db.query('select * from public.public_capper_settled_results()')).rows
+  assert.deepEqual(
+    writeupCapperLedger.filter((row) => row.analysis !== '').map((row) => [row.capper, row.analysis]).sort(),
+    [['Ace', 'Team writeup'], ['Bee', 'Team writeup']],
+  )
+  await db.exec('set role anon')
+  assert.equal((await db.query('select * from public.public_settled_results()')).rows
+    .filter((row) => row.analysis !== '').length, 2)
+  await db.exec('reset role')
 })

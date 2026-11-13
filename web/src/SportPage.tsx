@@ -13,6 +13,7 @@ type Result = {
   units: number
   status: 'win' | 'loss' | 'void' | 'partial'
   net_units: number
+  analysis?: string
 }
 type EventView = 'schedule' | 'scores'
 
@@ -161,7 +162,7 @@ function SportPageContent({ sport, results, loadState }: { sport: (typeof sports
         <div className="result-row result-head" role="row"><span>Date</span><span>Play</span><span>Capper</span><span>Odds</span><span>Result</span><span>Net</span></div>
         {sportResults.map((result, index) => <div className="result-row" role="row" key={`${result.settled_at}-${index}`}>
           <span className="result-date">{formatDate(result.settled_at)}</span>
-          <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small></span>
+          <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small>{!!result.analysis?.trim() && <details className="result-insight"><summary>Capper insight</summary><p>{result.analysis}</p></details>}</span>
           <span>{result.capper}</span><span>{result.units}u</span>
           <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
           <span className={result.net_units > 0 ? 'net-positive' : result.net_units < 0 ? 'net-negative' : ''}>{signedUnits(result.net_units)}</span>
