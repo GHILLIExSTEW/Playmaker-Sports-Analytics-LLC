@@ -1,4 +1,7 @@
 import asyncio
+import os
+import subprocess
+import sys
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -10,6 +13,20 @@ import src.bot as bot_module
 import src.reporting as reporting_module
 from src.reporting import Reporting, TRACKER_TIMEZONE, build_recap_embed
 from src.services.team_ranking_service import TeamRankingService
+
+
+@pytest.mark.parametrize("configured, expected", [(None, "123"), ("456", "456")])
+def test_weekly_recap_channel_configuration(configured, expected):
+    env = os.environ.copy()
+    env.update(PLAYMAKER_DISABLE_DOTENV="1", VIP_CHAT_CHANNEL_ID="123")
+    env.pop("WEEKLY_RECAP_CHANNEL_ID", None)
+    if configured is not None:
+        env["WEEKLY_RECAP_CHANNEL_ID"] = configured
+    result = subprocess.run(
+        [sys.executable, "-c", "from src.config import WEEKLY_RECAP_CHANNEL_ID; print(WEEKLY_RECAP_CHANNEL_ID)"],
+        env=env, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip() == expected
 
 
 def make_reporting():
