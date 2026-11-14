@@ -5,7 +5,6 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.capper_ballots import BallotStore
-from src.config import CAPPER_DAILY_REVIEW_LIMIT
 from src.datetime_utils import parse_iso_datetime
 from src.services.ballot_vote_service import TAIL_POLICY_VERSION
 from src.services.play_service import PlayService
@@ -251,15 +250,8 @@ class SlipReviewStore(BallotStore):
             "open_capper_slip", p_message_id=str(message_id), p_author_id=str(author_id),
             p_roster=sorted(str(voter) for voter in roster), p_parsed=parsed,
             p_start=start.isoformat(), p_cutoff=cutoff.isoformat(),
-            p_daily_limit=CAPPER_DAILY_REVIEW_LIMIT,
+            p_daily_limit=None,
         )
-
-    def set_daily_review_limit(self, discord_user_id: int, limit: int) -> bool:
-        return self.rpc(
-            "set_capper_daily_review_limit",
-            p_discord_user_id=str(discord_user_id),
-            p_daily_limit=limit,
-        ) is True
 
     def delete_failed_review(self, message_id: int) -> bool:
         return self.rpc("delete_failed_capper_slip", p_message_id=str(message_id)) is True

@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
 from src.config import (
-    CAPPER_BALLOT_CHANNEL_ID, CAPPER_DAILY_REVIEW_LIMIT, CAPPER_RECORD_CHANNEL_ID, CONFIRMATION_CHANNEL_ID,
+    CAPPER_BALLOT_CHANNEL_ID, CAPPER_RECORD_CHANNEL_ID, CONFIRMATION_CHANNEL_ID,
     FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID,
 )
 from src.interaction_views import PreparedModalView
@@ -38,9 +38,9 @@ ACKNOWLEDGEMENT_THREAD_ID = 1565183972244201622
 ACKNOWLEDGEMENT_EMOJI = "\N{HANDSHAKE}"
 SUBMISSION_NOTICE = (
     "Before submitting a capper slip\n\n"
-    f"Read this notice and react to this opening message with {ACKNOWLEDGEMENT_EMOJI} to acknowledge it "
-    "BEFORE creating a ballot post. Posts submitted without this acknowledgement are deleted; "
-    "the bot will DM you the acknowledgement link. After acknowledging, submit a fresh post.\n\n"
+    f"React to this notice with {ACKNOWLEDGEMENT_EMOJI} BEFORE creating a ballot post. "
+    "Posts submitted without this acknowledgement are deleted; the bot DMs you the link. "
+    "Then submit a fresh post.\n\n"
     "ONLY this READ FIRST rules thread is read-only. React here to acknowledge; do not reply here. "
     "All separate ballot posts allow replies and discussion. Create your own ballot post for your slip.\n\n"
     "Title = the teams or players on your slip. Examples: Lakers vs Celtics; Musetti vs Struff; "
@@ -48,10 +48,11 @@ SUBMISSION_NOTICE = (
     "Attach one static JPEG, PNG or WebP slip image (10 MB maximum), then press Post. "
     "The message/body can be blank when the image is attached. The bot asks you to confirm details and times AFTER posting.\n"
     "Crop/redact names, account IDs, balances and barcodes BEFORE uploading; metadata removal cannot hide visible details.\n\n"
-    "By submitting, you request OpenAI image/text extraction and a private review. This bot uses inference, "
-    "not training on Discord content. Check and correct the extracted details before confirming. "
-    "Confirmation, voting and discussion stay in your post.\n\n"
-    "If not approved, your slip becomes a regular tracked Free Play, not an official pick. Missing units? "
+    "Submitting requests OpenAI image/text extraction and private review (inference, not training). "
+    "Check extracted details before confirming. Confirmation, voting and discussion stay in your post.\n\n"
+    "Reviews and Free Plays have no daily count limit. Each capper may post two team plays daily (Eastern); "
+    "extra qualifying reviews become Free Plays at their earned units. "
+    "Unqualified slips become tracked Free Plays, not official picks. Missing units? "
     "Choose a stake above 0 and up to 3u (parlays never above 1u) using the team-channel button; the card posts automatically. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
@@ -512,8 +513,8 @@ class CapperSlipReviews(commands.Cog):
             logger.exception("capper_review_delete_quota_mark_failed message=%s", payload.thread_id)
             await self.publisher.staff_alert(
                 f"slip_delete:{payload.thread_id}",
-                f"Deleted review {payload.thread_id} could not be marked for the daily cap. Verify its saved state "
-                f"before allowing another review. Error: {str(exc)[:800]}",
+                f"Deleted review {payload.thread_id} could not be marked as deleted. "
+                f"Verify its saved state. Error: {str(exc)[:800]}",
             )
             return
         if marked:
@@ -658,56 +659,6 @@ class CapperSlipReviews(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         report = await self.health_report()
         await interaction.followup.send("\n".join(report)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-    @app_commands.command(name="capper_review_limit", description="Staff: set a capper's daily slip-review limit")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(
-        member="Capper to configure",
-        limit="Reviews per Eastern day; use 0 to restore the global default",
-    )
-    async def set_capper_review_limit(
-        self, interaction: discord.Interaction, member: discord.Member, limit: app_commands.Range[int, 0, 10],
-    ) -> None:
-        if (interaction.guild_id != GUILD_ID or interaction.guild is None
-                or not isinstance(interaction.user, discord.Member)
-                or not (
-                    interaction.user.id == interaction.guild.owner_id
-                    or interaction.user.guild_permissions.manage_guild
-                )):
-            await interaction.response.send_message(
-                "Only server management can set per-capper review limits.", ephemeral=True,
-            )
-            return
-        if member.bot or not self.publisher.is_tracked_operator(member):
-            await interaction.response.send_message(
-                "Select a non-bot member with the capper role.", ephemeral=True,
-            )
-            return
-        if limit > CAPPER_DAILY_REVIEW_LIMIT:
-            await interaction.response.send_message(
-                f"A per-capper limit can only lower the global limit of {CAPPER_DAILY_REVIEW_LIMIT}.",
-                ephemeral=True,
-            )
-            return
-        try:
-            saved = await asyncio.to_thread(self.store.set_daily_review_limit, member.id, limit)
-        except Exception as exc:
-            logger.exception("capper_review_limit_update_failed member=%s", member.id)
-            await interaction.response.send_message(
-                f"The limit could not be saved: {str(exc)[:800]}", ephemeral=True,
-            )
-            return
-        if not saved:
-            raise RuntimeError(f"The daily review limit was not saved for capper {member.id}.")
-        if limit == 0:
-            message = (
-                f"{member.display_name}'s daily review limit now follows the global default "
-                f"({CAPPER_DAILY_REVIEW_LIMIT} per Eastern day)."
-            )
-        else:
-            message = f"{member.display_name}'s daily review limit is now {limit} per Eastern day."
-        await interaction.response.send_message(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
     @app_commands.command(name="capper_remove_failed_review", description="Staff: permanently remove an unpublished failed slip review")
     @app_commands.guild_only()
@@ -1250,7 +1201,11 @@ class CapperSlipReviews(commands.Cog):
                     f"Check bot logs. Error: {str(exc)[:1000]}",
                 )
         elif decision["outcome"] == "rejected":
-            embed.title = "Review closed - personal only"
+            daily_limit = decision.get("team_daily_limit") is True
+            embed.title = (
+                "Review closed - daily team limit reached, Free Play"
+                if daily_limit else "Review closed - personal only"
+            )
             counts = decision["counts"]
             embed.add_field(
                 name="Final responses",
@@ -1265,7 +1220,10 @@ class CapperSlipReviews(commands.Cog):
                 raise RuntimeError("The rejected capper review could not be verified before thread deletion.")
             try:
                 posted = await self.post_or_request_personal_free_play(
-                    rejected_row, "review did not qualify for an official pick",
+                    rejected_row, (
+                        "daily team play limit reached; posting at earned units"
+                        if daily_limit else "review did not qualify for an official pick"
+                    ),
                 )
             except Exception as exc:
                 logger.exception("rejected_free_play_publish_failed message=%s", message_id)

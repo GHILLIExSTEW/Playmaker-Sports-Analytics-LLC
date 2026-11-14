@@ -157,7 +157,7 @@ test('insight stays collapsed and missing insight has no reveal control', async 
   await expect(withInsight.getByText('NFL analysis', { exact: true })).not.toBeVisible()
 })
 
-async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; expiresAt?: string; pageOwner?: string; pageSaveError?: boolean; editAll?: boolean } = {}) {
+async function mockApi(page: Page, options: { state?: string; kind?: string; feedError?: boolean; accessError?: boolean; dataset?: typeof picks; teamResults?: Record<string, unknown>[]; expiresAt?: string; pageOwner?: string; pageSaveError?: boolean; editAll?: boolean } = {}) {
   if (options.pageOwner || options.editAll) await page.addInitScript(() => {
     const userId = '11111111-1111-1111-1111-111111111111'
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
@@ -219,10 +219,12 @@ async function mockApi(page: Page, options: { state?: string; kind?: string; fee
     } else if (rpc === 'public_settled_results') {
       await route.fulfill({ json: [
         { created_at: '2026-10-06T19:00:00Z', settled_at: '2026-10-06T23:00:00Z',
-          sport: 'NFL', capper: 'First Capper', selection: 'Past selection', odds: 150, units: 1.25, status: 'win', net_units: 1.88, tracking_scope: 'capper', avatar_url: null },
+          sport: 'NFL', capper: 'First Capper', selection: 'Past selection', odds: 150, units: 1.25, status: 'win', net_units: 1.88, tracking_scope: 'capper', capper_record: true, avatar_url: null },
         { created_at: '2026-10-06T19:00:00Z', settled_at: '2026-10-06T23:00:00Z',
-          sport: 'NFL', capper: 'First Capper', selection: 'Invalid 10u play', odds: 235125, units: 10, status: 'win', net_units: 23512.5, tracking_scope: 'capper', avatar_url: null },
+          sport: 'NFL', capper: 'First Capper', selection: 'Invalid 10u play', odds: 235125, units: 10, status: 'win', net_units: 23512.5, tracking_scope: 'capper', capper_record: true, avatar_url: null },
       ] })
+    } else if (rpc === 'public_capper_settled_results') {
+      await route.fulfill({ json: options.teamResults ?? [] })
     } else if (rpc === 'member_profiles') {
       await route.fulfill({ json: [{ age_verified_at: '2026-10-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z',
         display_name: 'Saved Member', public_handle: 'saved-member', avatar_url: null, public_profile_enabled: true,
@@ -762,6 +764,34 @@ test('historical non-operators cannot become capper pages from settled records',
   await page.goto('/cappers/first-capper')
   await expect(page.getByRole('heading', { name: 'Profile not found' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Current picks.' })).toHaveCount(0)
+})
+
+test('capper profile separates authored plays from team plays tailed with a thumbs-up', async ({ page }) => {
+  await mockApi(page, { teamResults: [
+    { created_at: '2026-10-07T18:00:00Z', settled_at: '2026-10-07T22:00:00Z',
+      sport: 'NFL', capper: 'First Capper', selection: 'Tailed team play', odds: 100, units: 1,
+      status: 'loss', net_units: -1, tracking_scope: 'official', capper_record: true, record_type: 'tailed',
+      analysis: 'Saved team writeup' },
+  ] })
+  const profileRequests: string[] = []
+  page.on('request', (request) => {
+    if (/\/rpc\/public_(settled_results|capper_settled_results)/.test(request.url())) {
+      profileRequests.push(request.url())
+    }
+  })
+  await page.goto('/cappers/first-capper')
+  const breakdown = page.locator('.capper-record-breakdown')
+  await expect(breakdown).toContainText('Authored plays')
+  await expect(breakdown.locator('article').nth(0)).toContainText('1-0')
+  await expect(breakdown.locator('article').nth(0)).toContainText('1 settled · +1.88u')
+  await expect(breakdown).toContainText('Tailed with thumbs-up')
+  await expect(breakdown.locator('article').nth(1)).toContainText('0-1')
+  await expect(breakdown.locator('article').nth(1)).toContainText('1 settled · -1u')
+  await expect(page.locator('.capper-profile-results')).toContainText('Tailed · thumbs-up')
+  await page.locator('.capper-profile-results').getByText('Capper insight', { exact: true }).click()
+  await expect(page.locator('.capper-profile-results')).toContainText('Saved team writeup')
+  expect(profileRequests).toHaveLength(2)
+  expect(profileRequests.every((url) => new URL(url).searchParams.get('capper') === 'eq.First Capper')).toBe(true)
 })
 
 for (const [name, expiresAt, elapsed] of [

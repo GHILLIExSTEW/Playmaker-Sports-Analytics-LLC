@@ -126,6 +126,11 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   assert.equal(personalTeamRecords.filter((row) => row.status === 'win').length, 2)
   assert.equal(personalTeamRecords.filter((row) => row.status === 'loss').length, 2)
   assert.ok(personalTeamRecords.every((row) => Number(row.units) === 2 && row.capper_record))
+  await load('../../supabase/migrations/20261109030000_capper_authored_tailed_record_breakdown.sql')
+  const typedTeamRecords = (await db.query('select * from public.public_capper_settled_results()')).rows
+  assert.deepEqual(typedTeamRecords.map((row) => [row.capper, row.record_type]).sort(), [
+    ['Ace', 'authored'], ['Ace', 'authored'], ['Bee', 'tailed'], ['Bee', 'tailed'],
+  ])
   await load('../../supabase/migrations/20261112190000_capper_tail_record_unit_cap.sql')
   const cappedTeamRecords = (await db.query('select * from public.public_capper_settled_results()')).rows
   assert.equal(cappedTeamRecords.length, 4)
@@ -146,6 +151,7 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   ])
   assert.equal((await db.query('select * from public.public_settled_results()')).rows.length, 4)
   await load('../../supabase/migrations/20261113190000_public_play_writeup_history.sql')
+  await load('../../supabase/migrations/20261114012500_capper_record_type_history.sql')
   await db.exec("insert into public.play_insights values(8,'Team writeup'),(2,'Ace personal writeup')")
   const writeupLedger = (await db.query('select * from public.public_settled_results()')).rows
   assert.equal(writeupLedger.length, 4)
@@ -156,6 +162,15 @@ test('team and capper ledgers remain separate and ballot claims are durable', as
   )
   // Every tailing capper's personal record row carries the same play writeup.
   const writeupCapperLedger = (await db.query('select * from public.public_capper_settled_results()')).rows
+  assert.deepEqual(
+    writeupCapperLedger.map((row) => [
+      row.capper, row.record_type, row.status, Number(row.units), Number(row.net_units),
+    ]).sort(),
+    [
+      ['Ace', 'authored', 'loss', 2, -2], ['Ace', 'authored', 'win', 2, 2],
+      ['Bee', 'tailed', 'loss', 1, -1], ['Bee', 'tailed', 'win', 1, 1],
+    ],
+  )
   assert.deepEqual(
     writeupCapperLedger.filter((row) => row.analysis !== '').map((row) => [row.capper, row.analysis]).sort(),
     [['Ace', 'Team writeup'], ['Bee', 'Team writeup']],

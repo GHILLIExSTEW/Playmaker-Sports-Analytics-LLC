@@ -29,9 +29,11 @@ type Result = {
   avatar_url?: string | null
   tracking_scope: 'official' | 'capper'
   capper_record: boolean
+  record_type?: 'authored' | 'tailed'
 }
 type LoadState = 'loading' | 'ready' | 'error' | 'configuration'
 type CapperSummary = { name: string; slug: string; avatar_url?: string | null; plays: number; wins: number; losses: number; net_units: number }
+type CapperRecordBreakdown = { plays: number; wins: number; losses: number; net_units: number }
 type PublicResultsQuery = { capper?: string; sport?: string; officialOnly?: boolean }
 
 const resultsPageSize = 1000
@@ -99,7 +101,12 @@ async function fetchPublicResults(options: PublicResultsQuery = {}): Promise<Res
     fetchAll('public_settled_results'),
     options.officialOnly ? Promise.resolve([]) : fetchAll('public_capper_settled_results'),
   ])
-  return [...results, ...teamCapperResults].sort((first, second) =>
+  return [
+    ...results.map((result) => result.capper_record && result.tracking_scope === 'capper'
+      ? { ...result, record_type: 'authored' as const }
+      : result),
+    ...teamCapperResults,
+  ].sort((first, second) =>
     Date.parse(second.settled_at) - Date.parse(first.settled_at))
 }
 
@@ -242,6 +249,15 @@ function buildCapperAnalytics(results: Result[]) {
 
 function capperNetUnits(result: Result): number {
   return Number(result.net_units)
+}
+
+function summarizeCapperRecord(results: Result[]): CapperRecordBreakdown {
+  return results.reduce<CapperRecordBreakdown>((record, result) => ({
+    plays: record.plays + 1,
+    wins: record.wins + Number(result.status === 'win'),
+    losses: record.losses + Number(result.status === 'loss'),
+    net_units: record.net_units + capperNetUnits(result),
+  }), { plays: 0, wins: 0, losses: 0, net_units: 0 })
 }
 
 function formatDate(value: string): string {
@@ -436,6 +452,8 @@ function Website() {
   const capperWins = capperResults.filter((result) => result.status === 'win').length
   const capperLosses = capperResults.filter((result) => result.status === 'loss').length
   const capperDecisions = capperWins + capperLosses
+  const authoredRecord = summarizeCapperRecord(capperResults.filter((result) => result.record_type !== 'tailed'))
+  const tailedRecord = summarizeCapperRecord(capperResults.filter((result) => result.record_type === 'tailed'))
   const capperSports = ['All', ...Array.from(new Set(capperResults.map((result) => result.sport)))]
   const visibleCapperResults = sport === 'All' ? capperResults : capperResults.filter((result) => result.sport === sport)
   const closeMenu = () => setMenuOpen(false)
@@ -541,12 +559,15 @@ function Website() {
               <CapperPageProfile key={selectedCapper.name} name={selectedCapper.name} onAppearance={updateCapperBackground} onSaved={retryPublicData} />
             </Suspense>
             <CapperSections order={capperBackground?.name === selectedCapper.name ? capperBackground.theme.appearance.section_order : ['stats', 'picks', 'charts', 'results']} sections={{
-            stats: <div className="capper-profile-metrics">
+            stats: <><div className="capper-profile-metrics">
               <div><span>Settled plays</span><strong>{selectedCapper.plays}</strong></div>
               <div><span>Record</span><strong>{selectedCapper.wins}-{selectedCapper.losses}</strong></div>
               <div><span>Win rate</span><strong>{capperDecisions ? `${Math.round(capperWins / capperDecisions * 100)}%` : '—'}</strong></div>
               <div><span>Net units</span><strong className={selectedCapper.net_units > 0 ? 'net-positive' : selectedCapper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(selectedCapper.net_units)}</strong></div>
-            </div>,
+            </div><div className="capper-record-breakdown" aria-label="Record breakdown">
+              <article><span>Authored plays</span><strong>{authoredRecord.wins}-{authoredRecord.losses}</strong><small>{authoredRecord.plays} settled · {formatNetUnits(authoredRecord.net_units)}</small></article>
+              <article><span>Tailed with thumbs-up</span><strong>{tailedRecord.wins}-{tailedRecord.losses}</strong><small>{tailedRecord.plays} settled · {formatNetUnits(tailedRecord.net_units)}</small></article>
+            </div></>,
             picks: <Suspense fallback={<p className="account-state">Loading current picks...</p>}>
               <CurrentPicksFeed key={selectedCapper.name} capper={selectedCapper.name} />
             </Suspense>,
@@ -556,7 +577,7 @@ function Website() {
               </Suspense>
             </div>,
             results: <section className="capper-profile-results" id="capper-results">
-              <div className="profile-section-heading"><p className="eyebrow">Verified history</p><h2>Every settled play.</h2><p>Net units are calculated from posted stake and American odds. Personal plays over 3u are excluded from the public capper record.</p></div>
+              <div className="profile-section-heading"><p className="eyebrow">Verified history</p><h2>Every settled play.</h2><p>Net units are calculated from posted stake and American odds. Personal plays over 3u are excluded from the public capper record. Team plays are labeled as authored or tailed with a thumbs-up vote.</p></div>
               <div className="results-toolbar">
                 <div className="filter-group" aria-label="Filter this capper's results by sport">
                   {capperSports.map((item) => <button className={sport === item ? 'active' : ''} type="button" key={item} onClick={() => setSport(item)}>{item}</button>)}
@@ -564,12 +585,12 @@ function Website() {
                 <span>{loadState === 'ready' ? `${capperResults.length} settled plays` : loadState === 'loading' ? 'Loading results' : 'Results unavailable'}</span>
               </div>
               <div className="results-table" role="table" aria-label={`${selectedCapper.name} settled results`}>
-                <div className="result-row result-head" role="row"><span>Date</span><span>Play</span><span>Capper</span><span>Risk</span><span>Result</span><span>Net</span></div>
+                <div className="result-row result-head" role="row"><span>Date</span><span>Play</span><span>Record type</span><span>Risk</span><span>Result</span><span>Net</span></div>
                 {visibleCapperResults.map((result, index) => (
                   <div className="result-row" role="row" key={`${result.settled_at}-${index}`}>
                     <span className="result-date">{formatDate(result.settled_at)}<small>{result.sport}</small></span>
                     <span className="result-selection">{result.selection}<small>{result.odds > 0 ? '+' : ''}{result.odds}</small>{!!result.analysis?.trim() && <details className="result-insight"><summary>Capper insight</summary><p>{result.analysis}</p></details>}</span>
-                    <span>{result.capper}</span><span>{formatUnits(result.units)}</span>
+                    <span>{result.record_type === 'tailed' ? 'Tailed · thumbs-up' : 'Authored'}</span><span>{formatUnits(result.units)}</span>
                     <span><mark className={`status status-${result.status}`}>{result.status}</mark></span>
                     <span className={capperNetUnits(result) > 0 ? 'net-positive' : capperNetUnits(result) < 0 ? 'net-negative' : ''}>{formatNetUnits(capperNetUnits(result))}</span>
                   </div>

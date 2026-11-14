@@ -1,4 +1,4 @@
--- Run after the capper slip review, quota, override, and failed-review removal migrations in a disposable database.
+-- Run after all slip-review migrations in a disposable database.
 begin;
 
 do $$
@@ -7,15 +7,17 @@ declare
   v_override_author_id text := '91000000000000000998';
   v_removable_id text := '91000000000000000023';
   v_pending_id text := '91000000000000000024';
-  v_first_id text := '91000000000000000011';
   v_now timestamptz := clock_timestamp();
   v_message_id text;
+  v_result jsonb;
+  v_snowflake text := (floor(extract(epoch from clock_timestamp()) * 1000 - 1420070400000) * 4194304)::text;
   v_parsed jsonb := jsonb_build_object(
     'units', 1,
     'legs', jsonb_build_array(jsonb_build_object('selection', 'Test selection', 'odds', -110))
   );
   i integer;
 begin
+  perform public.set_capper_daily_review_limit(v_author_id, 1);
   for i in 1..5 loop
     v_message_id := (91000000000000000010::numeric + i)::text;
     perform public.register_capper_slip(v_message_id, jsonb_build_object(
@@ -26,85 +28,101 @@ begin
     update public.capper_ballots
     set review_message_id = (91000000000000000100::numeric + i)::text
     where message_id = v_message_id;
-  end loop;
-
-  perform public.open_capper_slip(
-    v_first_id, v_author_id, array[v_author_id, '43'], v_parsed,
-    v_now + interval '3 hours', v_now + interval '2 hours', 2
-  );
-  if not public.cancel_capper_slip(v_first_id, v_author_id) then
-    raise exception 'The test review could not be cancelled';
-  end if;
-
-  v_message_id := '91000000000000000012';
-  perform public.open_capper_slip(
-    v_message_id, v_author_id, array[v_author_id, '43'], v_parsed,
-    v_now + interval '3 hours', v_now + interval '2 hours', 2
-  );
-  if not public.mark_capper_slip_deleted(v_message_id) then
-    raise exception 'The test review could not be marked deleted';
-  end if;
-
-  v_message_id := '91000000000000000013';
-  perform public.open_capper_slip(
-    v_message_id, v_author_id, array[v_author_id, '43'], v_parsed,
-    v_now + interval '3 hours', v_now + interval '2 hours', 2
-  );
-  v_message_id := '91000000000000000014';
-  perform public.open_capper_slip(
-    v_message_id, v_author_id, array[v_author_id, '43'], v_parsed,
-    v_now + interval '3 hours', v_now + interval '2 hours', 2
-  );
-
-  v_message_id := '91000000000000000015';
-  begin
     perform public.open_capper_slip(
       v_message_id, v_author_id, array[v_author_id, '43'], v_parsed,
-      v_now + interval '3 hours', v_now + interval '2 hours', 2
+      v_now + interval '3 hours', v_now + interval '2 hours', 1
     );
-    raise exception 'A third unpublished review was allowed';
-  exception when others then
-    if sqlerrm not like 'Daily review limit reached:%' then
-      raise;
-    end if;
-  end;
-
-  for i in 1..2 loop
-    v_message_id := (91000000000000000020::numeric + i)::text;
-    perform public.register_capper_slip(v_message_id, jsonb_build_object(
-      'author_id', v_override_author_id,
-      'slip_base64', 'c2xpcA==',
-      'parsed', v_parsed
-    ));
-    update public.capper_ballots
-    set review_message_id = (91000000000000000110::numeric + i)::text
-    where message_id = v_message_id;
   end loop;
-  if not public.set_capper_daily_review_limit(v_override_author_id, 1) then
-    raise exception 'The per-capper limit was not saved';
-  end if;
-  perform public.open_capper_slip(
-    '91000000000000000021', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
-    v_now + interval '3 hours', v_now + interval '2 hours', 2
-  );
-  begin
-    perform public.open_capper_slip(
-      '91000000000000000022', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
-      v_now + interval '3 hours', v_now + interval '2 hours', 2
-    );
-    raise exception 'The per-capper limit of one was not enforced';
-  exception when others then
-    if sqlerrm not like 'Daily review limit reached:%' then
-      raise;
+
+  for i in 1..3 loop
+    v_message_id := (91000000000000000010::numeric + i)::text;
+    perform public.respond_capper_slip(v_message_id, '43', 'yes_add');
+    v_result := public.finalize_capper_slip(v_message_id);
+    if i < 3 and v_result ->> 'outcome' is distinct from 'processing' then
+      raise exception 'The first two qualifying reviews should be team plays';
+    elsif i = 3 and v_result is not null then
+      raise exception 'A review must wait for unresolved team publications';
     end if;
-  end;
-  if not public.set_capper_daily_review_limit(v_override_author_id, 0) then
-    raise exception 'The per-capper limit could not be cleared';
+  end loop;
+  update public.capper_ballots
+  set state = 'published', official_message_id = v_snowflake
+  where message_id in ('91000000000000000011', '91000000000000000012');
+  v_result := public.finalize_capper_slip('91000000000000000013');
+  if v_result ->> 'outcome' is distinct from 'rejected'
+     or v_result ->> 'team_daily_limit' is distinct from 'true'
+     or v_result ->> 'units' is distinct from '2' then
+    raise exception 'Third qualifying review must become a 2u Free Play';
   end if;
+  if (select review #>> '{parsed,units}' from public.capper_ballots
+      where message_id = '91000000000000000013') is distinct from '2' then
+    raise exception 'The earned Free Play stake was not saved';
+  end if;
+  if not public.claim_capper_slip_free_play(
+    '91000000000000000013', '1513186440278704178', 'daily team play limit reached'
+  ) then
+    raise exception 'The over-limit Free Play could not be claimed';
+  end if;
+  update public.capper_ballots
+  set eligible_voter_ids = array[v_author_id, '43', '44'],
+      response_states = jsonb_build_object(
+        v_author_id, jsonb_build_object('yes', true),
+        '43', jsonb_build_object('yes', true), '44', jsonb_build_object('yes', true)
+      )
+  where message_id = '91000000000000000014';
+  v_result := public.finalize_capper_slip('91000000000000000014');
+  if v_result ->> 'team_daily_limit' is distinct from 'true'
+     or v_result ->> 'units' is distinct from '3'
+     or (select review #>> '{parsed,units}' from public.capper_ballots
+         where message_id = '91000000000000000014') is distinct from '3' then
+    raise exception 'A three-tail overflow review must retain 3u';
+  end if;
+  update public.capper_ballots
+  set review = jsonb_set(review, '{parsed,legs}', jsonb_build_array(
+    jsonb_build_object('selection', 'First leg', 'odds', -110),
+    jsonb_build_object('selection', 'Second leg', 'odds', -110)
+  ))
+  where message_id = '91000000000000000015';
+  perform public.respond_capper_slip('91000000000000000015', '43', 'yes_add');
+  v_result := public.finalize_capper_slip('91000000000000000015');
+  if v_result ->> 'team_daily_limit' is distinct from 'true'
+     or v_result ->> 'units' is distinct from '1' then
+    raise exception 'An overflow parlay must retain the earned 1u';
+  end if;
+
+  perform public.register_capper_slip('91000000000000000016', jsonb_build_object(
+    'author_id', v_override_author_id, 'slip_base64', 'c2xpcA==', 'parsed', v_parsed
+  ));
+  update public.capper_ballots set review_message_id = '91000000000000000116'
+  where message_id = '91000000000000000016';
   perform public.open_capper_slip(
-    '91000000000000000022', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
+    '91000000000000000016', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
+    v_now + interval '3 hours', v_now + interval '2 hours', 1
+  );
+  perform public.respond_capper_slip('91000000000000000016', '43', 'yes_add');
+  v_result := public.finalize_capper_slip('91000000000000000016');
+  if v_result ->> 'outcome' is distinct from 'processing' then
+    raise exception 'Another capper must have their own team-play allowance';
+  end if;
+
+  update public.capper_ballots
+  set official_message_id = (
+    floor(extract(epoch from (clock_timestamp() - interval '1 day')) * 1000 - 1420070400000) * 4194304
+  )::text
+  where message_id = '91000000000000000011';
+  perform public.register_capper_slip('91000000000000000017', jsonb_build_object(
+    'author_id', v_author_id, 'slip_base64', 'c2xpcA==', 'parsed', v_parsed
+  ));
+  update public.capper_ballots set review_message_id = '91000000000000000117'
+  where message_id = '91000000000000000017';
+  perform public.open_capper_slip(
+    '91000000000000000017', v_author_id, array[v_author_id, '43'], v_parsed,
     v_now + interval '3 hours', v_now + interval '2 hours', 2
   );
+  perform public.respond_capper_slip('91000000000000000017', '43', 'yes_add');
+  v_result := public.finalize_capper_slip('91000000000000000017');
+  if v_result ->> 'outcome' is distinct from 'processing' then
+    raise exception 'A team play from the previous Eastern day must not count';
+  end if;
 
   perform public.register_capper_slip(v_removable_id, jsonb_build_object(
     'author_id', v_override_author_id,

@@ -192,6 +192,7 @@ def test_recap_post_routes_to_results_channel(monkeypatch):
 
 def test_weekly_recap_repeated_posts_edit_only_configured_message(monkeypatch):
     monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_MESSAGE_ID", 1564277423304998984)
+    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_CHANNEL_ID", 777)
     cog = make_reporting()
     cog.bot.user = SimpleNamespace(id=42)
     message = SimpleNamespace(author=SimpleNamespace(id=42), edit=AsyncMock())
@@ -203,6 +204,7 @@ def test_weekly_recap_repeated_posts_edit_only_configured_message(monkeypatch):
         await cog.post_recap("weekly")
 
     asyncio.run(check())
+    cog.resolve_channel.assert_awaited_with(777, "WEEKLY_RECAP_CHANNEL_ID", required=True)
     assert channel.fetch_message.await_count == 2
     channel.fetch_message.assert_awaited_with(1564277423304998984)
     assert message.edit.await_count == 2

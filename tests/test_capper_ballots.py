@@ -159,7 +159,7 @@ def test_unfinished_or_already_claimed_ballot_is_not_published(final, claim):
     cog.resolve_channel.assert_not_awaited()
 
 
-@pytest.mark.parametrize("blocked", ["event-started", "testing"])
+@pytest.mark.parametrize("blocked", ["event-started", "testing", "previous-day-reservation"])
 def test_publication_rechecks_start_time_and_testing_before_discord_send(blocked):
     from datetime import datetime, timedelta, timezone
 
@@ -172,6 +172,8 @@ def test_publication_rechecks_start_time_and_testing_before_discord_send(blocked
     }
     if blocked == "event-started":
         decision["event_starts_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    if blocked == "previous-day-reservation":
+        decision["team_limit_day"] = "2000-01-01"
     with pytest.raises(ValueError):
         asyncio.run(cog.publish_approved(
             message(), {"legs": [{"selection": "Home ML", "odds": 150}]}, decision, slip=b"original",

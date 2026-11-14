@@ -58,7 +58,6 @@ def make_cog(monkeypatch):
                  complete_personal_free_play_units_prompt_reissue=Mock(return_value=False),
                  personal_free_play_units_prompt_reissues=Mock(return_value=[]),
                  mark_review_deleted=Mock(return_value=False),
-                 set_daily_review_limit=Mock(return_value=True),
                  delete_failed_review=Mock(return_value=True),
                  claim_personal_free_play_units=Mock(return_value=False),
                  complete_personal_free_play=Mock(return_value=False))
@@ -355,6 +354,33 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
     else:
         cog.records.save.assert_awaited_once_with(thread, cog.store.get.return_value)
         assert events == ["archive", "delete", "mark-deleted"]
+
+
+def test_qualified_review_over_team_limit_posts_at_earned_units(monkeypatch):
+    cog, _, prompt = make_cog(monkeypatch)
+    thread = review_thread()
+    thread.fetch_message.return_value = prompt
+    terminal_row = saved_row()
+    terminal_row["state"] = "rejected"
+    terminal_row["review"]["parsed"]["units"] = 3
+    cog.store.get.return_value = terminal_row
+    cog.store.claim_personal_free_play.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
+    cog.store.finalize.return_value = {
+        "outcome": "rejected", "team_daily_limit": True,
+        "counts": {"yes": 3}, "roster_size": 5, "units": 3,
+    }
+    cog.records = Mock(
+        save=AsyncMock(), store=SimpleNamespace(source_deleted=Mock()),
+    )
+
+    asyncio.run(cog.evaluate(thread, saved_row()))
+
+    cog.publisher.publish_approved.assert_not_awaited()
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 3
+    assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
+    assert "daily team limit reached" in prompt.edit.call_args.kwargs["embed"].title
+    cog.publish_free_play.assert_awaited_once()
 
 
 def test_technical_failure_posts_personal_free_play_once(monkeypatch):
@@ -663,55 +689,6 @@ def test_deleted_non_ballot_thread_does_not_change_review_quota(monkeypatch):
 
         cog.store.mark_review_deleted.assert_not_called()
         cog.publisher.staff_alert.assert_not_awaited()
-    asyncio.run(check())
-
-
-def test_staff_can_set_and_clear_per_capper_daily_review_limit(monkeypatch):
-    async def check():
-        cog, _, _ = make_cog(monkeypatch)
-        member = SimpleNamespace(id=42, display_name="DarkHorse", bot=False)
-        guild = SimpleNamespace(owner_id=999)
-        staff_member = Mock(spec=discord.Member)
-        staff_member.id = 999
-        staff_member.guild_permissions.manage_guild = True
-        interaction = SimpleNamespace(
-            guild_id=123, guild=guild,
-            user=staff_member,
-            response=SimpleNamespace(send_message=AsyncMock()),
-        )
-
-        await cog.set_capper_review_limit.callback(cog, interaction, member, 1)
-
-        cog.store.set_daily_review_limit.assert_called_once_with(42, 1)
-        assert "1 per Eastern day" in interaction.response.send_message.call_args.args[0]
-        assert interaction.response.send_message.call_args.kwargs["ephemeral"]
-
-        interaction.response.send_message.reset_mock()
-        await cog.set_capper_review_limit.callback(cog, interaction, member, 0)
-
-        assert cog.store.set_daily_review_limit.call_args_list[-1].args == (42, 0)
-        assert "global default" in interaction.response.send_message.call_args.args[0]
-    asyncio.run(check())
-
-
-def test_per_capper_review_limit_rejects_non_staff(monkeypatch):
-    async def check():
-        cog, _, _ = make_cog(monkeypatch)
-        member = SimpleNamespace(id=42, display_name="DarkHorse", bot=False)
-        guild = SimpleNamespace(owner_id=999)
-        non_staff_member = Mock(spec=discord.Member)
-        non_staff_member.id = 42
-        non_staff_member.guild_permissions.manage_guild = False
-        interaction = SimpleNamespace(
-            guild_id=123, guild=guild,
-            user=non_staff_member,
-            response=SimpleNamespace(send_message=AsyncMock()),
-        )
-
-        await cog.set_capper_review_limit.callback(cog, interaction, member, 1)
-
-        cog.store.set_daily_review_limit.assert_not_called()
-        assert "Only server management" in interaction.response.send_message.call_args.args[0]
     asyncio.run(check())
 
 
@@ -1285,6 +1262,8 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         assert "Lakers vs Celtics; Musetti vs Struff" in text
         assert "NBA 3-leg parlay" in text
         assert "The message/body can be blank when the image is attached." in text
+        assert "Reviews and Free Plays have no daily count limit." in text
+        assert "two team plays daily (Eastern)" in text
         assert len(text) <= 2000
         notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
         reply.delete.assert_awaited_once()

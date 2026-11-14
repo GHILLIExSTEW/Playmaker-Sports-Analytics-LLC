@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from src.config import GUILD_ID, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, WEEKLY_RECAP_MESSAGE_ID
+from src.config import GUILD_ID, RESULT_CHANNEL_ID, TEAM_STATS_CHANNEL_ID, WEEKLY_RECAP_CHANNEL_ID, WEEKLY_RECAP_MESSAGE_ID
 from src.results import ResultsView, filter_results, parse_results_dates
 from src.datetime_utils import parse_iso_datetime
 from src.services.settlement_service import SettlementService
@@ -441,8 +441,8 @@ class Reporting(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def post_recap(self, period: str) -> None:
-        channel = await self.resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
         if period == "weekly":
+            channel = await self.resolve_channel(WEEKLY_RECAP_CHANNEL_ID, "WEEKLY_RECAP_CHANNEL_ID", required=True)
             if not WEEKLY_RECAP_MESSAGE_ID:
                 raise RuntimeError("WEEKLY_RECAP_MESSAGE_ID is not configured; no new recap was posted.")
             async with self._weekly_recap_update_lock:
@@ -453,6 +453,7 @@ class Reporting(commands.Cog):
                 await message.edit(content=None, embed=embed, attachments=[])
             logger.info("recap_updated period=%s message=%s", period, WEEKLY_RECAP_MESSAGE_ID)
             return
+        channel = await self.resolve_channel(RESULT_CHANNEL_ID, "RESULT_CHANNEL_ID", required=True)
         embed = await asyncio.to_thread(
             build_recap_embed, self.features, period,
         )
@@ -492,7 +493,8 @@ class Reporting(commands.Cog):
             if post:
                 await self.post_recap(period.value)
                 action = "updated" if period.value == "weekly" else "posted"
-                await interaction.followup.send(f"{period.value.title()} recap {action} in <#{RESULT_CHANNEL_ID}>.", ephemeral=True)
+                target_channel_id = WEEKLY_RECAP_CHANNEL_ID if period.value == "weekly" else RESULT_CHANNEL_ID
+                await interaction.followup.send(f"{period.value.title()} recap {action} in <#{target_channel_id}>.", ephemeral=True)
             else:
                 embed = await asyncio.to_thread(
                     build_recap_embed, self.features, period.value,

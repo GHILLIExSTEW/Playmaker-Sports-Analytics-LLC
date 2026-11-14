@@ -120,12 +120,12 @@ verify that intake resumes and the alert stops. A failed discovery scan no
 longer disables gateway intake when the privacy notice was verified; a failed
 notice check still pauses intake.
 
-Server managers can set a lower daily slip-review cap for an individual capper
-with `/capper_review_limit member:<capper> limit:1`. Use `limit:0` to remove the
-override and restore the global limit. Apply
-`20261114134500_capper_daily_review_overrides.sql` and
-`20261114135000_capper_failed_review_removal.sql`, then restart the bot before
-using these commands; the limit applies to slip-review openings, not unrelated Free Plays.
+Reviews and Free Plays have no daily posting limit. Each capper can publish two
+team plays per Eastern calendar day; further qualifying reviews become tracked
+Free Plays at their earned tail units. Existing duplicate-selection restrictions
+still apply to Free Plays. Apply `20261114180000_unlimited_reviews_team_play_limit.sql`
+and restart the bot. An unresolved team publication holds its slot for staff
+reconciliation so an uncertain Discord send cannot cause duplicate team posts.
 To permanently remove an unpublished failed review and its private archive
 entry, use `/capper_remove_failed_review review_id:<thread ID>`; only failed
 reviews with no associated play or Free Play delivery can be removed.

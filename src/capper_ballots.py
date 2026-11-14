@@ -303,6 +303,8 @@ class CapperBallots(commands.Cog):
                 kwargs["file"] = file
             if decision.get("event_starts_at") and datetime.now(timezone.utc) >= datetime.fromisoformat(decision["event_starts_at"]):
                 raise ValueError("The earliest event started before the official post could be sent.")
+            if decision.get("team_limit_day") and datetime.now(ZoneInfo("America/New_York")).date().isoformat() != decision["team_limit_day"]:
+                raise ValueError("The team play reservation crossed midnight Eastern; staff must reconcile before publication.")
             if self.get_testing():
                 raise ValueError("Official publication is disabled in testing mode.")
             published = await channel.send(
