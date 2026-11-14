@@ -500,6 +500,23 @@ class CapperSlipReviews(commands.Cog):
             await self.queue_intake(thread.id)
 
     @commands.Cog.listener()
+    async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
+        if payload.guild_id != GUILD_ID or payload.parent_id != CAPPER_BALLOT_CHANNEL_ID:
+            return
+        try:
+            marked = await asyncio.to_thread(self.store.mark_review_deleted, payload.thread_id)
+        except Exception as exc:
+            logger.exception("capper_review_delete_quota_mark_failed message=%s", payload.thread_id)
+            await self.publisher.staff_alert(
+                f"slip_delete:{payload.thread_id}",
+                f"Deleted review {payload.thread_id} could not be marked for the daily cap. Verify its saved state "
+                f"before allowing another review. Error: {str(exc)[:800]}",
+            )
+            return
+        if marked:
+            logger.info("capper_review_deleted message=%s", payload.thread_id)
+
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if (isinstance(message.channel, discord.Thread)
                 and message.guild is not None and message.guild.id == GUILD_ID

@@ -57,6 +57,7 @@ def make_cog(monkeypatch):
                  claim_personal_free_play_units_prompt_reissue=Mock(return_value=False),
                  complete_personal_free_play_units_prompt_reissue=Mock(return_value=False),
                  personal_free_play_units_prompt_reissues=Mock(return_value=[]),
+                 mark_review_deleted=Mock(return_value=False),
                  claim_personal_free_play_units=Mock(return_value=False),
                  complete_personal_free_play=Mock(return_value=False))
     author = SimpleNamespace(
@@ -634,6 +635,33 @@ def test_changed_source_fails_closed(monkeypatch):
     cog.store.finalize.assert_not_called()
     cog.store.fail.assert_called_once()
     cog.publisher.staff_alert.assert_awaited_once()
+
+
+def test_deleted_ballot_thread_marks_its_review_for_quota(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        payload = SimpleNamespace(
+            thread_id=500, guild_id=123, parent_id=module.CAPPER_BALLOT_CHANNEL_ID,
+        )
+        cog.store.mark_review_deleted.return_value = True
+
+        await cog.on_raw_thread_delete(payload)
+
+        cog.store.mark_review_deleted.assert_called_once_with(500)
+        cog.publisher.staff_alert.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_deleted_non_ballot_thread_does_not_change_review_quota(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        payload = SimpleNamespace(thread_id=500, guild_id=123, parent_id=999)
+
+        await cog.on_raw_thread_delete(payload)
+
+        cog.store.mark_review_deleted.assert_not_called()
+        cog.publisher.staff_alert.assert_not_awaited()
+    asyncio.run(check())
 
 
 def test_offline_across_cutoff_fails_instead_of_guessing(monkeypatch):

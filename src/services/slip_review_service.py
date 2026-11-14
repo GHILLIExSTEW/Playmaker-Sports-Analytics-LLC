@@ -190,6 +190,9 @@ class SlipReviewStore(BallotStore):
         rows = supabase_service.select("capper_ballots", columns, {"message_id": str(message_id)}).data or []
         return rows[0] if rows else None
 
+    def mark_review_deleted(self, message_id: int) -> bool:
+        return self.rpc("mark_capper_slip_deleted", p_message_id=str(message_id)) is True
+
     def known_ids(self, message_ids: list[int]) -> set[int]:
         known: set[int] = set()
         for offset in range(0, len(message_ids), 100):
