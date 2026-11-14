@@ -58,6 +58,7 @@ def make_cog(monkeypatch):
                  complete_personal_free_play_units_prompt_reissue=Mock(return_value=False),
                  personal_free_play_units_prompt_reissues=Mock(return_value=[]),
                  mark_review_deleted=Mock(return_value=False),
+                 set_daily_review_limit=Mock(return_value=True),
                  claim_personal_free_play_units=Mock(return_value=False),
                  complete_personal_free_play=Mock(return_value=False))
     author = SimpleNamespace(
@@ -661,6 +662,55 @@ def test_deleted_non_ballot_thread_does_not_change_review_quota(monkeypatch):
 
         cog.store.mark_review_deleted.assert_not_called()
         cog.publisher.staff_alert.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_staff_can_set_and_clear_per_capper_daily_review_limit(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        member = SimpleNamespace(id=42, display_name="DarkHorse", bot=False)
+        guild = SimpleNamespace(owner_id=999)
+        staff_member = Mock(spec=discord.Member)
+        staff_member.id = 999
+        staff_member.guild_permissions.manage_guild = True
+        interaction = SimpleNamespace(
+            guild_id=123, guild=guild,
+            user=staff_member,
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        await cog.set_capper_review_limit.callback(cog, interaction, member, 1)
+
+        cog.store.set_daily_review_limit.assert_called_once_with(42, 1)
+        assert "1 per Eastern day" in interaction.response.send_message.call_args.args[0]
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"]
+
+        interaction.response.send_message.reset_mock()
+        await cog.set_capper_review_limit.callback(cog, interaction, member, 0)
+
+        assert cog.store.set_daily_review_limit.call_args_list[-1].args == (42, 0)
+        assert "global default" in interaction.response.send_message.call_args.args[0]
+    asyncio.run(check())
+
+
+def test_per_capper_review_limit_rejects_non_staff(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        member = SimpleNamespace(id=42, display_name="DarkHorse", bot=False)
+        guild = SimpleNamespace(owner_id=999)
+        non_staff_member = Mock(spec=discord.Member)
+        non_staff_member.id = 42
+        non_staff_member.guild_permissions.manage_guild = False
+        interaction = SimpleNamespace(
+            guild_id=123, guild=guild,
+            user=non_staff_member,
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        await cog.set_capper_review_limit.callback(cog, interaction, member, 1)
+
+        cog.store.set_daily_review_limit.assert_not_called()
+        assert "Only server management" in interaction.response.send_message.call_args.args[0]
     asyncio.run(check())
 
 

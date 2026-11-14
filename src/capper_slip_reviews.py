@@ -15,7 +15,10 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
-from src.config import CAPPER_BALLOT_CHANNEL_ID, CONFIRMATION_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID
+from src.config import (
+    CAPPER_BALLOT_CHANNEL_ID, CAPPER_DAILY_REVIEW_LIMIT, CONFIRMATION_CHANNEL_ID,
+    FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID,
+)
 from src.interaction_views import PreparedModalView
 from src.forum_health import CheckedForum
 from src.services.ballot_vote_service import approval_text, tail_rating
@@ -655,6 +658,56 @@ class CapperSlipReviews(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         report = await self.health_report()
         await interaction.followup.send("\n".join(report)[:1900], ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    @app_commands.command(name="capper_review_limit", description="Staff: set a capper's daily slip-review limit")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        member="Capper to configure",
+        limit="Reviews per Eastern day; use 0 to restore the global default",
+    )
+    async def set_capper_review_limit(
+        self, interaction: discord.Interaction, member: discord.Member, limit: app_commands.Range[int, 0, 10],
+    ) -> None:
+        if (interaction.guild_id != GUILD_ID or interaction.guild is None
+                or not isinstance(interaction.user, discord.Member)
+                or not (
+                    interaction.user.id == interaction.guild.owner_id
+                    or interaction.user.guild_permissions.manage_guild
+                )):
+            await interaction.response.send_message(
+                "Only server management can set per-capper review limits.", ephemeral=True,
+            )
+            return
+        if member.bot or not self.publisher.is_tracked_operator(member):
+            await interaction.response.send_message(
+                "Select a non-bot member with the capper role.", ephemeral=True,
+            )
+            return
+        if limit > CAPPER_DAILY_REVIEW_LIMIT:
+            await interaction.response.send_message(
+                f"A per-capper limit can only lower the global limit of {CAPPER_DAILY_REVIEW_LIMIT}.",
+                ephemeral=True,
+            )
+            return
+        try:
+            saved = await asyncio.to_thread(self.store.set_daily_review_limit, member.id, limit)
+        except Exception as exc:
+            logger.exception("capper_review_limit_update_failed member=%s", member.id)
+            await interaction.response.send_message(
+                f"The limit could not be saved: {str(exc)[:800]}", ephemeral=True,
+            )
+            return
+        if not saved:
+            raise RuntimeError(f"The daily review limit was not saved for capper {member.id}.")
+        if limit == 0:
+            message = (
+                f"{member.display_name}'s daily review limit now follows the global default "
+                f"({CAPPER_DAILY_REVIEW_LIMIT} per Eastern day)."
+            )
+        else:
+            message = f"{member.display_name}'s daily review limit is now {limit} per Eastern day."
+        await interaction.response.send_message(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
     async def forum_threads(
         self, forum: discord.ForumChannel, *, since: datetime | None = None,
