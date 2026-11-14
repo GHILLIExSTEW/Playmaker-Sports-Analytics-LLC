@@ -39,6 +39,7 @@ def saved_row():
 def make_cog(monkeypatch):
     monkeypatch.setattr(module, "GUILD_ID", 123)
     monkeypatch.setattr(module, "CONFIRMATION_CHANNEL_ID", 200)
+    monkeypatch.setattr(module, "FREE_PLAYS_CHANNEL_ID", 300)
     monkeypatch.setattr(health, "GUILD_ID", 123)
     channel = SimpleNamespace(
         id=module.CAPPER_BALLOT_CHANNEL_ID, guild=SimpleNamespace(id=123),
@@ -53,6 +54,9 @@ def make_cog(monkeypatch):
                  claim_personal_free_play=Mock(return_value=False),
                  claim_personal_free_play_units_request=Mock(return_value=False),
                  complete_personal_free_play_units_request=Mock(return_value=False),
+                 claim_personal_free_play_units_prompt_reissue=Mock(return_value=False),
+                 complete_personal_free_play_units_prompt_reissue=Mock(return_value=False),
+                 personal_free_play_units_prompt_reissues=Mock(return_value=[]),
                  claim_personal_free_play_units=Mock(return_value=False),
                  complete_personal_free_play=Mock(return_value=False))
     author = SimpleNamespace(
@@ -488,6 +492,95 @@ def test_saved_unit_prompt_gets_button_restored(monkeypatch):
 
         prompt.edit.assert_awaited_once()
         assert prompt.edit.call_args.kwargs["view"].children[0].custom_id == "pm:freeplay_units:500"
+    asyncio.run(check())
+
+
+def test_missing_saved_unit_prompt_is_reissued_and_saved(monkeypatch):
+    async def check():
+        cog, channel, replacement = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        replacement.id = 901
+        replacement.jump_url = "https://discord.com/channels/123/200/901"
+        row = {
+            "message_id": "500", "ballot_state": "failed",
+            "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        saved = saved_row()
+        saved.update(state="failed")
+        saved["review"]["personal_free_play"] = {
+            "state": "awaiting_units", "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        cog.store.awaiting_personal_free_play_units.return_value = [row]
+        cog.store.get.return_value = saved
+        cog.store.claim_personal_free_play_units_prompt_reissue.return_value = True
+        cog.store.complete_personal_free_play_units_prompt_reissue.return_value = True
+        channel.fetch_message.side_effect = discord.NotFound(
+            SimpleNamespace(status=404, reason="Not Found"),
+            {"code": 10008, "message": "Unknown Message"},
+        )
+        channel.send.return_value = replacement
+
+        await cog.restore_free_play_units_buttons()
+
+        cog.store.claim_personal_free_play_units_prompt_reissue.assert_called_once_with(500, module.FREE_PLAYS_CHANNEL_ID, 200, 900)
+        cog.store.complete_personal_free_play_units_prompt_reissue.assert_called_once_with(
+            500, module.FREE_PLAYS_CHANNEL_ID, 200, 900, 200, 901,
+        )
+        channel.send.assert_awaited_once()
+        assert channel.send.call_args.kwargs.get("view") is None
+        assert replacement.edit.await_count == 1
+        assert replacement.edit.call_args.kwargs["view"].children[0].custom_id == "pm:freeplay_units:500"
+        cog.publisher.staff_alert.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_missing_saved_unit_prompt_reissue_claim_refusal_does_not_send(monkeypatch):
+    async def check():
+        cog, channel, _ = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        row = {
+            "message_id": "500", "ballot_state": "failed",
+            "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        saved = saved_row()
+        saved.update(state="failed")
+        saved["review"]["personal_free_play"] = {
+            "state": "awaiting_units", "prompt_channel_id": "200", "prompt_message_id": "900",
+        }
+        cog.store.awaiting_personal_free_play_units.return_value = [row]
+        cog.store.get.return_value = saved
+        cog.store.claim_personal_free_play_units_prompt_reissue.return_value = False
+        channel.fetch_message.side_effect = discord.NotFound(
+            SimpleNamespace(status=404, reason="Not Found"),
+            {"code": 10008, "message": "Unknown Message"},
+        )
+
+        await cog.restore_free_play_units_buttons()
+
+        channel.send.assert_not_awaited()
+        cog.store.complete_personal_free_play_units_prompt_reissue.assert_not_called()
+        cog.publisher.staff_alert.assert_awaited_once()
+    asyncio.run(check())
+
+
+def test_unknown_channel_does_not_trigger_prompt_reissue(monkeypatch):
+    async def check():
+        cog, channel, _ = make_cog(monkeypatch)
+        channel.id = module.CONFIRMATION_CHANNEL_ID
+        cog.store.awaiting_personal_free_play_units.return_value = [{
+            "message_id": "500", "ballot_state": "failed",
+            "prompt_channel_id": "200", "prompt_message_id": "900",
+        }]
+        channel.fetch_message.side_effect = discord.NotFound(
+            SimpleNamespace(status=404, reason="Not Found"),
+            {"code": 10003, "message": "Unknown Channel"},
+        )
+
+        await cog.restore_free_play_units_buttons()
+
+        cog.store.claim_personal_free_play_units_prompt_reissue.assert_not_called()
+        channel.send.assert_not_awaited()
+        cog.publisher.staff_alert.assert_awaited_once()
     asyncio.run(check())
 
 

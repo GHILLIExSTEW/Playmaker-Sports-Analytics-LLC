@@ -8,6 +8,7 @@ declare
   v_free_play_message_id text := '91000000000000000003';
   v_prompt_channel_id text := '1328130555568455710';
   v_prompt_message_id text := '91000000000000000007';
+  v_new_prompt_message_id text := '91000000000000000009';
   claimed boolean;
 begin
   perform public.register_capper_slip(v_message_id, jsonb_build_object(
@@ -116,18 +117,64 @@ begin
   ) then
     raise exception 'The saved unit prompt was not available for button restoration';
   end if;
+  if not public.claim_capper_slip_units_prompt_reissue(
+    v_message_id, '1513186440278704178', v_prompt_channel_id, v_prompt_message_id
+  ) then
+    raise exception 'The missing unit prompt could not be claimed for replacement';
+  end if;
+  if public.claim_capper_slip_units_prompt_reissue(
+    v_message_id, '1513186440278704178', v_prompt_channel_id, v_prompt_message_id
+  ) then
+    raise exception 'A second prompt replacement claim was allowed';
+  end if;
+  if public.claim_capper_slip_free_play_units(
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_prompt_message_id, 1.5
+  ) then
+    raise exception 'The old unit prompt remained active during replacement';
+  end if;
+  if not exists (
+    select 1 from public.capper_slip_unit_prompt_reissues()
+    where message_id = v_message_id
+      and prompt_channel_id = v_prompt_channel_id
+      and prompt_message_id = v_prompt_message_id
+  ) then
+    raise exception 'Interrupted prompt replacement was not visible for reconciliation';
+  end if;
+  if public.complete_capper_slip_units_prompt_reissue(
+    v_message_id, '1513186440278704178', v_prompt_channel_id, v_prompt_message_id,
+    '999', v_new_prompt_message_id
+  ) then
+    raise exception 'The replacement prompt was allowed in another channel';
+  end if;
+  if not public.complete_capper_slip_units_prompt_reissue(
+    v_message_id, '1513186440278704178', v_prompt_channel_id, v_prompt_message_id,
+    v_prompt_channel_id, v_new_prompt_message_id
+  ) then
+    raise exception 'The replacement unit prompt was not saved';
+  end if;
+  if exists (
+    select 1 from public.capper_slip_unit_prompt_reissues()
+    where message_id = v_message_id
+  ) then
+    raise exception 'Completed prompt replacement remained marked as interrupted';
+  end if;
   if public.claim_capper_slip_free_play_units(
     v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_prompt_message_id, 1.5
+  ) then
+    raise exception 'The deleted unit prompt remained active';
+  end if;
+  if public.claim_capper_slip_free_play_units(
+    v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_new_prompt_message_id, 1.5
   ) then
     raise exception 'A non-author was allowed to choose Free Play units';
   end if;
   if public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_prompt_message_id, 3.5
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 3.5
   ) then
     raise exception 'A unit stake over 3u was accepted';
   end if;
   if not public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_prompt_message_id, 1.5
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 1.5
   ) then
     raise exception 'The author could not set units from the saved prompt';
   end if;

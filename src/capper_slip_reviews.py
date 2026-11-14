@@ -304,6 +304,7 @@ class CapperSlipReviews(commands.Cog):
 
     async def restore_free_play_units_buttons(self) -> None:
         rows = await asyncio.to_thread(self.store.awaiting_personal_free_play_units)
+        reissue_alerted: set[str] = set()
         for row in rows:
             message_id = int(row["message_id"])
             try:
@@ -317,7 +318,13 @@ class CapperSlipReviews(commands.Cog):
                 )
                 if channel.guild.id != GUILD_ID:
                     raise RuntimeError("Saved unit prompt belongs to a different guild.")
-                prompt = await channel.fetch_message(int(row["prompt_message_id"]))
+                try:
+                    prompt = await channel.fetch_message(int(row["prompt_message_id"]))
+                except discord.NotFound as exc:
+                    if exc.code != 10008:
+                        raise
+                    await self.reissue_personal_free_play_units_prompt(row, channel)
+                    continue
                 if prompt.author.id != self.bot.user.id:
                     raise RuntimeError("Saved unit prompt is not bot-owned.")
                 custom_id = f"pm:freeplay_units:{message_id}"
@@ -338,6 +345,58 @@ class CapperSlipReviews(commands.Cog):
                     f"free_play_units_button_restore:{message_id}",
                     f"Saved unit request for slip {message_id} needs reconciliation: {str(exc)[:800]}",
                 )
+                reissue_alerted.add(str(message_id))
+
+        reissues = await asyncio.to_thread(self.store.personal_free_play_units_prompt_reissues)
+        for row in reissues:
+            if str(row["message_id"]) in reissue_alerted:
+                continue
+            await self.publisher.staff_alert(
+                f"free_play_units_reissue:{row['message_id']}",
+                f"Unit prompt replacement for slip {row['message_id']} was interrupted before its new message "
+                "ID was recorded. Inspect the team channel and saved ballot before retrying; do not send another prompt "
+                "until reconciled.",
+            )
+
+    async def reissue_personal_free_play_units_prompt(self, row: dict, channel) -> None:
+        message_id = int(row["message_id"])
+        prompt_channel_id = int(row["prompt_channel_id"])
+        prompt_message_id = int(row["prompt_message_id"])
+        saved = await asyncio.to_thread(self.store.get, message_id)
+        review = saved.get("review") or {}
+        delivery = review.get("personal_free_play") or {}
+        if (
+            delivery.get("state") != "awaiting_units"
+            or delivery.get("prompt_channel_id") != str(prompt_channel_id)
+            or delivery.get("prompt_message_id") != str(prompt_message_id)
+        ):
+            raise RuntimeError("Saved unit request changed before replacement; no new prompt was sent.")
+        if FREE_PLAYS_CHANNEL_ID is None:
+            raise RuntimeError("FREE_PLAYS_CHANNEL_ID is not configured; no replacement prompt was sent.")
+        author_id = int(review["author_id"])
+        claimed = await asyncio.to_thread(
+            self.store.claim_personal_free_play_units_prompt_reissue,
+            message_id, FREE_PLAYS_CHANNEL_ID, prompt_channel_id, prompt_message_id,
+        )
+        if not claimed:
+            raise RuntimeError("Saved unit request could not be claimed for replacement; no prompt was sent.")
+
+        prompt = await channel.send(
+            f"<@{author_id}> the previous unit-selection prompt for this slip is unavailable. "
+            "Choose the unit stake for its regular Free Plays card below; it will post automatically after you submit "
+            "(maximum 3u).",
+            allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=author_id)]),
+        )
+        completed = await asyncio.to_thread(
+            self.store.complete_personal_free_play_units_prompt_reissue,
+            message_id, FREE_PLAYS_CHANNEL_ID, prompt_channel_id, prompt_message_id, channel.id, prompt.id,
+        )
+        if not completed:
+            raise RuntimeError(
+                f"Replacement unit prompt {prompt.jump_url} was sent, but its saved marker was not updated.",
+            )
+        await prompt.edit(view=self.free_play_units_view(message_id))
+        logger.info("free_play_units_prompt_reissued ballot=%s prompt=%s", message_id, prompt.id)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:

@@ -289,6 +289,30 @@ class SlipReviewStore(BallotStore):
             p_prompt_message_id=str(prompt_message_id),
         ) is True
 
+    def claim_personal_free_play_units_prompt_reissue(
+        self, message_id: int, channel_id: int, prompt_channel_id: int, prompt_message_id: int,
+    ) -> bool:
+        return self.rpc(
+            "claim_capper_slip_units_prompt_reissue", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_prompt_channel_id=str(prompt_channel_id),
+            p_prompt_message_id=str(prompt_message_id),
+        ) is True
+
+    def complete_personal_free_play_units_prompt_reissue(
+        self, message_id: int, channel_id: int, old_prompt_channel_id: int, old_prompt_message_id: int,
+        new_prompt_channel_id: int, new_prompt_message_id: int,
+    ) -> bool:
+        return self.rpc(
+            "complete_capper_slip_units_prompt_reissue", p_message_id=str(message_id),
+            p_channel_id=str(channel_id), p_old_prompt_channel_id=str(old_prompt_channel_id),
+            p_old_prompt_message_id=str(old_prompt_message_id),
+            p_new_prompt_channel_id=str(new_prompt_channel_id),
+            p_new_prompt_message_id=str(new_prompt_message_id),
+        ) is True
+
+    def personal_free_play_units_prompt_reissues(self) -> list[dict]:
+        return self.rpc("capper_slip_unit_prompt_reissues") or []
+
     def claim_personal_free_play_units(
         self, message_id: int, channel_id: int, author_id: int,
         prompt_channel_id: int, prompt_message_id: int, units: float,
