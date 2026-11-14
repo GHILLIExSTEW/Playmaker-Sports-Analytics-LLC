@@ -59,6 +59,7 @@ def make_cog(monkeypatch):
                  personal_free_play_units_prompt_reissues=Mock(return_value=[]),
                  mark_review_deleted=Mock(return_value=False),
                  set_daily_review_limit=Mock(return_value=True),
+                 delete_failed_review=Mock(return_value=True),
                  claim_personal_free_play_units=Mock(return_value=False),
                  complete_personal_free_play=Mock(return_value=False))
     author = SimpleNamespace(
@@ -711,6 +712,75 @@ def test_per_capper_review_limit_rejects_non_staff(monkeypatch):
 
         cog.store.set_daily_review_limit.assert_not_called()
         assert "Only server management" in interaction.response.send_message.call_args.args[0]
+    asyncio.run(check())
+
+
+def test_staff_can_remove_failed_review_and_private_archive(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        archive_forum_id = module.CAPPER_RECORD_CHANNEL_ID or 400
+        monkeypatch.setattr(module, "CAPPER_RECORD_CHANNEL_ID", archive_forum_id)
+        row = {
+            "message_id": "500", "state": "failed", "policy_version": "slip-v2",
+            "review": {"source_channel_id": module.CAPPER_BALLOT_CHANNEL_ID},
+        }
+        cog.store.find.return_value = row
+        cog.records.store = SimpleNamespace(
+            record=Mock(return_value={"record_date": "2026-11-14", "record_message_id": "600"}),
+            day=Mock(return_value={
+                "forum_channel_id": str(archive_forum_id), "thread_id": "700",
+            }),
+        )
+        archive_thread = Mock(spec=discord.Thread)
+        archive_thread.guild = SimpleNamespace(id=123)
+        archive_thread.parent_id = archive_forum_id
+        archive_message = SimpleNamespace(
+            author=SimpleNamespace(id=1), delete=AsyncMock(),
+        )
+        archive_thread.fetch_message = AsyncMock(return_value=archive_message)
+        review_thread = Mock(spec=discord.Thread)
+        review_thread.guild = SimpleNamespace(id=123)
+        review_thread.parent_id = module.CAPPER_BALLOT_CHANNEL_ID
+        review_thread.delete = AsyncMock()
+        guild = SimpleNamespace(
+            id=123, owner_id=999,
+            fetch_channel=AsyncMock(side_effect=[archive_thread, review_thread]),
+        )
+        staff_member = Mock(spec=discord.Member)
+        staff_member.id = 999
+        staff_member.guild_permissions.manage_guild = True
+        interaction = SimpleNamespace(
+            guild_id=123, guild=guild, user=staff_member,
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await cog.remove_failed_review.callback(cog, interaction, "500")
+
+        archive_message.delete.assert_awaited_once()
+        review_thread.delete.assert_awaited_once()
+        cog.store.delete_failed_review.assert_called_once_with(500)
+        assert "were removed" in interaction.followup.send.call_args.args[0]
+    asyncio.run(check())
+
+
+def test_failed_review_removal_rejects_non_failed_reviews(monkeypatch):
+    async def check():
+        cog, _, _ = make_cog(monkeypatch)
+        cog.store.find.return_value = {"message_id": "500", "state": "pending", "review": {}}
+        interaction = SimpleNamespace(
+            guild_id=123, guild=SimpleNamespace(owner_id=999),
+            user=Mock(spec=discord.Member),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        interaction.user.id = 999
+        interaction.user.guild_permissions.manage_guild = True
+
+        await cog.remove_failed_review.callback(cog, interaction, "500")
+
+        cog.store.delete_failed_review.assert_not_called()
+        assert "Only failed reviews" in interaction.followup.send.call_args.args[0]
     asyncio.run(check())
 
 

@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 
 from src.capper_ballots import BALLOT_CLEANUP_TIME, CapperBallots
 from src.config import (
-    CAPPER_BALLOT_CHANNEL_ID, CAPPER_DAILY_REVIEW_LIMIT, CONFIRMATION_CHANNEL_ID,
+    CAPPER_BALLOT_CHANNEL_ID, CAPPER_DAILY_REVIEW_LIMIT, CAPPER_RECORD_CHANNEL_ID, CONFIRMATION_CHANNEL_ID,
     FREE_PLAYS_CHANNEL_ID, GUILD_ID, TRACKER_ROLE_ID,
 )
 from src.interaction_views import PreparedModalView
@@ -708,6 +708,123 @@ class CapperSlipReviews(commands.Cog):
         else:
             message = f"{member.display_name}'s daily review limit is now {limit} per Eastern day."
         await interaction.response.send_message(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    @app_commands.command(name="capper_remove_failed_review", description="Staff: permanently remove an unpublished failed slip review")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(review_id="Discord ID of the failed slip's forum thread")
+    async def remove_failed_review(self, interaction: discord.Interaction, review_id: str) -> None:
+        if (interaction.guild_id != GUILD_ID or interaction.guild is None
+                or not isinstance(interaction.user, discord.Member)
+                or not (
+                    interaction.user.id == interaction.guild.owner_id
+                    or interaction.user.guild_permissions.manage_guild
+                )):
+            await interaction.response.send_message(
+                "Only server management can remove failed slip reviews.", ephemeral=True,
+            )
+            return
+        review_id = review_id.strip()
+        if not re.fullmatch(r"[0-9]{1,20}", review_id):
+            await interaction.response.send_message("Enter the numeric Discord thread ID.", ephemeral=True)
+            return
+        message_id = int(review_id)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.review_lock(message_id):
+                row = await asyncio.to_thread(self.store.find, message_id)
+                if row is None:
+                    await interaction.followup.send("No saved slip review has that ID.", ephemeral=True)
+                    return
+                review = row.get("review") or {}
+                if row.get("state") != "failed":
+                    await interaction.followup.send("Only failed reviews can be removed.", ephemeral=True)
+                    return
+                if (
+                    row.get("play_id") is not None
+                    or row.get("official_message_id") is not None
+                    or row.get("official_channel_id") is not None
+                    or (row.get("decision") or {}).get("outcome") in {"processing", "published"}
+                    or review.get("personal_free_play")
+                ):
+                    await interaction.followup.send(
+                        "This review has a play or Free Play delivery attached; it cannot be removed safely.",
+                        ephemeral=True,
+                    )
+                    return
+                source_channel_id = int(review.get("source_channel_id") or CAPPER_BALLOT_CHANNEL_ID)
+                if source_channel_id != CAPPER_BALLOT_CHANNEL_ID:
+                    await interaction.followup.send(
+                        "Only failed reviews in the configured capper forum can be removed with this command.",
+                        ephemeral=True,
+                    )
+                    return
+
+                archived_record = await asyncio.to_thread(self.records.store.record, review_id)
+                if archived_record is not None:
+                    if archived_record["record_message_id"] == "sending":
+                        raise RuntimeError("The private archive post is still marked as sending; reconcile it first.")
+                    record_day = await asyncio.to_thread(self.records.store.day, archived_record["record_date"])
+                    if record_day is None or record_day["thread_id"] == "sending":
+                        raise RuntimeError("The private archive thread is missing or still being created.")
+                    if record_day["forum_channel_id"] != str(CAPPER_RECORD_CHANNEL_ID):
+                        raise RuntimeError("The private archive entry belongs to an unexpected forum.")
+                    try:
+                        archive_thread = await interaction.guild.fetch_channel(int(record_day["thread_id"]))
+                    except discord.NotFound:
+                        archive_thread = None
+                    if archive_thread is not None:
+                        if (
+                            not isinstance(archive_thread, discord.Thread)
+                            or archive_thread.guild.id != GUILD_ID
+                            or archive_thread.parent_id != CAPPER_RECORD_CHANNEL_ID
+                        ):
+                            raise RuntimeError("The saved archive thread is not in the configured records forum.")
+                        try:
+                            archive_message = await archive_thread.fetch_message(
+                                int(archived_record["record_message_id"]),
+                            )
+                        except discord.NotFound:
+                            archive_message = None
+                        if archive_message is not None:
+                            if self.bot.user is None or archive_message.author.id != self.bot.user.id:
+                                raise RuntimeError("The saved archive entry is not bot-owned.")
+                            try:
+                                await archive_message.delete(reason="Staff removed a failed capper slip review")
+                            except discord.NotFound:
+                                pass
+
+                try:
+                    review_thread = await interaction.guild.fetch_channel(message_id)
+                except discord.NotFound:
+                    review_thread = None
+                if review_thread is not None:
+                    if (
+                        not isinstance(review_thread, discord.Thread)
+                        or review_thread.guild.id != GUILD_ID
+                        or review_thread.parent_id != CAPPER_BALLOT_CHANNEL_ID
+                    ):
+                        raise RuntimeError("The requested ID is not a thread in the configured capper forum.")
+                    try:
+                        await review_thread.delete(reason="Staff removed a failed capper slip review")
+                    except discord.NotFound:
+                        pass
+
+                if not await asyncio.to_thread(self.store.delete_failed_review, message_id):
+                    raise RuntimeError("The saved review changed or is no longer safe to remove.")
+            logger.info("failed_capper_review_removed review=%s staff=%s", message_id, interaction.user.id)
+            await interaction.followup.send(
+                f"Failed review {message_id} and its saved record were removed.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception as exc:
+            logger.exception("failed_capper_review_removal_failed review=%s", message_id)
+            await interaction.followup.send(
+                f"Removal did not complete: {str(exc)[:700]}. Some Discord content may already be deleted; "
+                "check the saved review and bot logs before retrying.",
+                ephemeral=True,
+            )
 
     async def forum_threads(
         self, forum: discord.ForumChannel, *, since: datetime | None = None,

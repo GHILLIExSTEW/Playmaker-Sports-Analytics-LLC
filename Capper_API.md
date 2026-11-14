@@ -123,8 +123,12 @@ notice check still pauses intake.
 Server managers can set a lower daily slip-review cap for an individual capper
 with `/capper_review_limit member:<capper> limit:1`. Use `limit:0` to remove the
 override and restore the global limit. Apply
-`20261114134500_capper_daily_review_overrides.sql` and restart the bot before
-using this command; it limits slip-review openings, not unrelated Free Plays.
+`20261114134500_capper_daily_review_overrides.sql` and
+`20261114135000_capper_failed_review_removal.sql`, then restart the bot before
+using these commands; the limit applies to slip-review openings, not unrelated Free Plays.
+To permanently remove an unpublished failed review and its private archive
+entry, use `/capper_remove_failed_review review_id:<thread ID>`; only failed
+reviews with no associated play or Free Play delivery can be removed.
 
 ### Legacy HIGHROLLER grace period
 

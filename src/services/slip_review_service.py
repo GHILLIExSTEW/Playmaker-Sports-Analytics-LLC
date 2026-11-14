@@ -261,6 +261,9 @@ class SlipReviewStore(BallotStore):
             p_daily_limit=limit,
         ) is True
 
+    def delete_failed_review(self, message_id: int) -> bool:
+        return self.rpc("delete_failed_capper_slip", p_message_id=str(message_id)) is True
+
     def respond(self, message_id: int, voter_id: int, action: str) -> str:
         status = self.rpc(
             "respond_capper_slip", p_message_id=str(message_id), p_voter_id=str(voter_id), p_action=action,
