@@ -45,19 +45,6 @@ create table if not exists public.players (
   unique (sport_id, api_player_id)
 );
 
-create table if not exists public.roster_snapshots (
-  id bigserial primary key,
-  sport_id bigint not null references public.sports(id) on delete cascade,
-  league_id bigint not null references public.leagues(id) on delete cascade,
-  team_id bigint not null references public.teams(id) on delete cascade,
-  player_id bigint not null references public.players(id) on delete cascade,
-  season text,
-  snapshot_at timestamptz not null default now(),
-  source text not null default 'api-sports',
-  is_active boolean not null default true,
-  created_at timestamptz not null default now()
-);
-
 create table if not exists public.users (
   id bigserial primary key,
   discord_user_id text not null unique,
@@ -136,35 +123,9 @@ create table if not exists public.settlements (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.sync_jobs (
-  id bigserial primary key,
-  job_name text not null,
-  started_at timestamptz not null default now(),
-  finished_at timestamptz,
-  success boolean not null default false,
-  record_count integer not null default 0,
-  error_message text
-);
-
-create table if not exists public.team_daily_summary (
-  id bigserial primary key,
-  sport_id bigint not null references public.sports(id) on delete cascade,
-  league_id bigint references public.leagues(id) on delete set null,
-  team_id bigint not null references public.teams(id) on delete cascade,
-  report_date date not null,
-  wins integer not null default 0,
-  losses integer not null default 0,
-  voids integer not null default 0,
-  partials integer not null default 0,
-  net_units numeric(10,2) not null default 0,
-  updated_at timestamptz not null default now(),
-  unique (sport_id, team_id, report_date)
-);
-
 create index if not exists idx_leagues_sport on public.leagues(sport_id);
 create index if not exists idx_teams_sport_league on public.teams(sport_id, league_id);
 create index if not exists idx_players_sport on public.players(sport_id);
-create index if not exists idx_roster_team_snapshot on public.roster_snapshots(team_id, snapshot_at);
 create index if not exists idx_plays_user_created on public.plays(user_id, created_at);
 create index if not exists idx_plays_status on public.plays(status);
 create index if not exists idx_plays_sport_team on public.plays(sport_id, team_id, created_at);
@@ -173,7 +134,6 @@ create index if not exists idx_play_draft_legs_draft on public.play_draft_legs(d
 create index if not exists idx_play_legs_play on public.play_legs(play_id, leg_number);
 create index if not exists idx_play_versions_play on public.play_versions(play_id, version_number);
 create index if not exists idx_settlements_play on public.settlements(play_id, created_at);
-create index if not exists idx_team_daily_summary_date on public.team_daily_summary(report_date);
 
 -- Upgrade existing installations with the free-text team label used for untracked plays.
 alter table public.plays add column if not exists team_name text;
