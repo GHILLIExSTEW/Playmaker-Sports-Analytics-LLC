@@ -396,7 +396,7 @@
 .capper-card { min-width: 0; padding: 34px 30px 38px; position: relative; border-right: 1px solid var(--line); }
 .capper-card:last-child { border-right: 0; }
 .capper-avatar { width: 76px; height: 76px; display: grid; place-items: center; font: 700 28px/1 var(--display); }
-.capper-avatar-image { width: 76px; height: 76px; display: block; object-fit: cover; background: var(--paper); }
+.capper-avatar-image { width: 76px; height: 76px; display: block; object-fit: cover; }
 .capper-avatar-image.is-large, .capper-avatar-fallback.is-large { width: 126px; height: 126px; }
 .capper-avatar-fallback { width: 76px; height: 76px; display: grid; place-items: center; color: #040916; background: var(--amber); font: 700 24px/1 var(--display); }
 .avatar-1 { background: var(--amber); }

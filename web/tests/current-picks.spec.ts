@@ -374,18 +374,21 @@ test('capper directory keeps profiles accessible when performance records fail',
 
 test('owner customizes capper bio, color, avatar and links with persistent public rendering', async ({ page }) => {
   await mockApi(page, { pageOwner: 'New Capper' })
-  await page.route('https://images.example/avatar.png', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>' }))
+  const avatarUrl = 'https://images.example/avatar.svg'
+  const avatar = page.getByRole('img', { name: 'New Capper avatar' })
+  await page.route(avatarUrl, (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="3" fill="red"/></svg>' }))
   await page.goto('/cappers/new-capper')
   await page.getByRole('button', { name: 'Edit your capper page' }).click()
   await page.getByLabel('Bio / description').fill('My approach to finding value.')
   await page.getByLabel('Accent color').fill('#123abc')
   await page.getByLabel('Page background color').fill('#f0e0cc')
-  await page.getByLabel('Profile image URL').fill('https://images.example/avatar.png')
+  await page.getByLabel('Profile image URL').fill(avatarUrl)
   await page.getByLabel('X URL', { exact: true }).fill('https://x.com/newcapper')
   await page.getByRole('button', { name: 'Save capper page', exact: true }).click()
   await expect(page.getByText('Capper page saved.', { exact: true })).toBeVisible()
   await expect(page.getByText('My approach to finding value.', { exact: true })).toBeVisible()
-  await expect(page.getByRole('img', { name: 'New Capper avatar' })).toHaveAttribute('src', 'https://images.example/avatar.png')
+  await expect(avatar).toHaveAttribute('src', avatarUrl)
+  await expect(avatar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await expect(page.getByRole('navigation', { name: 'New Capper social links' }).getByRole('link', { name: 'X', exact: true })).toHaveAttribute('href', 'https://x.com/newcapper')
   await expect(page.locator('.capper-custom-profile')).toHaveCSS('border-top-color', 'rgb(18, 58, 188)')
   await expect(page.locator('.capper-home')).toHaveCSS('background-color', 'rgb(240, 224, 204)')
@@ -394,7 +397,12 @@ test('owner customizes capper bio, color, avatar and links with persistent publi
   await expect(page.getByText('My approach to finding value.', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Edit your capper page' })).toBeVisible()
   await expect(page.locator('.capper-home')).toHaveCSS('background-color', 'rgb(240, 224, 204)')
+  await page.goto('/cappers')
+  await expect(avatar).toHaveAttribute('src', avatarUrl)
+  await expect(avatar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await page.goto('/')
+  await expect(avatar).toHaveAttribute('src', avatarUrl)
+  await expect(avatar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   await expect(page.locator('.site-header')).toHaveCSS('background-color', 'rgba(4, 9, 22, 0.96)')
 })
 
@@ -411,7 +419,7 @@ test('another capper cannot see editing controls and failed saves remain explici
   await expect(page.getByText('Capper page saved.', { exact: true })).toHaveCount(0)
 })
 
-test('owner uploads avatar to own folder as resized WebP and persists its public URL', async ({ page }) => {
+test('owner uploads avatar to own folder as resized WebP with transparency and persists its public URL', async ({ page }) => {
   await mockApi(page, { pageOwner: 'New Capper' })
   const uploads: { path: string; type: string; body: Buffer }[] = []
   await page.route('**/storage/v1/object/website-assets/**', async (route) => {
@@ -429,7 +437,7 @@ test('owner uploads avatar to own folder as resized WebP and persists its public
     canvas.height = 768
     const context = canvas.getContext('2d')!
     context.fillStyle = 'red'
-    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.fillRect(256, 192, 512, 384)
     return canvas.toDataURL('image/png').split(',')[1]
   })
   await page.getByLabel('Upload profile image').setInputFiles({
@@ -444,14 +452,22 @@ test('owner uploads avatar to own folder as resized WebP and persists its public
   expect(uploads[0].body.toString('latin1')).toContain('Content-Type: image/webp')
   const start = uploads[0].body.indexOf(Buffer.from('RIFF'))
   const size = uploads[0].body.readUInt32LE(start + 4) + 8
-  const dimensions = await page.evaluate(async (base64) => {
+  const image = await page.evaluate(async (base64) => {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/webp' }))
-    const result = [bitmap.width, bitmap.height]
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const context = canvas.getContext('2d')!
+    context.drawImage(bitmap, 0, 0)
     bitmap.close()
-    return result
+    return {
+      dimensions: [canvas.width, canvas.height],
+      cornerAlpha: context.getImageData(0, 0, 1, 1).data[3],
+      centerAlpha: context.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3],
+    }
   }, uploads[0].body.subarray(start, start + size).toString('base64'))
-  expect(dimensions).toEqual([512, 384])
+  expect(image).toEqual({ dimensions: [512, 384], cornerAlpha: 0, centerAlpha: 255 })
   await expect(page.getByRole('img', { name: 'New Capper avatar' })).toHaveAttribute('src', /\/object\/public\/website-assets\/capper-avatars\/.*\.webp$/)
 })
 

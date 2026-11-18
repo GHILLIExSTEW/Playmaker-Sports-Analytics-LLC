@@ -355,7 +355,7 @@ export default function CapperPageProfile({ name, onSaved, onAppearance }: { nam
       </fieldset>
       <label>Bio / description<textarea maxLength={2000} value={draft.bio} onChange={(event) => setDraft({ ...draft, bio: event.target.value })} /></label>
       <label>Upload profile image<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /></label>
-      <p>PNG, JPEG or WebP, up to 10 MB. Uploads are resized to at most 512 pixels and saved publicly when you save the page.</p>
+      <p>PNG, JPEG or WebP, up to 10 MB. For a logo without a box, use a PNG or WebP with a transparent background. Uploads are resized to at most 512 pixels and saved publicly when you save the page.</p>
       <label>Profile image URL<input type="url" maxLength={2048} placeholder="https://..." value={draft.avatar_url ?? ''} onChange={(event) => setDraft({ ...draft, avatar_url: event.target.value || null })} /></label>
       <p>Alternatively use an HTTPS image URL. A selected upload overrides this URL. Clear both to use the default avatar. The bio and links are public.</p>
       {(Object.keys(socialLabels) as SocialKey[]).map((key) => <label key={key}>{socialLabels[key]} URL<input type="url" maxLength={2048} placeholder="https://..." value={draft.social_links[key] ?? ''} onChange={(event) => {
