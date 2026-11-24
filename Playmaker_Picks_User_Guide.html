@@ -30,7 +30,7 @@
 <main>
   <header>
     <h1>Playmaker Picks</h1>
-    <p>Discord, website, research tools and API usage<br>Updated November 12, 2026</p>
+    <p>Discord, website, research tools and API usage<br>Updated November 24, 2026</p>
   </header>
 
   <section><h2><span>🚀</span>Start here and check your access</h2>
@@ -112,7 +112,7 @@
         <tr><td><code>/regrade</code></td><td>Select a play from the last two days, then enter remaining legs, new American odds and an optional note. Regraded plays count as zero units.</td></tr>
         <tr><td><code>/unsettle</code></td><td>Select a play settled in the last seven days to reopen an accidental or incorrect settlement. Confirm before applying it.</td></tr>
         <tr><td><code>/edit_play</code></td><td>Select an open official play and edit units, team, selections and leg odds in a modal. Ownership and role checks still apply.</td></tr>
-        <tr><td><code>/recap</code></td><td>Officials/moderators preview the previous weekly or monthly recap privately. With post:true, weekly recaps replace the existing WEEKLY_RECAP_MESSAGE_ID message in the results channel; monthly recaps post a new message. Weekly updates never create a replacement if the configured message is missing or inaccessible. Scheduled recaps run at 10 AM Eastern on Mondays and on the first day of the month.</td></tr>
+        <tr><td><code>/recap</code></td><td>Officials/moderators preview the previous weekly or monthly recap privately. With post:true, weekly recaps post a new message in Free Chat; monthly recaps post a new message in the results channel. Scheduled weekly recaps summarize the last completed Monday–Sunday week and post in Free Chat at 10 AM Eastern on Mondays, Wednesdays and Fridays. Monthly recaps post in Results at 10 AM Eastern on the first day of each month.</td></tr>
         <tr><td><code>/request_insights</code></td><td>Staff can request author insight for up to 50 open picks missing an insight request. Insight is capper-written analysis, not automatically extracted slip text.</td></tr>
         <tr><td><code>/test [image:]</code></td><td>Officials run system diagnostics or parse an attached slip without recording a play.</td></tr>
       </tbody>
@@ -138,6 +138,7 @@
     <p><code>/cappers</code> lists current verified OPERATOR cappers, with public profiles and settled performance. <code>/picks</code> contains published open picks for verified member/team access. Filter by sport or capper, and open the insight control where available.</p>
     <p>Account &gt; View public profile opens your separate member profile. Leave Avatar image URL blank to follow the latest Discord login photo; after changing your Discord avatar, sign out and back in to sync it. Your own Discord avatar URL is treated as automatic, not a frozen custom image. Other custom HTTPS image URLs remain overrides. This does not change the separately managed capper-page artwork.</p>
     <p>On <code>/account</code>, sign in with Discord, complete age verification, check membership, edit your profile, choose sports/capper follows, and manage alert preferences. The personalized homepage uses those follows. A preference does not guarantee delivery of every alert.</p>
+    <p>The public <code>/merchandise</code> catalog lists active products and links to their optional off-site order pages. Playmaker does not process merchandise payments. Sign in with Discord and request access to manage products; a verified Owner must approve the request. Approved managers can update listings and stock, record manual sales, and view the private sales ledger. Each sale reduces stock. Only Owners can approve or revoke merchandise managers; customers cannot see sales records.</p>
     <p>Verified capper page owners can edit their own page appearance and their own open-pick insights. A verified Owner can edit all capper pages and personal-play insights. Team slip justification belongs only to its original submitting capper, even when another user holds Owner. Available appearance controls include colors, heading font, bio, social links, avatar, banner and section order. Saving or uploading can fail explicitly; verify the saved result.</p>
     <div class="callout">Active website access is verified once per browser tab and retained across navigation/reloads until the tab closes. No 30-second or focus role refresh runs. Sign-out, account/profile changes and membership expiry invalidate it. A removed role blocks new protected database requests even if previously viewed content remains in the tab. The browser cache cannot grant server access.</div>
   </section>

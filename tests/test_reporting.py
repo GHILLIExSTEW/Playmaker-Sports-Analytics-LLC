@@ -15,15 +15,15 @@ from src.reporting import Reporting, TRACKER_TIMEZONE, build_recap_embed
 from src.services.team_ranking_service import TeamRankingService
 
 
-@pytest.mark.parametrize("configured, expected", [(None, "123"), ("456", "456")])
-def test_weekly_recap_channel_configuration(configured, expected):
+@pytest.mark.parametrize("configured, expected", [(None, "1556482816974389290"), ("456", "456")])
+def test_free_chat_channel_configuration(configured, expected):
     env = os.environ.copy()
-    env.update(PLAYMAKER_DISABLE_DOTENV="1", VIP_CHAT_CHANNEL_ID="123")
-    env.pop("WEEKLY_RECAP_CHANNEL_ID", None)
+    env["PLAYMAKER_DISABLE_DOTENV"] = "1"
+    env.pop("FREE_CHAT_CHANNEL_ID", None)
     if configured is not None:
-        env["WEEKLY_RECAP_CHANNEL_ID"] = configured
+        env["FREE_CHAT_CHANNEL_ID"] = configured
     result = subprocess.run(
-        [sys.executable, "-c", "from src.config import WEEKLY_RECAP_CHANNEL_ID; print(WEEKLY_RECAP_CHANNEL_ID)"],
+        [sys.executable, "-c", "from src.config import FREE_CHAT_CHANNEL_ID; print(FREE_CHAT_CHANNEL_ID)"],
         env=env, capture_output=True, text=True, check=True,
     )
     assert result.stdout.strip() == expected
@@ -158,8 +158,11 @@ def test_hourly_job_reports_failures():
 @pytest.mark.parametrize("now, expected", [
     (datetime(2026, 6, 1, 10, tzinfo=TRACKER_TIMEZONE), ["weekly", "monthly"]),
     (datetime(2026, 6, 8, 10, tzinfo=TRACKER_TIMEZONE), ["weekly"]),
-    (datetime(2026, 7, 1, 10, tzinfo=TRACKER_TIMEZONE), ["monthly"]),
+    (datetime(2026, 6, 10, 10, tzinfo=TRACKER_TIMEZONE), ["weekly"]),
+    (datetime(2026, 6, 12, 10, tzinfo=TRACKER_TIMEZONE), ["weekly"]),
+    (datetime(2026, 7, 1, 10, tzinfo=TRACKER_TIMEZONE), ["weekly", "monthly"]),
     (datetime(2026, 6, 9, 10, tzinfo=TRACKER_TIMEZONE), []),
+    (datetime(2026, 2, 1, 10, tzinfo=TRACKER_TIMEZONE), ["monthly"]),
 ])
 def test_recap_schedule_preserves_completed_period_dates(monkeypatch, now, expected):
     monkeypatch.setattr(reporting_module, "datetime", SimpleNamespace(now=lambda zone: now))
@@ -196,24 +199,27 @@ def test_recap_permission_and_private_preview():
     cog.resolve_channel.assert_not_awaited()
 
 
-def test_recap_post_routes_to_results_channel(monkeypatch):
+@pytest.mark.parametrize(
+    "period, channel_id, setting_name",
+    [("weekly", 777, "FREE_CHAT_CHANNEL_ID"), ("monthly", 999, "RESULT_CHANNEL_ID")],
+)
+def test_recap_post_routes_to_configured_channel(monkeypatch, period, channel_id, setting_name):
+    monkeypatch.setattr(reporting_module, "FREE_CHAT_CHANNEL_ID", 777)
     monkeypatch.setattr(reporting_module, "RESULT_CHANNEL_ID", 999)
     cog = make_reporting()
     request = interaction()
-    period = discord.app_commands.Choice(name="Monthly", value="monthly")
-    asyncio.run(cog.recap_command.callback(cog, request, period, True))
-    cog.resolve_channel.assert_awaited_once_with(999, "RESULT_CHANNEL_ID", required=True)
+    choice = discord.app_commands.Choice(name=period.title(), value=period)
+    asyncio.run(cog.recap_command.callback(cog, request, choice, True))
+    cog.resolve_channel.assert_awaited_once_with(channel_id, setting_name, required=True)
     cog.resolve_channel.return_value.send.assert_awaited_once()
-    assert "<#999>" in request.followup.send.call_args.args[0]
+    assert f"<#{channel_id}>" in request.followup.send.call_args.args[0]
+    assert "posted" in request.followup.send.call_args.args[0]
 
 
-def test_weekly_recap_repeated_posts_edit_only_configured_message(monkeypatch):
-    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_MESSAGE_ID", 1564277423304998984)
-    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_CHANNEL_ID", 777)
+def test_weekly_recap_posts_new_message_each_time(monkeypatch):
+    monkeypatch.setattr(reporting_module, "FREE_CHAT_CHANNEL_ID", 777)
     cog = make_reporting()
-    cog.bot.user = SimpleNamespace(id=42)
-    message = SimpleNamespace(author=SimpleNamespace(id=42), edit=AsyncMock())
-    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message), send=AsyncMock())
+    channel = SimpleNamespace(id=777, send=AsyncMock())
     cog.resolve_channel.return_value = channel
 
     async def check():
@@ -221,33 +227,9 @@ def test_weekly_recap_repeated_posts_edit_only_configured_message(monkeypatch):
         await cog.post_recap("weekly")
 
     asyncio.run(check())
-    cog.resolve_channel.assert_awaited_with(777, "WEEKLY_RECAP_CHANNEL_ID", required=True)
-    assert channel.fetch_message.await_count == 2
-    channel.fetch_message.assert_awaited_with(1564277423304998984)
-    assert message.edit.await_count == 2
-    assert message.edit.call_args.kwargs["embed"].title == "📊 Weekly Recap"
-    assert message.edit.call_args.kwargs["attachments"] == []
-    channel.send.assert_not_awaited()
-
-
-@pytest.mark.parametrize("failure", ["missing", "forbidden", "wrong-author", "unset"])
-def test_weekly_recap_target_failure_never_posts_another_message(monkeypatch, failure):
-    monkeypatch.setattr(reporting_module, "WEEKLY_RECAP_MESSAGE_ID", None if failure == "unset" else 123)
-    cog = make_reporting()
-    cog.bot.user = SimpleNamespace(id=42)
-    message = SimpleNamespace(author=SimpleNamespace(id=43), edit=AsyncMock())
-    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message), send=AsyncMock())
-    cog.resolve_channel.return_value = channel
-    expected = RuntimeError
-    if failure in {"missing", "forbidden"}:
-        expected = discord.NotFound if failure == "missing" else discord.Forbidden
-        channel.fetch_message.side_effect = expected(
-            SimpleNamespace(status=404 if failure == "missing" else 403, reason=failure), failure,
-        )
-    with pytest.raises(expected):
-        asyncio.run(cog.post_recap("weekly"))
-    channel.send.assert_not_awaited()
-    message.edit.assert_not_awaited()
+    cog.resolve_channel.assert_awaited_with(777, "FREE_CHAT_CHANNEL_ID", required=True)
+    assert channel.send.await_count == 2
+    assert all(call.kwargs["embed"].title == "📊 Weekly Recap" for call in channel.send.await_args_list)
 
 
 @pytest.mark.parametrize("command", ["rankings_command", "summary_command"])

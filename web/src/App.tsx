@@ -58,6 +58,7 @@ const MemberPublicPage = lazy(() => import('./MemberPublicPage'))
 const MemberHomeFeed = lazy(() => import('./MemberHomeFeed'))
 const MembershipPage = lazy(() => import('./MembershipPage'))
 const PolicyPage = lazy(() => import('./PolicyPage'))
+const MerchandisePage = lazy(() => import('./MerchandisePage'))
 const SportPage = lazy(() => import('./SportPage'))
 const CurrentPicksFeed = lazy(() => import('./CurrentPicksFeed'))
 const CapperPageProfile = lazy(() => import('./CapperPageProfile'))
@@ -419,6 +420,8 @@ function Website() {
           ? 'Expert Picks | Playmaker Picks'
         : routePath === '/account'
           ? 'Member Account | Playmaker Picks'
+        : routePath === '/merchandise'
+          ? 'Merchandise | Playmaker Picks'
         : routePath === '/stats'
           ? 'Member Stats | Playmaker Picks'
         : routePath === '/tools'
@@ -478,6 +481,7 @@ function Website() {
           <Link to="/picks" onClick={closeMenu}>Expert Picks</Link>
           <a href="/results" onClick={closeMenu}>Results</a>
           <SportsDropdown onNavigate={closeMenu} />
+          <Link to="/merchandise" onClick={closeMenu}>Merchandise</Link>
           <a href="/account" onClick={closeMenu}>Account</a>
           <Link to="/cappers" onClick={closeMenu}>Cappers</Link>
           <Link to="/guide" onClick={closeMenu}>Guide (team only)</Link>
@@ -504,6 +508,10 @@ function Website() {
         ) : routePath === '/membership' ? (
           <Suspense fallback={<section className="membership-page"><p className="account-state">Loading membership options…</p></section>}>
             <MembershipPage />
+          </Suspense>
+        ) : routePath === '/merchandise' ? (
+          <Suspense fallback={<section className="merchandise-page"><p className="account-state">Loading merchandise…</p></section>}>
+            <MerchandisePage />
           </Suspense>
         ) : routePath === '/picks' ? (
           <Suspense fallback={<p className="account-state">Loading expert picks...</p>}>
