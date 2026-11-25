@@ -404,6 +404,7 @@
 .avatar-3 { color: var(--ink); background: var(--violet); }
 .capper-index { position: absolute; top: 36px; right: 30px; color: #898691; font: 600 12px/1 var(--display); }
 .capper-card h3 { margin: 28px 0 4px; font: 700 32px/1 var(--display); text-transform: uppercase; }
+.capper-name-square { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; border: 0.06em solid currentColor; line-height: 1; text-transform: none; vertical-align: -0.08em; }
 .capper-card > strong { color: var(--green); font-size: 12px; }
 .capper-card p { min-height: 72px; margin: 21px 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
 .capper-card a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; text-decoration: none; }
@@ -422,6 +423,7 @@
 .capper-back-link { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 38px; color: var(--green); font-size: 13px; font-weight: 600; text-decoration: none; }
 .capper-back-link svg { transform: rotate(180deg); }
 .capper-identity { display: flex; align-items: center; gap: 28px; }
+.capper-identity > div { min-width: 0; }
 .capper-identity h1 { margin: 0; color: var(--ink); font: 800 82px/0.92 var(--display); text-transform: uppercase; }
 .capper-identity > div > p:last-child { margin: 18px 0 0; color: var(--muted); font-size: 16px; line-height: 1.6; }
 .capper-profile-metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }

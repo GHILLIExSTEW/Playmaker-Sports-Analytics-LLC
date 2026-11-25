@@ -170,6 +170,16 @@ function CapperAvatar({ name, avatarUrl, large = false }: { name: string; avatar
   return <img className={`capper-avatar-image${large ? ' is-large' : ''}`} src={avatarUrl || generatedAvatarUrl(name)} alt={`${name} avatar`} onError={() => setFailed(true)} />
 }
 
+function CapperName({ name }: { name: string }) {
+  if (!name.includes('\u20de')) return name
+  const parts = name.split(/([^\s\u20de]\u20de)/u)
+  return <span aria-hidden="true">{parts.map((part, index) =>
+    /^[^\s\u20de]\u20de$/u.test(part)
+      ? <span className="capper-name-square" key={index}>{part.slice(0, -1)}</span>
+      : <span key={index}>{part}</span>,
+  )}</span>
+}
+
 function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalone = false }: {
   cappers: CapperSummary[]; directoryState: LoadState; loadState: LoadState; onRetry: () => void; standalone?: boolean
 }) {
@@ -182,7 +192,7 @@ function CapperDirectory({ cappers, directoryState, loadState, onRetry, standalo
       {cappers.map((capper, index) => (
         <article className="capper-card" key={capper.name}>
           <CapperAvatar key={capper.avatar_url} name={capper.name} avatarUrl={capper.avatar_url} /><span className="capper-index">0{index + 1}</span>
-          <h3>{capper.name}</h3>
+          <h3 aria-label={capper.name}><CapperName name={capper.name} /></h3>
           {loadState === 'ready' && <>
             <strong>{capper.plays} settled plays · {capper.wins}-{capper.losses}</strong>
             <p>Net units: <span className={capper.net_units > 0 ? 'net-positive' : capper.net_units < 0 ? 'net-negative' : ''}>{formatNetUnits(capper.net_units)}</span></p>
@@ -560,7 +570,7 @@ function Website() {
               <Link to="/cappers" className="capper-back-link"><ArrowRight size={16} /> All cappers</Link>
               <div className="capper-identity">
                 <CapperAvatar key={selectedCapper.avatar_url} name={selectedCapper.name} avatarUrl={selectedCapper.avatar_url} large />
-                <div><p className="eyebrow">Capper profile</p><h1>{selectedCapper.name}</h1><p>See current picks, settled results, and performance trends over time.</p></div>
+                <div><p className="eyebrow">Capper profile</p><h1 aria-label={selectedCapper.name}><CapperName name={selectedCapper.name} /></h1><p>See current picks, settled results, and performance trends over time.</p></div>
               </div>
             </div>
             <Suspense fallback={<p className="account-state">Loading capper profile...</p>}>

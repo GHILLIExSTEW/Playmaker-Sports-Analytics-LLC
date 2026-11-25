@@ -121,6 +121,25 @@ async function mockSports(page: Page, failingSport?: string) {
   return calls
 }
 
+test('capper names with combining squares render their original letters on the directory and profile', async ({ page }) => {
+  const name = 'R\u20de\u00a0\u00a0o\u20de\u00a0\u00a0B\u20de\u00a0\u00a0i\u20de\u00a0\u00a0N\u20de📚'
+  await mockSports(page)
+  await page.route('**/rest/v1/rpc/public_capper_directory*', (route) =>
+    route.fulfill({ json: [{ name, avatar_url: null }, { name: 'Other Capper', avatar_url: null }] }))
+  await page.goto('/cappers')
+  const heading = page.locator('.capper-card h3').first()
+  await expect(heading.locator('.capper-name-square')).toHaveCount(5)
+  await expect(heading.locator('.capper-name-square')).toHaveText(['R', 'o', 'B', 'i', 'N'])
+  await expect(heading).toHaveAccessibleName(name)
+  await expect(page.locator('.capper-card h3').nth(1)).toHaveText('Other Capper')
+  await page.locator('.capper-card').first().getByRole('link', { name: 'Open capper homepage' }).click()
+  const profileHeading = page.locator('.capper-identity h1')
+  await expect(profileHeading.locator('.capper-name-square')).toHaveCount(5)
+  await expect(profileHeading).toHaveAccessibleName(name)
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
 for (const mobile of [false, true]) {
   test(`homepage sections remain opaque while scrolling and returning home (${mobile ? 'mobile' : 'desktop'})`, async ({ page }) => {
     await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 768 })
