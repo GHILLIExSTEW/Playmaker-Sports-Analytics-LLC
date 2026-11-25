@@ -161,9 +161,11 @@ function localDate(): string {
   return now.toISOString().slice(0, 10)
 }
 
-export default function MerchandisePage() {
+export default function MerchandisePage({ isAdmin }: { isAdmin: boolean }) {
   const [session, setSession] = useState<Session | null>(null)
-  const [authReady, setAuthReady] = useState(false)
+  const [authReady, setAuthReady] = useState(!isAdmin)
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null)
+  const [storeTab, setStoreTab] = useState<'shop' | 'partner'>('shop')
   const [status, setStatus] = useState<ManagerStatus>('signed_out')
   const [catalog, setCatalog] = useState<CatalogProduct[]>([])
   const [products, setProducts] = useState<AdminProduct[]>([])
@@ -182,6 +184,7 @@ export default function MerchandisePage() {
   const sessionUserId = session?.user.id
 
   useEffect(() => {
+    if (!isAdmin) return
     let cancelled = false
     void supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (cancelled) return
@@ -196,13 +199,13 @@ export default function MerchandisePage() {
       cancelled = true
       subscription.unsubscribe()
     }
-  }, [])
+  }, [isAdmin])
 
   const fetchPage = useCallback(async (): Promise<MerchandisePageData> => {
     const { data: publicRows, error: catalogError } = await supabase.rpc('public_merchandise_catalog')
     if (catalogError) throw catalogError
     const nextCatalog = parseRows(publicRows, parseCatalogProduct, 'merchandise catalog')
-    if (!sessionUserId) {
+    if (!isAdmin || !sessionUserId) {
       return { catalog: nextCatalog, status: 'signed_out', products: [], sales: [], requests: [], managers: [] }
     }
 
@@ -239,7 +242,7 @@ export default function MerchandisePage() {
       requests: parseRows(requestResult.data, parseAccessRequest, 'access requests'),
       managers: parseRows(managerResult.data, parseManager, 'manager roster'),
     }
-  }, [sessionUserId])
+  }, [isAdmin, sessionUserId])
 
   const applyPage = useCallback((page: MerchandisePageData) => {
     setCatalog(page.catalog)
@@ -248,7 +251,8 @@ export default function MerchandisePage() {
     setSales(page.sales)
     setRequests(page.requests)
     setManagers(page.managers)
-  }, [])
+    setLoadedUserId(sessionUserId ?? null)
+  }, [sessionUserId])
 
   const refreshPage = useCallback(async () => {
     setLoading(true)
@@ -286,7 +290,7 @@ export default function MerchandisePage() {
     try {
       const { error: signInError } = await supabase.auth.signInWithOAuth({
         provider: 'discord',
-        options: { redirectTo: `${window.location.origin}/merchandise` },
+        options: { redirectTo: `${window.location.origin}/merchandise/admin` },
       })
       if (signInError) throw signInError
     } catch (signInError) {
@@ -400,22 +404,39 @@ export default function MerchandisePage() {
   const activeProducts = products.filter((product) => product.is_active)
   const selectedSaleProduct = activeProducts.find((product) => product.id === saleProductId)
   const salesTotal = sales.reduce((total, sale) => total + sale.total, 0)
+  const accessCurrent = loadedUserId === (sessionUserId ?? null)
 
   return <section className="merchandise-page">
     <header className="merchandise-heading">
       <p className="eyebrow">Playmaker Picks</p>
-      <h1>Merchandise</h1>
-      <p>Browse Playmaker merchandise. Product ordering links, when available, take you to the embroidery storefront.</p>
+      <h1>{isAdmin ? 'Merchandise management' : 'The merchandise shop'}</h1>
+      <p>{isAdmin
+        ? 'Private product, stock and sales tools for approved merchandise managers.'
+        : 'Explore Playmaker merchandise and meet our embroidery partner.'}</p>
     </header>
+
+    {!isAdmin && <nav className="merchandise-tabs" aria-label="Merchandise sections">
+      <button type="button" aria-pressed={storeTab === 'shop'} onClick={() => setStoreTab('shop')}>Shop merchandise</button>
+      <button type="button" aria-pressed={storeTab === 'partner'} onClick={() => setStoreTab('partner')}>Custom Stitches</button>
+    </nav>}
 
     {error && <p className="data-notice" role="alert">{error} <button type="button" className="results-retry" onClick={() => void refreshPage()}>Retry</button></p>}
     {notice && <p className="account-state" role="status">{notice}</p>}
-    {loading && <p className="account-state" role="status">Loading merchandise…</p>}
-    {!loading && !error && catalog.length === 0 && <p className="merchandise-empty">No merchandise is listed yet. Check back soon.</p>}
+    {loading && (isAdmin || storeTab === 'shop') && <p className="account-state" role="status">Loading merchandise…</p>}
+    {isAdmin && !loading && !error && !accessCurrent && <p className="account-state" role="status">Checking merchandise access…</p>}
+    {!isAdmin && storeTab === 'partner' && <section className="merchandise-partner">
+      <p className="eyebrow">Affiliate spotlight</p>
+      <h2>Custom Stitches</h2>
+      <p>Meet Custom Stitches, a family-owned embroidery business in the Berkshires creating custom designs.</p>
+      <p className="merchandise-partner-note">Partner website coming soon.</p>
+    </section>}
+    {!isAdmin && storeTab === 'shop' && !loading && !error && catalog.length === 0 && <p className="merchandise-empty">No merchandise is listed yet. Check back soon.</p>}
 
-    {catalog.length > 0 && <div className="merchandise-grid">
+    {!isAdmin && storeTab === 'shop' && catalog.length > 0 && <div className="merchandise-grid">
       {catalog.map((product) => <article className="merchandise-card" key={product.id}>
-        {product.image_url && <img src={product.image_url} alt={product.name} loading="lazy" />}
+        {product.image_url
+          ? <img src={product.image_url} alt={product.name} loading="lazy" />
+          : <div className="merchandise-image-placeholder" aria-hidden="true">Playmaker Picks</div>}
         <div className="merchandise-card-body">
           <div className="merchandise-card-heading"><h2>{product.name}</h2><strong>${product.price.toFixed(2)}</strong></div>
           {product.description && <p>{product.description}</p>}
@@ -424,12 +445,12 @@ export default function MerchandisePage() {
           </p>
           {product.order_url && product.in_stock
             ? <a className="account-primary-button" href={product.order_url} target="_blank" rel="noreferrer">Order merchandise</a>
-            : <span className="merchandise-order-note">{product.in_stock ? 'Ordering details coming soon.' : 'Check back for availability.'}</span>}
+            : <span className="merchandise-order-note">{product.in_stock ? 'Online checkout coming soon.' : 'Check back for availability.'}</span>}
         </div>
       </article>)}
     </div>}
 
-    {!loading && (status === 'signed_out' || status === 'none' || status === 'pending') && <section className="merchandise-access">
+    {isAdmin && !loading && !error && accessCurrent && (status === 'signed_out' || status === 'none' || status === 'pending') && <section className="merchandise-access">
       <h2>Manage merchandise</h2>
       {status === 'signed_out'
         ? <><p>Sign in with Discord to request access to add products and record sales.</p><button className="account-primary-button" type="button" disabled={busy !== ''} onClick={() => void signIn()}>Sign in with Discord</button></>
@@ -438,7 +459,7 @@ export default function MerchandisePage() {
           : <><p>Merchandise management is restricted. Sign in with Discord to request access.</p><button className="account-primary-button" type="button" disabled={busy !== ''} onClick={() => void requestAccess()}>Request manager access</button></>}
     </section>}
 
-    {!loading && (status === 'manager' || status === 'owner') && <section className="merchandise-management">
+    {isAdmin && !loading && !error && accessCurrent && (status === 'manager' || status === 'owner') && <section className="merchandise-management">
       <header className="merchandise-section-heading"><div><p className="eyebrow">Private tools</p><h2>Merchandise management</h2></div><p>Sales records are private to approved merchandise managers and Owners.</p></header>
 
       {status === 'owner' && <section className="merchandise-access">

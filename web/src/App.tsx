@@ -430,6 +430,8 @@ function Website() {
           ? 'Expert Picks | Playmaker Picks'
         : routePath === '/account'
           ? 'Member Account | Playmaker Picks'
+        : routePath === '/merchandise/admin'
+          ? 'Merchandise Management | Playmaker Picks'
         : routePath === '/merchandise'
           ? 'Merchandise | Playmaker Picks'
         : routePath === '/stats'
@@ -519,9 +521,9 @@ function Website() {
           <Suspense fallback={<section className="membership-page"><p className="account-state">Loading membership options…</p></section>}>
             <MembershipPage />
           </Suspense>
-        ) : routePath === '/merchandise' ? (
+        ) : routePath === '/merchandise' || routePath === '/merchandise/admin' ? (
           <Suspense fallback={<section className="merchandise-page"><p className="account-state">Loading merchandise…</p></section>}>
-            <MerchandisePage />
+            <MerchandisePage key={routePath} isAdmin={routePath === '/merchandise/admin'} />
           </Suspense>
         ) : routePath === '/picks' ? (
           <Suspense fallback={<p className="account-state">Loading expert picks...</p>}>

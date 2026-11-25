@@ -1,5 +1,24 @@
 # React + TypeScript + Vite
 
+## Merchandise
+
+The public `/merchandise` page displays active products and a Custom Stitches
+affiliate profile. The partner website is not yet available. Products without
+an ordering link show that online checkout is coming soon; existing off-site
+ordering links remain available.
+
+The separate `/merchandise/admin` page is not linked from the public shop.
+Discord sign-in alone does not grant access: an Owner approves merchandise
+manager requests, and database RPCs enforce access to products and sales.
+Managers can add products, set stock and record sales. Apply
+`supabase/migrations/20261124052300_merchandise_catalog_sales.sql` before
+deploying the page, and allow the admin URL as a Discord OAuth redirect.
+
+Square checkout is not integrated yet. Before enabling it, determine shipping
+options and rates for the USA, location-based sales tax, product variants, and
+the Square account/integration details. Do not treat the manual sales ledger
+or off-site links as automatic Square order or inventory synchronization.
+
 ## Live membership offer
 
 Public enrollment is open for one HIGHROLLER membership with three billing options:
