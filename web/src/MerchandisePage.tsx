@@ -425,10 +425,23 @@ export default function MerchandisePage({ isAdmin }: { isAdmin: boolean }) {
     {loading && (isAdmin || storeTab === 'shop') && <p className="account-state" role="status">Loading merchandise…</p>}
     {isAdmin && !loading && !error && !accessCurrent && <p className="account-state" role="status">Checking merchandise access…</p>}
     {!isAdmin && storeTab === 'partner' && <section className="merchandise-partner">
-      <p className="eyebrow">Affiliate spotlight</p>
-      <h2>Custom Stitches</h2>
-      <p>Meet Custom Stitches, a family-owned embroidery business in the Berkshires creating custom designs.</p>
-      <p className="merchandise-partner-note">Partner website coming soon.</p>
+      <div className="merchandise-partner-banner">
+        <div className="merchandise-partner-copy">
+          <p className="merchandise-partner-kicker">Affiliate spotlight</p>
+          <h2>Custom Stitches</h2>
+          <p className="merchandise-partner-tagline">Custom embroidery &amp; more</p>
+        </div>
+        <div className="merchandise-partner-spool" aria-hidden="true">
+          <div className="merchandise-partner-thread"><span>Custom<br />Stitches</span></div>
+        </div>
+      </div>
+      <div className="merchandise-partner-details">
+        <div className="merchandise-partner-seal" aria-hidden="true"><span>CS</span></div>
+        <div>
+          <p>Meet Custom Stitches, a family-owned embroidery business in the Berkshires creating custom designs.</p>
+          <p className="merchandise-partner-note">Partner website coming soon.</p>
+        </div>
+      </div>
     </section>}
     {!isAdmin && storeTab === 'shop' && !loading && !error && catalog.length === 0 && <p className="merchandise-empty">No merchandise is listed yet. Check back soon.</p>}
 
