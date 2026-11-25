@@ -108,8 +108,6 @@ class OfficialBot(commands.Bot):
         await self.add_cog(WebsiteSync(
             self,
             tracked_operators=tracked_operator_ids,
-            play_post_target=play_post_target,
-            resolve_channel=resolve_channel,
             can_manage_plays=can_manage_plays,
             staff_alert=send_staff_alert,
         ))
@@ -399,7 +397,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot or not message.guild:
+    if message.author.bot:
+        return
+    if not message.guild:
+        website_sync = bot.get_cog("WebsiteSync")
+        if isinstance(website_sync, WebsiteSync):
+            await website_sync.handle_insight_message(message)
         return
     if member_bet_vault is not None and message.channel.id == MEMBER_BET_CHANNEL_ID:
         await member_bet_vault.handle_message(message)

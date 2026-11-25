@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 
 import discord
@@ -9,7 +10,6 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from src.config import GUILD_ID, TRACKER_ROLE_ID
-from src.interaction_views import PreparedModalView
 from src.services import capper_insight_service
 from src.services.website_capper_service import (
     WEBSITE_OWNER_ROLE_ID,
@@ -18,52 +18,8 @@ from src.services.website_capper_service import (
 )
 
 logger = logging.getLogger("official_play_bot")
-
-
-def can_submit_insight(interaction: discord.Interaction, owner_id: int) -> bool:
-    return (
-        interaction.user.id == owner_id
-        and interaction.guild is not None
-        and interaction.guild.id == GUILD_ID
-        and any(role.id == TRACKER_ROLE_ID for role in getattr(interaction.user, "roles", []))
-    )
-
-
-class CapperInsightModal(discord.ui.Modal, title="Add capper insight"):
-    justification = discord.ui.TextInput(
-        label="Why are you taking this pick?",
-        style=discord.TextStyle.paragraph, required=True, max_length=2000,
-        placeholder="Your reasoning will be shown to authorized website members.",
-    )
-
-    def __init__(self, play_id: int, owner_id: int, current: str):
-        super().__init__()
-        self.play_id = play_id
-        self.owner_id = owner_id
-        self.justification.default = current
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not can_submit_insight(interaction, self.owner_id):
-            await interaction.response.send_message(
-                "Only this pick's original author, while holding OPERATOR, can submit insight.", ephemeral=True,
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        try:
-            await asyncio.to_thread(
-                capper_insight_service.save_insight, self.play_id, interaction.user.id, self.justification.value,
-            )
-        except Exception:
-            logger.exception("capper_insight_save_failed play=%s user=%s", self.play_id, interaction.user.id)
-            await interaction.followup.send(
-                "Insight was not saved. Check that the pick is still open and your OPERATOR role is current, then retry.",
-                ephemeral=True,
-            )
-            return
-        await interaction.followup.send(
-            f"Insight saved for Play #{self.play_id}. Website members can reveal it after refreshing picks.",
-            ephemeral=True,
-        )
+_INSIGHT_REPLY_PREFIX = re.compile(r"^\s*(?:play\s*)?#?(\d+)\s*[:\-]\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL)
+_INSIGHT_PLAY_ID = re.compile(r"\bPlay\s+#(\d+)\b", re.IGNORECASE)
 
 
 class WebsiteSync(commands.Cog):
@@ -72,15 +28,11 @@ class WebsiteSync(commands.Cog):
         bot: commands.Bot,
         *,
         tracked_operators: Callable[[], Awaitable[set[int] | None]],
-        play_post_target: Callable[[], tuple[str, int | None]],
-        resolve_channel: Callable[..., Awaitable],
         can_manage_plays: Callable[[discord.abc.User, discord.Guild | None], bool],
         staff_alert: Callable[[str, str], Awaitable[None]],
     ) -> None:
         self.bot = bot
         self.tracked_operators = tracked_operators
-        self.play_post_target = play_post_target
-        self.resolve_channel = resolve_channel
         self.can_manage_plays = can_manage_plays
         self.staff_alert = staff_alert
         self.insight_prompt_lock = asyncio.Lock()
@@ -133,71 +85,76 @@ class WebsiteSync(commands.Cog):
     async def before_website_capper_sync(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def handle_insight_click(self, interaction: discord.Interaction, play_id: int) -> None:
-        await interaction.response.defer(ephemeral=True)
-        rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
-        if not rows:
-            await interaction.followup.send(
-                "This pick is no longer open or its author is no longer a current OPERATOR.", ephemeral=True,
-            )
-            return
-        context = rows[0]
-        owner_id = int(context["discord_user_id"])
-        if not can_submit_insight(interaction, owner_id):
-            await interaction.followup.send(
-                "Only this pick's original author, while holding OPERATOR, can add or edit its insight.", ephemeral=True,
-            )
-            return
-        await interaction.followup.send(
-            "Your insight form is ready. This button expires in 3 minutes.",
-            view=PreparedModalView(owner_id, lambda: CapperInsightModal(play_id, owner_id, context["justification"])),
-            ephemeral=True,
-        )
+    async def handle_insight_message(self, message: discord.Message) -> bool:
+        if message.guild is not None or message.author.bot:
+            return False
 
-    @commands.Cog.listener("on_interaction")
-    async def on_insight_interaction(self, interaction: discord.Interaction) -> None:
-        if interaction.type != discord.InteractionType.component:
-            return
-        custom_id = str((interaction.data or {}).get("custom_id") or "")
-        if not custom_id.startswith("pm:insight:"):
-            return
+        content = message.content.strip()
+        reference = getattr(message, "reference", None)
+        reference_id = getattr(reference, "message_id", None)
+        referenced_message = getattr(message, "referenced_message", None)
+        if referenced_message is None and reference is not None:
+            referenced_message = getattr(reference, "resolved", None)
+        prompt_match = _INSIGHT_PLAY_ID.search(getattr(referenced_message, "content", "") or "")
+        prefixed_match = _INSIGHT_REPLY_PREFIX.match(content)
+        if prefixed_match:
+            play_id = int(prefixed_match.group(1))
+            justification = prefixed_match.group(2)
+        elif prompt_match:
+            play_id = int(prompt_match.group(1))
+            justification = content
+        else:
+            await message.channel.send(
+                "To submit your justification, reply to the Playmaker DM for that pick, or send "
+                "`#PLAY_ID: your reasoning` (for example, `#630: ...`)."
+            )
+            return True
+
         try:
-            parts = custom_id.split(":")
-            if len(parts) != 3 or not parts[2].isdecimal() or int(parts[2]) <= 0:
-                raise ValueError("Invalid insight button ID.")
-            await self.handle_insight_click(interaction, int(parts[2]))
+            async with self.insight_prompt_lock:
+                rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
+                if not rows or not rows[0].get("prompt_message_id"):
+                    await message.channel.send(f"There is no active justification request for Play #{play_id}.")
+                    return True
+                context = rows[0]
+                if prompt_match and not prefixed_match and str(reference_id) != str(context["prompt_message_id"]):
+                    await message.channel.send("Reply to the original Playmaker request DM for that pick.")
+                    return True
+                if str(context["discord_user_id"]) != str(message.author.id):
+                    await message.channel.send("Only the original author can submit this pick's justification.")
+                    return True
+                await asyncio.to_thread(
+                    capper_insight_service.save_insight, play_id, message.author.id, justification,
+                )
+        except ValueError as exc:
+            await message.channel.send(str(exc))
+            return True
         except Exception:
-            logger.exception("capper_insight_interaction_failed custom_id=%s user=%s", custom_id, interaction.user.id)
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send("Something went wrong. Please try again.", ephemeral=True)
-                else:
-                    await interaction.response.send_message("Something went wrong. Please try again.", ephemeral=True)
-            except discord.HTTPException:
-                logger.warning("capper_insight_error_response_failed user=%s", interaction.user.id, exc_info=True)
+            logger.exception("capper_insight_save_failed play=%s user=%s", play_id, message.author.id)
+            await message.channel.send(
+                f"Your justification for Play #{play_id} was not saved. Please try again later."
+            )
+            return True
+
+        await message.channel.send(
+            f"Your justification for Play #{play_id} was saved. Website members can reveal it after refreshing picks."
+        )
+        return True
 
     async def send_insight_request(self, play_id: int) -> bool:
         async with self.insight_prompt_lock:
             rows = await asyncio.to_thread(capper_insight_service.insight_context, play_id)
             if not rows or rows[0]["prompt_message_id"] or rows[0]["justification"]:
                 return False
-            name, channel_id = self.play_post_target()
-            channel = await self.resolve_channel(channel_id, name, required=True)
-            if channel is None:
-                raise RuntimeError("Insight confirmation channel is unavailable.")
             owner_id = int(rows[0]["discord_user_id"])
-            view = discord.ui.View(timeout=None)
-            view.add_item(discord.ui.Button(
-                label="Add / edit insight", style=discord.ButtonStyle.secondary, custom_id=f"pm:insight:{play_id}",
-            ))
-            view.stop()
-            message = await channel.send(
-                f"<@{owner_id}> Your justification is required for Play #{play_id} "
-                f"({rows[0]['selection'][:200]}). Only you can use this button. "
-                "The form is private; your insight will be published to authorized website members.",
-                view=view, allowed_mentions=discord.AllowedMentions(
-                    users=[discord.Object(id=owner_id)], roles=False, everyone=False,
-                ),
+            user = self.bot.get_user(owner_id)
+            if user is None:
+                user = await self.bot.fetch_user(owner_id)
+            message = await user.send(
+                f"Your written justification is required for Play #{play_id} "
+                f"({rows[0]['selection'][:200]}). Reply directly to this DM with your reasoning. "
+                f"If replying directly is unavailable, send `#{play_id}: your reasoning`. "
+                "Your insight will be shown to authorized website members."
             )
             await asyncio.to_thread(capper_insight_service.mark_prompt, play_id, message.id)
             return True

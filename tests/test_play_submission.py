@@ -121,6 +121,29 @@ def test_play_command_opens_cog_owned_modal(monkeypatch):
     assert isinstance(modal, PlayModal) and modal.submission is cog
 
 
+def test_allowlisted_user_can_post_without_operator_roles(monkeypatch):
+    monkeypatch.setattr(module, "PLAY_POSTER_USER_IDS", {42})
+    monkeypatch.setattr(module, "OFFICIAL_ROLE_IDS", {88})
+    monkeypatch.setattr(module, "CAPPER_CHANNEL_ID", 777)
+    cog = submission()
+    cog.is_tracked_operator.return_value = False
+    interaction = request(roles=[])
+    asyncio.run(cog.play_command.callback(cog, interaction))
+    assert isinstance(interaction.response.send_modal.call_args.args[0], PlayModal)
+
+
+def test_allowlisted_user_can_start_image_play_intake(monkeypatch):
+    monkeypatch.setattr(module, "PLAY_POSTER_USER_IDS", {42})
+    cog = submission()
+    cog.is_tracked_operator.return_value = False
+    cog.images.extract_play.return_value = parsed()
+    incoming = message()
+    consumed = asyncio.run(cog.handle_message(incoming))
+    assert not consumed
+    cog.images.extract_play.assert_called_once()
+    incoming.channel.send.assert_awaited_once()
+
+
 @pytest.mark.parametrize("legs", [1, 3])
 def test_manual_modal_saves_first_leg_and_continues_or_records(legs):
     cog = submission()

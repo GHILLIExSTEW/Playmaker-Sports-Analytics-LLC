@@ -11,12 +11,26 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.administration import TestFlowView, build_image_test_embed
-from src.config import CAPPER_CHANNEL_ID, OFFICIAL_ROLE_IDS, TEST_CHANNEL_ID
+from src.config import CAPPER_CHANNEL_ID, OFFICIAL_ROLE_IDS, PLAY_POSTER_USER_IDS, TEST_CHANNEL_ID
 from src.services.image_play_service import BallotUnreadable, ImagePlayService, VisionBudgetDenied, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
 
 logger = logging.getLogger("official_play_bot")
+
+
+def can_post_plays(user: discord.abc.User, is_tracked_operator: Callable[[discord.abc.User], bool]) -> bool:
+    if user.id in PLAY_POSTER_USER_IDS:
+        return True
+    return is_tracked_operator(user) and any(
+        role.id in OFFICIAL_ROLE_IDS for role in getattr(user, "roles", [])
+    )
+
+
+def can_submit_play_image(
+    user: discord.abc.User, is_tracked_operator: Callable[[discord.abc.User], bool],
+) -> bool:
+    return user.id in PLAY_POSTER_USER_IDS or is_tracked_operator(user)
 
 
 def build_image_review_embed(parsed: dict) -> discord.Embed:
@@ -97,7 +111,7 @@ class PlaySubmission(commands.Cog):
         if message.channel.id != CAPPER_CHANNEL_ID:
             return False
         image = next((item for item in message.attachments if (item.content_type or "").startswith("image/")), None)
-        if image is None or not self.is_tracked_operator(message.author):
+        if image is None or not can_submit_play_image(message.author, self.is_tracked_operator):
             return False
         try:
             parsed = await asyncio.to_thread(self.images.extract_play, image.url, message.content)
@@ -161,11 +175,8 @@ class PlaySubmission(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used in a guild.", ephemeral=True)
             return
-        if not self.is_tracked_operator(interaction.user):
-            await interaction.response.send_message("Only cappers can import personal plays.", ephemeral=True)
-            return
-        if not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
-            await interaction.response.send_message("You do not have permission to import plays.", ephemeral=True)
+        if not can_post_plays(interaction.user, self.is_tracked_operator):
+            await interaction.response.send_message("You do not have permission to post plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
             await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from finalized slip reviews.", ephemeral=True)
@@ -192,11 +203,8 @@ class PlaySubmission(commands.Cog):
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used in a guild.", ephemeral=True)
             return
-        if not self.is_tracked_operator(interaction.user):
-            await interaction.response.send_message("Only cappers can record personal plays.", ephemeral=True)
-            return
-        if not any(role.id in OFFICIAL_ROLE_IDS for role in getattr(interaction.user, "roles", [])):
-            await interaction.response.send_message("You do not have permission to log official plays.", ephemeral=True)
+        if not can_post_plays(interaction.user, self.is_tracked_operator):
+            await interaction.response.send_message("You do not have permission to post plays.", ephemeral=True)
             return
         if interaction.channel_id != CAPPER_CHANNEL_ID and not (self.get_testing() and interaction.channel_id == TEST_CHANNEL_ID):
             await interaction.response.send_message(f"Submit personal plays in <#{CAPPER_CHANNEL_ID}>. Official plays come from finalized slip reviews.", ephemeral=True)

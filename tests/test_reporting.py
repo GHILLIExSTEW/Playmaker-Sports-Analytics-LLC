@@ -83,7 +83,7 @@ def test_reporting_registers_commands_before_bot_sync(monkeypatch):
             website = bot.get_cog("WebsiteSync")
             assert website is not None
             assert not website.website_capper_sync.is_running()
-            assert bot.extra_events["on_interaction"].count(website.on_insight_interaction) == 1
+            assert not hasattr(website, "on_insight_interaction")
             assert command_names.count("request_insights") == 1
             assert bot.get_cog("PlaySubmission") is not None
             presentation = bot.get_cog("PlayPresentation")

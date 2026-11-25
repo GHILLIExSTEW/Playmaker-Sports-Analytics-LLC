@@ -12,8 +12,6 @@ from src.services import capper_insight_service as service
 def website_sync(**overrides):
     kwargs = {
         "tracked_operators": AsyncMock(return_value={42}),
-        "play_post_target": bot_module.play_post_target,
-        "resolve_channel": AsyncMock(),
         "can_manage_plays": lambda user, guild: user.id == 42,
         "staff_alert": AsyncMock(),
     }
@@ -35,103 +33,86 @@ def context(**overrides):
             "prompt_message_id": None, **overrides}
 
 
-def test_only_original_operator_can_open_modal(monkeypatch):
-    monkeypatch.setattr(service, "insight_context", lambda play_id: [context(justification="My reasoning")])
-    for user_id, operator, guild_id in [(43, True, None), (42, False, None), (42, True, 999)]:
-        denied = interaction(user_id, operator, guild_id)
-        asyncio.run(website_sync().handle_insight_click(denied, 7))
-        denied.response.send_modal.assert_not_awaited()
-        sent = denied.followup.send.call_args
-        assert sent.kwargs["ephemeral"] and "view" not in sent.kwargs
-        assert "original author" in sent.args[0]
-
-    async def open_owner_form():
-        owner = interaction()
-        await website_sync().handle_insight_click(owner, 7)
-        sent = owner.followup.send.call_args
-        assert sent.kwargs["ephemeral"]
-        view = sent.kwargs["view"]
-        assert view.owner_id == 42
-        return view.factory()
-
-    modal = asyncio.run(open_owner_form())
-    assert modal.play_id == 7 and modal.owner_id == 42
-    assert modal.justification.default == "My reasoning"
-
-
-def test_closed_pick_cannot_open_modal(monkeypatch):
-    monkeypatch.setattr(service, "insight_context", lambda play_id: [])
-    owner = interaction()
-    asyncio.run(website_sync().handle_insight_click(owner, 7))
-    owner.response.send_modal.assert_not_awaited()
-    assert "no longer open" in owner.followup.send.call_args.args[0]
-
-
-def test_modal_rechecks_author_and_role_and_saves_privately(monkeypatch):
+def test_author_can_submit_justification_by_replying_to_the_prompt_dm(monkeypatch):
+    stored = context(prompt_message_id="999")
+    monkeypatch.setattr(service, "insight_context", lambda play_id: [stored])
     save = Mock()
     monkeypatch.setattr(service, "save_insight", save)
-
-    async def submit():
-        modal = website_module.CapperInsightModal(7, 42, "")
-        modal.justification._value = "Matchup reasoning"
-        for denied in [interaction(43), interaction(operator=False)]:
-            await modal.on_submit(denied)
-            denied.response.defer.assert_not_awaited()
-        owner = interaction()
-        await modal.on_submit(owner)
-        assert owner.response.defer.call_args.kwargs["ephemeral"]
-        assert owner.followup.send.call_args.kwargs["ephemeral"]
-        assert "Insight saved" in owner.followup.send.call_args.args[0]
-
-    asyncio.run(submit())
+    reply = SimpleNamespace(
+        guild=None, author=SimpleNamespace(id=42, bot=False), content="Matchup reasoning",
+        channel=SimpleNamespace(send=AsyncMock()),
+        reference=SimpleNamespace(message_id=999),
+        referenced_message=SimpleNamespace(content="Your justification is required for Play #7."),
+    )
+    website = website_sync()
+    assert asyncio.run(website.handle_insight_message(reply))
     save.assert_called_once_with(7, 42, "Matchup reasoning")
+    assert "was saved" in reply.channel.send.call_args.args[0]
 
 
-def test_save_failure_is_not_success(monkeypatch):
+def test_dm_justification_requires_author_and_matching_prompt(monkeypatch):
+    stored = context(prompt_message_id="999")
+    monkeypatch.setattr(service, "insight_context", lambda play_id: [stored])
+    save = Mock()
+    monkeypatch.setattr(service, "save_insight", save)
+    website = website_sync()
+
+    wrong_author = SimpleNamespace(
+        guild=None, author=SimpleNamespace(id=43, bot=False), content="Not mine",
+        channel=SimpleNamespace(send=AsyncMock()), reference=SimpleNamespace(message_id=999),
+        referenced_message=SimpleNamespace(content="Play #7"),
+    )
+    wrong_prompt = SimpleNamespace(
+        guild=None, author=SimpleNamespace(id=42, bot=False), content="Not this prompt",
+        channel=SimpleNamespace(send=AsyncMock()), reference=SimpleNamespace(message_id=998),
+        referenced_message=SimpleNamespace(content="Play #7"),
+    )
+    asyncio.run(website.handle_insight_message(wrong_author))
+    asyncio.run(website.handle_insight_message(wrong_prompt))
+    save.assert_not_called()
+    assert "original author" in wrong_author.channel.send.call_args.args[0]
+    assert "original Playmaker request" in wrong_prompt.channel.send.call_args.args[0]
+
+
+def test_dm_message_can_identify_play_and_reports_save_failure(monkeypatch):
+    stored = context(prompt_message_id="999")
+    monkeypatch.setattr(service, "insight_context", lambda play_id: [stored])
     monkeypatch.setattr(service, "save_insight", Mock(side_effect=RuntimeError("Database unavailable")))
-
-    async def submit():
-        modal = website_module.CapperInsightModal(7, 42, "")
-        modal.justification._value = "Reason"
-        owner = interaction()
-        await modal.on_submit(owner)
-        assert "not saved" in owner.followup.send.call_args.args[0]
-        assert owner.followup.send.call_args.kwargs["ephemeral"]
-
-    asyncio.run(submit())
+    reply = SimpleNamespace(
+        guild=None, author=SimpleNamespace(id=42, bot=False), content="#7: Reason",
+        channel=SimpleNamespace(send=AsyncMock()), reference=None, referenced_message=None,
+    )
+    assert asyncio.run(website_sync().handle_insight_message(reply))
+    assert "was not saved" in reply.channel.send.call_args.args[0]
 
 
-def test_request_posts_in_confirmation_channel_and_deduplicates_after_restart(monkeypatch):
+def test_request_sends_private_dm_and_deduplicates_after_restart(monkeypatch):
     stored = context()
     monkeypatch.setattr(service, "insight_context", lambda play_id: [stored])
     monkeypatch.setattr(service, "mark_prompt", lambda play_id, message_id: stored.update(prompt_message_id=str(message_id)))
-    channel = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=999)))
-    resolve = AsyncMock(return_value=channel)
-    cog = website_sync(resolve_channel=resolve)
-    monkeypatch.setattr(bot_module, "testing_enabled", False)
+    recipient = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=999)))
+    cog = website_sync()
+    monkeypatch.setattr(cog.bot, "get_user", Mock(return_value=recipient))
 
     async def send():
         assert await cog.send_insight_request(7)
-        assert not await website_sync(resolve_channel=resolve).send_insight_request(7)
+        assert not await website_sync().send_insight_request(7)
 
     asyncio.run(send())
-    resolve.assert_awaited_once_with(bot_module.CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID", required=True)
-    channel.send.assert_awaited_once()
-    args, kwargs = channel.send.call_args
-    assert "<@42>" in args[0] and "Play #7" in args[0]
-    assert "authorized website members" in args[0]
-    assert "justification is required" in args[0]
-    assert [item.custom_id for item in kwargs["view"].children] == ["pm:insight:7"]
-    assert kwargs["view"].is_finished()
-    assert [user.id for user in kwargs["allowed_mentions"].users] == [42]
-    assert not kwargs["allowed_mentions"].everyone and not kwargs["allowed_mentions"].roles
+    recipient.send.assert_awaited_once()
+    prompt = recipient.send.call_args.args[0]
+    assert "Play #7" in prompt
+    assert "Reply directly to this DM" in prompt
+    assert "authorized website members" in prompt
 
 
 def test_existing_insight_needs_no_request(monkeypatch):
     monkeypatch.setattr(service, "insight_context", lambda play_id: [context(justification="Already supplied")])
-    resolve = AsyncMock()
-    assert not asyncio.run(website_sync(resolve_channel=resolve).send_insight_request(7))
-    resolve.assert_not_awaited()
+    recipient = SimpleNamespace(send=AsyncMock())
+    website = website_sync()
+    monkeypatch.setattr(website.bot, "get_user", Mock(return_value=recipient))
+    assert not asyncio.run(website.send_insight_request(7))
+    recipient.send.assert_not_awaited()
 
 
 def test_rpc_saves_exact_author_and_independent_insight(monkeypatch):
@@ -160,15 +141,14 @@ def test_rpc_unconfirmed_responses_are_errors(monkeypatch):
         service.mark_prompt(7, 999)
 
 
-def test_persistent_button_dispatches_after_restart(monkeypatch):
-    handler = AsyncMock()
+def test_bot_routes_direct_messages_to_insight_handler(monkeypatch):
     cog = website_sync()
-    monkeypatch.setattr(cog, "handle_insight_click", handler)
-    click = interaction()
-    click.type = bot_module.discord.InteractionType.component
-    click.data = {"custom_id": "pm:insight:7"}
-    asyncio.run(cog.on_insight_interaction(click))
-    handler.assert_awaited_once_with(click, 7)
+    handler = AsyncMock(return_value=True)
+    monkeypatch.setattr(cog, "handle_insight_message", handler)
+    monkeypatch.setattr(bot_module.bot, "get_cog", lambda name: cog if name == "WebsiteSync" else None)
+    message = SimpleNamespace(author=SimpleNamespace(bot=False), guild=None)
+    asyncio.run(bot_module.on_message(message))
+    handler.assert_awaited_once_with(message)
 
 
 def test_record_confirmation_automatically_requests_insight(monkeypatch, load_settlement):

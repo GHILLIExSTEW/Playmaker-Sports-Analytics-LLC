@@ -69,8 +69,8 @@ def test_bot_syncs_verified_owner_role_in_existing_loop(monkeypatch, owners):
     monkeypatch.setattr(website_module, "sync_website_owner_roster", owner_sync)
     cog = website_module.WebsiteSync(
         SimpleNamespace(get_guild=lambda guild_id: guild),
-        tracked_operators=AsyncMock(return_value={111}), play_post_target=Mock(),
-        resolve_channel=AsyncMock(), can_manage_plays=Mock(), staff_alert=AsyncMock(),
+        tracked_operators=AsyncMock(return_value={111}),
+        can_manage_plays=Mock(), staff_alert=AsyncMock(),
     )
     asyncio.run(cog.website_capper_sync.coro(cog))
     guild.chunk.assert_awaited_once_with(cache=True)
@@ -87,8 +87,8 @@ def test_missing_owner_role_alerts_without_syncing_empty_roster(monkeypatch):
     monkeypatch.setattr(website_module, "sync_website_owner_roster", owner_sync)
     cog = website_module.WebsiteSync(
         SimpleNamespace(get_guild=lambda guild_id: guild),
-        tracked_operators=AsyncMock(return_value={111}), play_post_target=Mock(),
-        resolve_channel=AsyncMock(), can_manage_plays=Mock(), staff_alert=alert,
+        tracked_operators=AsyncMock(return_value={111}),
+        can_manage_plays=Mock(), staff_alert=alert,
     )
     asyncio.run(cog.website_capper_sync.coro(cog))
     owner_sync.assert_not_called()

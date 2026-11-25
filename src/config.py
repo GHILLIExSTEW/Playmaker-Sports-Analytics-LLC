@@ -86,6 +86,7 @@ OFFICIAL_ROLE_IDS = {
     for role_id in (os.getenv("OFFICIAL_ROLE_IDS", "").split(","))
     if role_id.strip().isdigit()
 }
+PLAY_POSTER_USER_IDS = {1182482264110665841}
 WIN_REACTION = "✅"
 LOSS_REACTION = "❌"
 VOID_REACTION = "🅿️"
