@@ -6,7 +6,7 @@ from io import BytesIO
 import discord
 from discord.ext import commands, tasks
 
-from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, ROOKIE_ROLE_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_ROLE_ID, TRACKER_START_DATE, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
+from src.config import API_SPORTS_KEY, APPLICATION_ID, CONFIRMATION_CHANNEL_ID, DISCORD_TOKEN, FREE_CHAT_CHANNEL_ID, GUILD_ID, HIGHROLLER_ROLE_ID, IMAGE_INPUT_CHANNEL_ID, MEMBER_BET_CHANNEL_ID, LOSS_REACTION, OFFICIAL_CHANNEL_ID, OFFICIAL_ROLE_IDS, OPERATOR_ROLE_IDS, PARTIAL_REACTION, RESULT_CHANNEL_ID, ROOKIE_ROLE_ID, TEAM_STATS_CHANNEL_ID, TEST_CHANNEL_ID, TESTING, TRACKER_ROLE_ID, TRACKER_START_DATE, TRACKER_USER_IDS, VIP_CHAT_CHANNEL_ID, VOID_REACTION, WIN_REACTION
 from src.member_bet_vault import MemberBetVault
 from src.config import PAID_MEMBER_ROLE_ID, WHOP_MEMBERSHIP_SYNC_ENABLED
 from src.membership_access import MembershipRoleSync, WhopMembershipSync
@@ -276,7 +276,9 @@ async def publish_capper_free_play(
 
 
 def is_tracked_operator(member) -> bool:
-    return not TRACKER_ROLE_ID or any(role.id == TRACKER_ROLE_ID for role in getattr(member, "roles", []))
+    return member.id in TRACKER_USER_IDS or not TRACKER_ROLE_ID or any(
+        role.id == TRACKER_ROLE_ID for role in getattr(member, "roles", [])
+    )
 
 
 async def tracked_operator_ids() -> set[int] | None:
@@ -293,7 +295,7 @@ async def tracked_operator_ids() -> set[int] | None:
     if role is None:
         logger.warning("tracker_role_missing role=%s", TRACKER_ROLE_ID)
         return None
-    return {member.id for member in role.members if not member.bot}
+    return {member.id for member in role.members if not member.bot} | TRACKER_USER_IDS
 
 
 def settlement_channel_settings() -> list[tuple[str, int | None]]:

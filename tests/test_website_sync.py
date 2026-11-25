@@ -47,6 +47,19 @@ def test_hot_load_starts_and_before_loop_waits_for_ready():
     assert website.website_capper_sync.minutes == 5
 
 
+def test_tracker_allowlist_counts_as_tracked_and_is_in_website_roster(monkeypatch):
+    member = SimpleNamespace(id=42, bot=False, roles=[])
+    role = SimpleNamespace(members=[SimpleNamespace(id=99, bot=False), SimpleNamespace(id=100, bot=True)])
+    guild = SimpleNamespace(chunked=True, get_role=lambda role_id: role)
+    monkeypatch.setattr(bot_module, "TRACKER_USER_IDS", {42})
+    monkeypatch.setattr(bot_module, "TRACKER_ROLE_ID", 456)
+    monkeypatch.setattr(bot_module, "GUILD_ID", 123)
+    monkeypatch.setattr(bot_module.bot, "get_guild", lambda guild_id: guild)
+
+    assert bot_module.is_tracked_operator(member)
+    assert asyncio.run(bot_module.tracked_operator_ids()) == {42, 99}
+
+
 @pytest.mark.parametrize("operators", [None, set()])
 def test_unverified_roster_is_not_empty_roster_and_owner_sync_is_independent(monkeypatch, operators):
     monkeypatch.setattr(module, "GUILD_ID", 123)
