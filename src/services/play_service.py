@@ -7,6 +7,7 @@ from typing import Any
 
 
 MAX_CAPPER_UNITS = 3
+MAX_FREE_PLAY_UNITS = 1
 
 
 class PlayService:
@@ -75,6 +76,14 @@ class PlayService:
             return "Units must be a valid number."
         if units_value > MAX_CAPPER_UNITS:
             return f"Personal capper plays cannot exceed {MAX_CAPPER_UNITS} units."
+        return None
+
+    @staticmethod
+    def validate_free_play_units(units: Any) -> str | None:
+        if error := PlayService.validate_capper_units(units):
+            return error
+        if float(units) <= 0 or float(units) > MAX_FREE_PLAY_UNITS:
+            return f"Free Play units must be greater than zero and at most {MAX_FREE_PLAY_UNITS}u."
         return None
 
     @staticmethod

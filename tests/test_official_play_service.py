@@ -91,6 +91,25 @@ def test_edit_play_overwrites_legs_before_trimming_and_never_deletes_all(monkeyp
     assert rows == [{"play_id": 7, "leg_number": 1, "selection": "A ML", "odds": -110, "details": {"sport": "nfl"}}]
 
 
+def test_edit_free_play_cannot_raise_stake_above_one_unit(monkeypatch):
+    service = OfficialPlayService()
+    monkeypatch.setattr(service, "_fetch_play", lambda _: {
+        "units": 1, "tracking_scope": "capper", "ballot_message_id": "500", "team_approval": None,
+    })
+    update = Mock()
+    monkeypatch.setattr(official_play_module.supabase_service, "update", update)
+    with pytest.raises(ValueError, match="at most 1u"):
+        service.edit_play_record(7, 2, "", ["A ML"], [-110])
+    update.assert_not_called()
+
+
+def test_ballot_free_play_cannot_be_recorded_above_one_unit():
+    result = OfficialPlayService().create_play_record(
+        "900", "Ace", 2, 1, "-110", tracking_scope="capper", ballot_message_id="500",
+    )
+    assert "at most 1u" in result["error"]
+
+
 @pytest.mark.parametrize("recover", [False, True])
 def test_ballot_metadata_is_on_play_and_response_not_legs(monkeypatch, recover):
     service = OfficialPlayService()

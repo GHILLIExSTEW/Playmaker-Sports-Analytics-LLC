@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from src.config import CAPPER_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID
 from src.services.play_features_service import clean_leg_details, play_features_service, play_sport_slug
 from src.services.play_service import PlayService
 from src.services.ballot_vote_service import (
@@ -142,6 +143,10 @@ class OfficialPlayService:
             capper_units_error = self.play_service.validate_capper_units(units)
             if capper_units_error:
                 return {"error": capper_units_error}
+            if ballot_message_id:
+                free_play_units_error = self.play_service.validate_free_play_units(units)
+                if free_play_units_error:
+                    return {"error": free_play_units_error}
             try:
                 if int(legs) >= 2 and float(units) > MAX_PARLAY_UNITS:
                     return {"error": f"Parlays can never be staked above {MAX_PARLAY_UNITS} unit, official or not."}
@@ -281,6 +286,13 @@ class OfficialPlayService:
         play = self._fetch_play(play_id)
         if play.get("team_approval") and float(units) != float(play["units"]):
             raise ValueError("Ballot-assigned units cannot be edited. Reconcile the ballot instead.")
+        if (
+            play.get("tracking_scope") == "capper"
+            and (play.get("ballot_message_id") or CAPPER_CHANNEL_ID == FREE_PLAYS_CHANNEL_ID)
+            and float(units) != float(play["units"])
+        ):
+            if error := self.play_service.validate_free_play_units(units):
+                raise ValueError(error)
         if (play.get("team_approval") or {}).get("policy_version") in {SLIP_POLICY_VERSION, TAIL_POLICY_VERSION}:
             saved_legs = self.get_play_legs(play_id)
             if (

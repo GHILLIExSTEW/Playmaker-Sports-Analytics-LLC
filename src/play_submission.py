@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.administration import TestFlowView, build_image_test_embed
-from src.config import CAPPER_CHANNEL_ID, OFFICIAL_ROLE_IDS, PLAY_POSTER_USER_IDS, TEST_CHANNEL_ID
+from src.config import CAPPER_CHANNEL_ID, FREE_PLAYS_CHANNEL_ID, OFFICIAL_ROLE_IDS, PLAY_POSTER_USER_IDS, TEST_CHANNEL_ID
 from src.services.image_play_service import BallotUnreadable, ImagePlayService, VisionBudgetDenied, image_play_service
 from src.services.official_play_service import OfficialPlayService
 from src.services.play_service import PlayService
@@ -143,6 +143,10 @@ class PlaySubmission(commands.Cog):
         odds_values: list[int], team_name: str, play_text: str, leg_records: list[dict],
     ) -> None:
         logger.info("play_modal_deferred interaction=%s", interaction.id)
+        if not self.get_testing() and interaction.channel_id == FREE_PLAYS_CHANNEL_ID:
+            if error := PlayService.validate_free_play_units(units):
+                await interaction.followup.send(error, ephemeral=True)
+                return
         try:
             logger.info("play_db_start interaction=%s", interaction.id)
             payload = await asyncio.to_thread(
@@ -293,6 +297,9 @@ class PlayModal(discord.ui.Modal, title="Record Capper Play"):
     def __init__(self, submission: PlaySubmission):
         super().__init__()
         self.submission = submission
+        if not submission.get_testing() and CAPPER_CHANNEL_ID == FREE_PLAYS_CHANNEL_ID:
+            self.units.label = "Units risked (max 1)"
+            self.units.placeholder = "Example: 1"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -300,7 +307,11 @@ class PlayModal(discord.ui.Modal, title="Record Capper Play"):
         except ValueError:
             await interaction.response.send_message("Units must be a number and legs must be a whole number.", ephemeral=True)
             return
-        units_error = PlayService.validate_capper_units(units)
+        units_error = (
+            PlayService.validate_free_play_units(units)
+            if not self.submission.get_testing() and interaction.channel_id == FREE_PLAYS_CHANNEL_ID
+            else PlayService.validate_capper_units(units)
+        )
         if units_error:
             await interaction.response.send_message(units_error, ephemeral=True)
             return
@@ -363,6 +374,10 @@ class ConfirmImageView(discord.ui.View):
             if self.source_message_id and await asyncio.to_thread(official.get_play_for_message, self.source_message_id):
                 await interaction.followup.send("This image has already been recorded.", ephemeral=True)
                 return
+            if not self.submission.get_testing() and interaction.channel_id == FREE_PLAYS_CHANNEL_ID:
+                if error := PlayService.validate_free_play_units(self.parsed["units"]):
+                    await interaction.followup.send(error, ephemeral=True)
+                    return
             legs = self.parsed["legs"]
             payload = await asyncio.to_thread(
                 official.create_play_record,
@@ -428,7 +443,9 @@ class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
         self.source_message_id, self.review_message = source_message_id, review_message
         legs = parsed["legs"]
         self.units = discord.ui.TextInput(
-            label="Units (max 3)", default=str(parsed.get("units") or ""), required=True, max_length=20,
+            label="Units (max 1)" if not submission.get_testing() and CAPPER_CHANNEL_ID == FREE_PLAYS_CHANNEL_ID
+                  else "Units (max 3)",
+            default=str(parsed.get("units") or ""), required=True, max_length=20,
         )
         self.team = discord.ui.TextInput(
             label="Team", default=parsed.get("team_name") or "", required=False, max_length=100,
@@ -460,7 +477,11 @@ class EditImageBetModal(discord.ui.Modal, title="Edit Detected Bet"):
             units = float(self.units.value)
             if not math.isfinite(units) or units <= 0:
                 raise ValueError("Units must be greater than zero.")
-            units_error = PlayService.validate_capper_units(units)
+            units_error = (
+                PlayService.validate_free_play_units(units)
+                if not self.submission.get_testing() and interaction.channel_id == FREE_PLAYS_CHANNEL_ID
+                else PlayService.validate_capper_units(units)
+            )
             if units_error:
                 raise ValueError(units_error)
             odds = [PlayService.normalize_odds(value) for value in odds_lines]
@@ -508,6 +529,9 @@ class AutoUnitsModal(discord.ui.Modal, title="Enter Units"):
         super().__init__()
         self.submission, self.owner_id, self.parsed = submission, owner_id, parsed
         self.source_message_id, self.review_message = source_message_id, review_message
+        if not submission.get_testing() and CAPPER_CHANNEL_ID == FREE_PLAYS_CHANNEL_ID:
+            self.units.label = "Units risked (max 1)"
+            self.units.placeholder = "Example: 1"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.owner_id:
@@ -520,7 +544,11 @@ class AutoUnitsModal(discord.ui.Modal, title="Enter Units"):
         except ValueError:
             await interaction.response.send_message("Units must be greater than zero.", ephemeral=True)
             return
-        units_error = PlayService.validate_capper_units(units)
+        units_error = (
+            PlayService.validate_free_play_units(units)
+            if not self.submission.get_testing() and interaction.channel_id == FREE_PLAYS_CHANNEL_ID
+            else PlayService.validate_capper_units(units)
+        )
         if units_error:
             await interaction.response.send_message(units_error, ephemeral=True)
             return

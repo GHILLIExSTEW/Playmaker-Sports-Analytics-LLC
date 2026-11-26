@@ -77,6 +77,36 @@ def test_manual_record_preserves_create_publish_link_confirm_order():
     cog.official.attach_message_id.assert_called_once_with(7, 101)
 
 
+def test_shared_free_play_channel_rejects_high_manual_and_image_stakes(monkeypatch):
+    monkeypatch.setattr(module, "FREE_PLAYS_CHANNEL_ID", module.CAPPER_CHANNEL_ID)
+    cog = submission()
+    interaction = request()
+
+    asyncio.run(cog.record_modal_play(interaction, 2, 1, [150], "Home", "Home ML", parsed()["legs"]))
+    assert "at most 1u" in interaction.followup.send.call_args.args[0]
+    cog.official.create_play_record.assert_not_called()
+
+    cog.official.get_play_for_message.return_value = None
+    view = ConfirmImageView(cog, 42, parsed(), 8)
+    asyncio.run(view.confirm.callback(interaction))
+    assert "at most 1u" in interaction.followup.send.call_args.args[0]
+    cog.official.create_play_record.assert_not_called()
+
+
+def test_shared_free_play_channel_rejects_high_stake_before_collecting_legs(monkeypatch):
+    monkeypatch.setattr(module, "FREE_PLAYS_CHANNEL_ID", module.CAPPER_CHANNEL_ID)
+    cog = submission()
+    interaction = request()
+    modal = PlayModal(cog)
+    modal.units._value = "2"
+    modal.legs._value = "2"
+
+    asyncio.run(modal.on_submit(interaction))
+
+    assert "at most 1u" in interaction.response.send_message.call_args.args[0]
+    cog.official.save_draft_leg.assert_not_called()
+
+
 @pytest.mark.parametrize("failure", ["database", "validation", "publish"])
 def test_manual_record_failure_does_not_claim_success(failure):
     cog = submission()

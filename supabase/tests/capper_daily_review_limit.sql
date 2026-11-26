@@ -18,7 +18,7 @@ declare
   i integer;
 begin
   perform public.set_capper_daily_review_limit(v_author_id, 1);
-  for i in 1..5 loop
+  for i in 1..6 loop
     v_message_id := (91000000000000000010::numeric + i)::text;
     perform public.register_capper_slip(v_message_id, jsonb_build_object(
       'author_id', v_author_id,
@@ -34,31 +34,31 @@ begin
     );
   end loop;
 
-  for i in 1..3 loop
+  for i in 1..4 loop
     v_message_id := (91000000000000000010::numeric + i)::text;
     perform public.respond_capper_slip(v_message_id, '43', 'yes_add');
     v_result := public.finalize_capper_slip(v_message_id);
-    if i < 3 and v_result ->> 'outcome' is distinct from 'processing' then
-      raise exception 'The first two qualifying reviews should be team plays';
-    elsif i = 3 and v_result is not null then
+    if i < 4 and v_result ->> 'outcome' is distinct from 'processing' then
+      raise exception 'The first three qualifying reviews should be team plays';
+    elsif i = 4 and v_result is not null then
       raise exception 'A review must wait for unresolved team publications';
     end if;
   end loop;
   update public.capper_ballots
   set state = 'published', official_message_id = v_snowflake
-  where message_id in ('91000000000000000011', '91000000000000000012');
-  v_result := public.finalize_capper_slip('91000000000000000013');
+  where message_id in ('91000000000000000011', '91000000000000000012', '91000000000000000013');
+  v_result := public.finalize_capper_slip('91000000000000000014');
   if v_result ->> 'outcome' is distinct from 'rejected'
      or v_result ->> 'team_daily_limit' is distinct from 'true'
      or v_result ->> 'units' is distinct from '2' then
-    raise exception 'Third qualifying review must become a 2u Free Play';
+    raise exception 'Fourth qualifying review must become a Free Play';
   end if;
   if (select review #>> '{parsed,units}' from public.capper_ballots
-      where message_id = '91000000000000000013') is distinct from '2' then
-    raise exception 'The earned Free Play stake was not saved';
+      where message_id = '91000000000000000014') is distinct from '1' then
+    raise exception 'The Free Play stake was not capped at 1u';
   end if;
   if not public.claim_capper_slip_free_play(
-    '91000000000000000013', '1513186440278704178', 'daily team play limit reached'
+    '91000000000000000014', '1513186440278704178', 'daily team play limit reached'
   ) then
     raise exception 'The over-limit Free Play could not be claimed';
   end if;
@@ -68,38 +68,38 @@ begin
         v_author_id, jsonb_build_object('yes', true),
         '43', jsonb_build_object('yes', true), '44', jsonb_build_object('yes', true)
       )
-  where message_id = '91000000000000000014';
-  v_result := public.finalize_capper_slip('91000000000000000014');
+  where message_id = '91000000000000000015';
+  v_result := public.finalize_capper_slip('91000000000000000015');
   if v_result ->> 'team_daily_limit' is distinct from 'true'
      or v_result ->> 'units' is distinct from '3'
      or (select review #>> '{parsed,units}' from public.capper_ballots
-         where message_id = '91000000000000000014') is distinct from '3' then
-    raise exception 'A three-tail overflow review must retain 3u';
+         where message_id = '91000000000000000015') is distinct from '1' then
+    raise exception 'A three-tail overflow review must be capped at 1u';
   end if;
   update public.capper_ballots
   set review = jsonb_set(review, '{parsed,legs}', jsonb_build_array(
     jsonb_build_object('selection', 'First leg', 'odds', -110),
     jsonb_build_object('selection', 'Second leg', 'odds', -110)
   ))
-  where message_id = '91000000000000000015';
-  perform public.respond_capper_slip('91000000000000000015', '43', 'yes_add');
-  v_result := public.finalize_capper_slip('91000000000000000015');
+  where message_id = '91000000000000000016';
+  perform public.respond_capper_slip('91000000000000000016', '43', 'yes_add');
+  v_result := public.finalize_capper_slip('91000000000000000016');
   if v_result ->> 'team_daily_limit' is distinct from 'true'
      or v_result ->> 'units' is distinct from '1' then
     raise exception 'An overflow parlay must retain the earned 1u';
   end if;
 
-  perform public.register_capper_slip('91000000000000000016', jsonb_build_object(
+  perform public.register_capper_slip('91000000000000000019', jsonb_build_object(
     'author_id', v_override_author_id, 'slip_base64', 'c2xpcA==', 'parsed', v_parsed
   ));
   update public.capper_ballots set review_message_id = '91000000000000000116'
-  where message_id = '91000000000000000016';
+  where message_id = '91000000000000000019';
   perform public.open_capper_slip(
-    '91000000000000000016', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
+    '91000000000000000019', v_override_author_id, array[v_override_author_id, '43'], v_parsed,
     v_now + interval '3 hours', v_now + interval '2 hours', 1
   );
-  perform public.respond_capper_slip('91000000000000000016', '43', 'yes_add');
-  v_result := public.finalize_capper_slip('91000000000000000016');
+  perform public.respond_capper_slip('91000000000000000019', '43', 'yes_add');
+  v_result := public.finalize_capper_slip('91000000000000000019');
   if v_result ->> 'outcome' is distinct from 'processing' then
     raise exception 'Another capper must have their own team-play allowance';
   end if;

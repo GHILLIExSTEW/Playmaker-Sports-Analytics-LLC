@@ -128,7 +128,7 @@ begin
     raise exception 'A second prompt replacement claim was allowed';
   end if;
   if public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_prompt_message_id, 1.5
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_prompt_message_id, 0.5
   ) then
     raise exception 'The old unit prompt remained active during replacement';
   end if;
@@ -159,27 +159,27 @@ begin
     raise exception 'Completed prompt replacement remained marked as interrupted';
   end if;
   if public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_prompt_message_id, 1.5
+    v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_prompt_message_id, 0.5
   ) then
     raise exception 'The deleted unit prompt remained active';
   end if;
   if public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_new_prompt_message_id, 1.5
+    v_message_id, '1513186440278704178', '99', v_prompt_channel_id, v_new_prompt_message_id, 0.5
   ) then
     raise exception 'A non-author was allowed to choose Free Play units';
   end if;
   if public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 3.5
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 1.5
   ) then
-    raise exception 'A unit stake over 3u was accepted';
+    raise exception 'A unit stake over 1u was accepted';
   end if;
   if not public.claim_capper_slip_free_play_units(
-    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 1.5
+    v_message_id, '1513186440278704178', '42', v_prompt_channel_id, v_new_prompt_message_id, 0.5
   ) then
     raise exception 'The author could not set units from the saved prompt';
   end if;
   if (select review #>> '{parsed,units}' from public.capper_ballots
-      where capper_ballots.message_id = v_message_id) <> '1.5' then
+      where capper_ballots.message_id = v_message_id) <> '0.5' then
     raise exception 'The author-supplied unit stake was not saved';
   end if;
   if not public.complete_capper_slip_free_play(

@@ -24,7 +24,7 @@ from src.forum_health import CheckedForum
 from src.services.ballot_vote_service import approval_text, tail_rating
 from src.services.image_play_service import ImagePlayService
 from src.services.official_play_service import OfficialPlayService
-from src.services.play_service import PlayService
+from src.services.play_service import MAX_FREE_PLAY_UNITS, PlayService
 from src.services.photo_service import accepted_photo, sanitize_photo
 from src.services.supabase_service import supabase_service
 from src.capper_review_records import ReviewRecords
@@ -50,10 +50,10 @@ SUBMISSION_NOTICE = (
     "Crop/redact names, account IDs, balances and barcodes BEFORE uploading; metadata removal cannot hide visible details.\n\n"
     "Submitting requests OpenAI image/text extraction and private review (inference, not training). "
     "Check extracted details before confirming. Confirmation, voting and discussion stay in your post.\n\n"
-    "Reviews and Free Plays have no daily count limit. Each capper may post two team plays daily (Eastern); "
-    "extra qualifying reviews become Free Plays at their earned units. "
+    "Reviews and Free Plays have no daily count limit. Each capper may post three team plays daily (Eastern); "
+    "extra qualifying reviews become Free Plays capped at 1u. "
     "Unqualified slips become tracked Free Plays, not official picks. Missing units? "
-    "Choose a stake above 0 and up to 3u (parlays never above 1u) using the team-channel button; the card posts automatically. "
+    "Choose a stake above 0 and up to 1u using the team-channel button; the card posts automatically. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
     "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
@@ -174,8 +174,8 @@ class FreePlayUnitsModal(discord.ui.Modal, title="Choose Free Play units"):
         super().__init__(timeout=300)
         self.cog, self.ballot_id, self.prompt_id = cog, ballot_id, prompt_id
         self.units = discord.ui.TextInput(
-            label="Unit stake (above 0, max 3u; parlays 1u)",
-            placeholder="For example: 1 or 1.5",
+            label="Unit stake (above 0, max 1u)",
+            placeholder="For example: 0.5 or 1",
             min_length=1,
             max_length=6,
         )
@@ -388,7 +388,7 @@ class CapperSlipReviews(commands.Cog):
         prompt = await channel.send(
             f"<@{author_id}> the previous unit-selection prompt for this slip is unavailable. "
             "Choose the unit stake for its regular Free Plays card below; it will post automatically after you submit "
-            "(maximum 3u).",
+            "(maximum 1u).",
             allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=author_id)]),
         )
         completed = await asyncio.to_thread(
@@ -1221,7 +1221,7 @@ class CapperSlipReviews(commands.Cog):
             try:
                 posted = await self.post_or_request_personal_free_play(
                     rejected_row, (
-                        "daily team play limit reached; posting at earned units"
+                        "daily team play limit reached; posting as a Free Play capped at 1u"
                         if daily_limit else "review did not qualify for an official pick"
                     ),
                 )
@@ -1351,7 +1351,7 @@ class CapperSlipReviews(commands.Cog):
         prompt = await channel.send(
             f"<@{author_id}> this slip did not qualify as an official pick. "
             "Choose the unit stake for its regular Free Plays card below; it will post automatically after you submit "
-            "(maximum 3u).",
+            "(maximum 1u).",
             view=self.free_play_units_view(int(row["message_id"])),
             allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=author_id)]),
         )
@@ -1369,14 +1369,9 @@ class CapperSlipReviews(commands.Cog):
         try:
             units = float(units_text.strip())
         except ValueError as exc:
-            raise ValueError("Enter a numeric unit stake greater than 0 and no more than 3.") from exc
-        if error := PlayService.validate_capper_units(units):
+            raise ValueError("Enter a numeric unit stake greater than 0 and no more than 1.") from exc
+        if error := PlayService.validate_free_play_units(units):
             raise ValueError(error)
-        if units <= 0:
-            raise ValueError("Units must be greater than zero.")
-        preview = await asyncio.to_thread(self.store.get, message_id)
-        if len((((preview.get("review") or {}).get("parsed") or {}).get("legs")) or []) >= 2 and units > 1:
-            raise ValueError("Parlays can never be staked above 1 unit.")
         if FREE_PLAYS_CHANNEL_ID is None or CONFIRMATION_CHANNEL_ID is None:
             raise RuntimeError("Free Plays or team discussion channel is not configured.")
         if interaction.guild_id != GUILD_ID or interaction.channel_id != CONFIRMATION_CHANNEL_ID:
@@ -1435,7 +1430,7 @@ class CapperSlipReviews(commands.Cog):
             self.publisher.official.create_play_record,
             discord_user_id=str(author.id),
             username=author.display_name,
-            units=parsed["units"],
+            units=min(float(parsed["units"]), MAX_FREE_PLAY_UNITS),
             legs=len(legs),
             odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
             play_text="\n".join(

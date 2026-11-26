@@ -356,7 +356,7 @@ def test_unqualified_or_expired_review_publishes_personal_free_play(monkeypatch,
         assert events == ["archive", "delete", "mark-deleted"]
 
 
-def test_qualified_review_over_team_limit_posts_at_earned_units(monkeypatch):
+def test_qualified_review_over_team_limit_posts_at_capped_units(monkeypatch):
     cog, _, prompt = make_cog(monkeypatch)
     thread = review_thread()
     thread.fetch_message.return_value = prompt
@@ -377,10 +377,25 @@ def test_qualified_review_over_team_limit_posts_at_earned_units(monkeypatch):
     asyncio.run(cog.evaluate(thread, saved_row()))
 
     cog.publisher.publish_approved.assert_not_awaited()
-    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 3
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1
     assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
     assert "daily team limit reached" in prompt.edit.call_args.kwargs["embed"].title
     cog.publish_free_play.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("stake", "published"), [(0.5, 0.5), (1, 1), (2, 1), (3, 1)])
+def test_fallback_free_play_publishes_capped_stake(monkeypatch, stake, published):
+    cog, _, _ = make_cog(monkeypatch)
+    row = saved_row()
+    row.update(state="failed", error="saved review unavailable")
+    row["review"]["parsed"]["units"] = stake
+    cog.store.claim_personal_free_play.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
+
+    asyncio.run(cog.post_or_request_personal_free_play(row, "review failed"))
+
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == published
+    assert row["review"]["parsed"]["units"] == stake
 
 
 def test_technical_failure_posts_personal_free_play_once(monkeypatch):
@@ -613,7 +628,7 @@ def test_unknown_channel_does_not_trigger_prompt_reissue(monkeypatch):
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("units", ["0", "4", "nan"])
+@pytest.mark.parametrize("units", ["0", "1.01", "4", "nan"])
 def test_invalid_modal_units_do_not_claim_publication(monkeypatch, units):
     async def check():
         cog, _, _ = make_cog(monkeypatch)
@@ -633,7 +648,7 @@ def test_author_supplied_units_publish_regular_tracked_free_play(monkeypatch):
         channel.id = module.CONFIRMATION_CHANNEL_ID
         row = saved_row()
         row.update(state="failed", error="saved review unavailable")
-        row["review"]["parsed"]["units"] = 1.5
+        row["review"]["parsed"]["units"] = 0.5
         row["review"]["personal_free_play"] = {
             "state": "sending", "prompt_channel_id": "200", "prompt_message_id": "900",
         }
@@ -642,17 +657,17 @@ def test_author_supplied_units_publish_regular_tracked_free_play(monkeypatch):
         cog.store.complete_personal_free_play.return_value = True
         interaction = SimpleNamespace(guild_id=123, channel_id=200, user=SimpleNamespace(id=42))
 
-        message, play_id = await cog.submit_free_play_units(interaction, 500, 900, "1.5")
+        message, play_id = await cog.submit_free_play_units(interaction, 500, 900, "0.5")
 
         assert message.id == 1000 and play_id == 7
         cog.store.claim_personal_free_play_units.assert_called_once_with(
-            500, module.FREE_PLAYS_CHANNEL_ID, 42, 200, 900, 1.5,
+            500, module.FREE_PLAYS_CHANNEL_ID, 42, 200, 900, 0.5,
         )
-        assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1.5
+        assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 0.5
         assert cog.publisher.official.create_play_record.call_args.kwargs["tracking_scope"] == "capper"
         cog.store.complete_personal_free_play.assert_called_once_with(500, module.FREE_PLAYS_CHANNEL_ID, 1000, 7)
         prompt.edit.assert_awaited_once()
-        assert "selected 1.5u" in prompt.edit.call_args.kwargs["content"]
+        assert "selected 0.5u" in prompt.edit.call_args.kwargs["content"]
     asyncio.run(check())
 
 
@@ -1263,7 +1278,7 @@ def test_submission_notice_explains_acknowledgement_and_seeds_handshake(monkeypa
         assert "NBA 3-leg parlay" in text
         assert "The message/body can be blank when the image is attached." in text
         assert "Reviews and Free Plays have no daily count limit." in text
-        assert "two team plays daily (Eastern)" in text
+        assert "three team plays daily (Eastern)" in text
         assert len(text) <= 2000
         notice.add_reaction.assert_awaited_once_with(module.ACKNOWLEDGEMENT_EMOJI)
         reply.delete.assert_awaited_once()
