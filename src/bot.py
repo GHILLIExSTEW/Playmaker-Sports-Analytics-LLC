@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from io import BytesIO
 
 import discord
@@ -16,6 +16,7 @@ from src.member_onboarding import MemberOnboarding
 from src.member_activity import MemberActivity
 from src.administration import Administration
 from src.data_sync import DataSync
+from src.error_alerts import ErrorAlerts
 from src.model_projections import ModelProjections
 from src.services.model_projection_service import model_projection_service
 from src.play_submission import PlaySubmission
@@ -93,6 +94,7 @@ class OfficialBot(commands.Bot):
                         logger.error("background_shutdown_failed", exc_info=(type(outcome), outcome, outcome.__traceback__))
 
     async def setup_hook(self) -> None:
+        await self.add_cog(ErrorAlerts(self, resolve_channel))
         await self.add_cog(ResearchWorkspace(self, staff_alert=send_staff_alert))
         await self.add_cog(MemberStats())
         await self.add_cog(DataModels())
@@ -458,23 +460,15 @@ async def send_bang_notifications(source: discord.Message | None, play_id: int) 
         raise RuntimeError("BANG notifications are not loaded.")
     await cog.send(source, play_id)
 
-STAFF_ALERT_INTERVAL = timedelta(minutes=10)
-staff_alert_sent: dict[str, datetime] = {}
-
-
 async def send_staff_alert(key: str, text: str) -> None:
-    """Post a throttled heads-up for staff in the confirmation channel; never raises."""
-    now = datetime.now(timezone.utc)
-    last = staff_alert_sent.get(key)
-    if last is not None and now - last < STAFF_ALERT_INTERVAL:
-        return
-    staff_alert_sent[key] = now
+    """Post a staff alert to the daily error thread; never raises."""
     try:
-        channel = await resolve_channel(CONFIRMATION_CHANNEL_ID, "CONFIRMATION_CHANNEL_ID")
-        if channel is not None:
-            await channel.send(f"⚠️ {text}"[:2000], allowed_mentions=discord.AllowedMentions.none())
+        alerts = bot.get_cog("ErrorAlerts")
+        if not isinstance(alerts, ErrorAlerts):
+            raise RuntimeError("The error alert router is not loaded.")
+        await alerts.send(text)
     except Exception:
-        logger.exception("staff_alert_failed key=%s", key)
+        logger.exception("staff_alert_failed key=%s alert=%s", key, text)
 
 
 async def refresh_play_card(guild: discord.Guild | None, play_id: int) -> None:

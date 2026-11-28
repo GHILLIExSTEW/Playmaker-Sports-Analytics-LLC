@@ -52,8 +52,8 @@ SUBMISSION_NOTICE = (
     "Check extracted details before confirming. Confirmation, voting and discussion stay in your post.\n\n"
     "Reviews and Free Plays have no daily count limit. Each capper may post three team plays daily (Eastern); "
     "extra qualifying reviews become Free Plays capped at 1u. "
-    "Unqualified slips become tracked Free Plays, not official picks. Missing units? "
-    "Choose a stake above 0 and up to 1u using the team-channel button; the card posts automatically. "
+    "Unqualified slips become tracked Free Plays, not official picks. "
+    "They post automatically at the supplied stake up to 1u, or 1u if no valid stake was supplied. "
     "At 3 AM Eastern, completed reviews are copied to the private owner/bot records forum before deletion here. "
     "Screenshots and detailed submission archives are removed 365 days after review and bet resolution; "
     "unresolved reviews/bets remain protected. Capper, bet, approval and result summaries remain for statistics. "
@@ -416,12 +416,12 @@ class CapperSlipReviews(commands.Cog):
             logger.exception("capper_submission_notice_failed")
             await self.publisher.staff_alert("capper_submission_notice", f"Submission notice needs attention: {str(exc)[:1500]}")
         try:
-            await self.restore_free_play_units_buttons()
+            await self.publish_waiting_personal_free_plays()
         except Exception as exc:
             logger.exception("free_play_units_button_restore_failed")
             await self.publisher.staff_alert(
                 "free_play_units_button_restore",
-                f"Saved Free Play unit prompts could not be refreshed: {str(exc)[:1000]}",
+                f"Waiting Free Plays could not be processed: {str(exc)[:1000]}",
             )
         if not self.process_reviews.is_running():
             self.process_reviews.start()
@@ -837,24 +837,6 @@ class CapperSlipReviews(commands.Cog):
                 f"slip:{message_id}",
                 f"Slip review {message_id} failed: {reason[:800]}. FREE_PLAYS_CHANNEL_ID is not configured; "
                 "no Free Play was sent.",
-            )
-            return
-        unit_error = self.capper_units_error(row)
-        if unit_error:
-            try:
-                await self.request_personal_free_play_units(row, reason)
-            except Exception as exc:
-                logger.exception("free_play_units_request_failed message=%s", message_id)
-                await self.publisher.staff_alert(
-                    f"slip:{message_id}",
-                    f"Slip review {message_id} failed: {reason[:800]}. {unit_error} "
-                    f"Could not ask the capper for units; no Free Play was sent. Error: {str(exc)[:500]}",
-                )
-                return
-            await self.publisher.staff_alert(
-                f"slip:{message_id}",
-                f"Slip review {message_id} failed: {reason[:800]}. {unit_error} "
-                "The author was asked to choose units in the team channel; the regular Free Play will post after submission.",
             )
             return
         delivery = (row.get("review") or {}).get("personal_free_play")
@@ -1276,25 +1258,9 @@ class CapperSlipReviews(commands.Cog):
     async def post_or_request_personal_free_play(
         self, row: dict, reason: str,
     ) -> tuple[discord.Message, int] | None:
-        if unit_error := self.capper_units_error(row):
-            prompt = await self.request_personal_free_play_units(row, reason)
-            delivery = (row.get("review") or {}).get("personal_free_play") or {}
-            prompt_url = prompt.jump_url if prompt is not None else (
-                f"https://discord.com/channels/{GUILD_ID}/{delivery.get('prompt_channel_id')}/"
-                f"{delivery.get('prompt_message_id')}"
-                if delivery.get("prompt_message_id") else "the saved team-channel prompt"
-            )
-            await self.publisher.staff_alert(
-                f"free_play_units:{row['message_id']}",
-                f"Slip {row['message_id']} needs a valid capper unit stake ({unit_error}); "
-                f"the author was asked to choose it before Free Plays publication: {prompt_url}",
-            )
-            return None
         return await self.send_personal_free_play(row, reason)
 
     async def send_personal_free_play(self, row: dict, reason: str) -> tuple[discord.Message, int]:
-        if unit_error := self.capper_units_error(row):
-            raise ValueError(f"{unit_error} No regular Free Play can be created.")
         if FREE_PLAYS_CHANNEL_ID is None:
             raise RuntimeError("FREE_PLAYS_CHANNEL_ID is not configured.")
         claimed = await asyncio.to_thread(
@@ -1316,6 +1282,53 @@ class CapperSlipReviews(commands.Cog):
         if not completed:
             raise RuntimeError("The Free Play was sent, but its delivery marker was not completed.")
         return message, play_id
+
+    async def publish_waiting_personal_free_plays(self) -> None:
+        rows = await asyncio.to_thread(self.store.awaiting_personal_free_play_units)
+        for item in rows:
+            message_id = int(item["message_id"])
+            try:
+                row = await asyncio.to_thread(self.store.get, message_id)
+                review = row["review"]
+                if FREE_PLAYS_CHANNEL_ID is None:
+                    raise RuntimeError("FREE_PLAYS_CHANNEL_ID is not configured.")
+                claimed = await asyncio.to_thread(
+                    self.store.claim_personal_free_play_units, message_id, FREE_PLAYS_CHANNEL_ID,
+                    int(review["author_id"]), int(item["prompt_channel_id"]), int(item["prompt_message_id"]),
+                    MAX_FREE_PLAY_UNITS,
+                )
+                if not claimed:
+                    raise RuntimeError("The waiting Free Play claim was not available; inspect its current state.")
+                row = await asyncio.to_thread(self.store.get, message_id)
+                message, play_id = await self.publish_claimed_personal_free_play(row)
+                await self.archive_rejected_personal_free_play(row)
+                channel = await self.publisher.resolve_channel(
+                    int(item["prompt_channel_id"]), "saved unit prompt channel", required=True,
+                )
+                try:
+                    prompt = await channel.fetch_message(int(item["prompt_message_id"]))
+                except discord.NotFound:
+                    logger.info("free_play_units_prompt_missing ballot=%s", message_id)
+                else:
+                    await prompt.edit(
+                        content=f"Free Play posted automatically at 1u: {message.jump_url}",
+                        view=None, allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                logger.info("waiting_free_play_published ballot=%s play=%s", message_id, play_id)
+            except Exception as exc:
+                logger.exception("waiting_free_play_publish_failed ballot=%s", message_id)
+                await self.publisher.staff_alert(
+                    f"waiting_free_play:{message_id}",
+                    f"Waiting Free Play for slip {message_id} needs reconciliation. Inspect the ballot "
+                    f"and Free Plays before retrying. Error: {str(exc)[:800]}",
+                )
+        reissues = await asyncio.to_thread(self.store.personal_free_play_units_prompt_reissues)
+        for row in reissues:
+            await self.publisher.staff_alert(
+                f"free_play_units_reissue:{row['message_id']}",
+                f"Unit prompt replacement for slip {row['message_id']} was interrupted. "
+                "Inspect the team channel and saved ballot before retrying the Free Play.",
+            )
 
     async def archive_rejected_personal_free_play(self, row: dict, channel=None) -> None:
         if row.get("state") != "rejected":
@@ -1420,8 +1433,12 @@ class CapperSlipReviews(commands.Cog):
     async def publish_personal_free_play(self, guild: discord.Guild, row: dict) -> tuple[discord.Message, int]:
         review = row["review"]
         parsed = review["parsed"]
-        if unit_error := self.capper_units_error(row):
-            raise ValueError(f"{unit_error} No regular Free Play can be created.")
+        raw_units = parsed.get("units")
+        if PlayService.validate_capper_units(raw_units) or float(raw_units) <= 0:
+            logger.info("free_play_default_units ballot=%s", row["message_id"])
+            units = MAX_FREE_PLAY_UNITS
+        else:
+            units = min(float(raw_units), MAX_FREE_PLAY_UNITS)
         legs = parsed["legs"]
         author = guild.get_member(int(review["author_id"]))
         if author is None:
@@ -1430,7 +1447,7 @@ class CapperSlipReviews(commands.Cog):
             self.publisher.official.create_play_record,
             discord_user_id=str(author.id),
             username=author.display_name,
-            units=min(float(parsed["units"]), MAX_FREE_PLAY_UNITS),
+            units=units,
             legs=len(legs),
             odds=PlayService.combine_american_odds([int(leg["odds"]) for leg in legs]),
             play_text="\n".join(

@@ -398,6 +398,21 @@ def test_fallback_free_play_publishes_capped_stake(monkeypatch, stake, published
     assert row["review"]["parsed"]["units"] == stake
 
 
+def test_fallback_parlay_with_oversized_stake_posts_at_one_unit(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    row = saved_row()
+    row.update(state="failed", error="saved review unavailable")
+    row["review"]["parsed"]["units"] = 2
+    row["review"]["parsed"]["legs"].append({"selection": "Second leg", "odds": -110})
+    cog.store.claim_personal_free_play.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
+
+    asyncio.run(cog.post_or_request_personal_free_play(row, "review failed"))
+
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1
+    cog.store.claim_personal_free_play_units_request.assert_not_called()
+
+
 def test_technical_failure_posts_personal_free_play_once(monkeypatch):
     async def check():
         cog, _, _ = make_cog(monkeypatch)
@@ -444,11 +459,8 @@ def test_claimed_free_play_fallback_is_not_sent_again(monkeypatch):
     asyncio.run(check())
 
 
-@pytest.mark.parametrize(
-    ("units", "error"),
-    [(None, "did not supply a unit stake"), (0, "greater than zero"), (4, "cannot exceed 3 units")],
-)
-def test_technical_failure_without_valid_capper_units_alerts_without_posting(monkeypatch, units, error):
+@pytest.mark.parametrize("units", [None, "", 0, -1, 4, "nan", "invalid"])
+def test_technical_failure_without_valid_capper_units_posts_at_one_unit(monkeypatch, units):
     async def check():
         cog, channel, _ = make_cog(monkeypatch)
         channel.id = module.CONFIRMATION_CHANNEL_ID
@@ -457,18 +469,79 @@ def test_technical_failure_without_valid_capper_units_alerts_without_posting(mon
         row["review"]["parsed"]["units"] = units
         cog.store.get.return_value = row
         cog.store.fail.side_effect = lambda *_: None
-        cog.store.claim_personal_free_play_units_request.return_value = True
-        cog.store.complete_personal_free_play_units_request.return_value = True
+        cog.store.claim_personal_free_play.return_value = True
+        cog.store.complete_personal_free_play.return_value = True
 
         await cog.fail(500, "saved capper review thread is unavailable")
 
-        cog.store.claim_personal_free_play.assert_not_called()
-        cog.store.claim_personal_free_play_units_request.assert_called_once()
-        cog.publisher.official.create_play_record.assert_not_called()
-        cog.publish_free_play.assert_not_awaited()
-        assert error in cog.publisher.staff_alert.call_args.args[1]
-        assert channel.send.call_args.kwargs["view"].children[0].custom_id == "pm:freeplay_units:500"
+        cog.store.claim_personal_free_play.assert_called_once()
+        cog.store.claim_personal_free_play_units_request.assert_not_called()
+        assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1
+        cog.publish_free_play.assert_awaited_once()
+        channel.send.assert_not_awaited()
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "expired"])
+def test_unqualified_review_without_units_posts_without_prompt(monkeypatch, outcome):
+    cog, _, prompt = make_cog(monkeypatch)
+    thread = review_thread()
+    thread.fetch_message.return_value = prompt
+    row = saved_row()
+    row["review"]["parsed"]["units"] = None
+    if outcome == "rejected":
+        row["state"] = "rejected"
+    else:
+        row.update(state="failed", error="Event already started; no late official publication is permitted.")
+    cog.store.get.return_value = row
+    cog.store.claim_personal_free_play.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
+    cog.store.finalize.return_value = {"outcome": outcome, "counts": {"yes": 1}, "roster_size": 5}
+    cog.records = Mock(save=AsyncMock(), store=SimpleNamespace(source_deleted=Mock()))
+
+    asyncio.run(cog.evaluate(thread, saved_row()))
+
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1
+    cog.publish_free_play.assert_awaited_once()
+    cog.store.claim_personal_free_play_units_request.assert_not_called()
+
+
+def test_waiting_unit_prompt_is_published_automatically(monkeypatch):
+    cog, channel, prompt = make_cog(monkeypatch)
+    channel.id = module.CONFIRMATION_CHANNEL_ID
+    row = saved_row()
+    row["state"] = "failed"
+    row["review"]["parsed"]["units"] = 1
+    row["review"]["personal_free_play"] = {
+        "state": "sending", "prompt_channel_id": "200", "prompt_message_id": "900",
+    }
+    cog.store.get.return_value = row
+    cog.store.awaiting_personal_free_play_units.return_value = [{
+        "message_id": "500", "prompt_channel_id": "200", "prompt_message_id": "900",
+    }]
+    cog.store.claim_personal_free_play_units.return_value = True
+    cog.store.complete_personal_free_play.return_value = True
+
+    asyncio.run(cog.publish_waiting_personal_free_plays())
+
+    cog.store.claim_personal_free_play_units.assert_called_once_with(500, 300, 42, 200, 900, 1)
+    cog.publish_free_play.assert_awaited_once()
+    assert cog.publisher.official.create_play_record.call_args.kwargs["units"] == 1
+    assert prompt.edit.call_args.kwargs["view"] is None
+    channel.send.assert_not_awaited()
+    cog.publisher.staff_alert.assert_not_awaited()
+
+
+def test_waiting_unit_claim_refusal_never_publishes(monkeypatch):
+    cog, _, _ = make_cog(monkeypatch)
+    cog.store.awaiting_personal_free_play_units.return_value = [{
+        "message_id": "500", "prompt_channel_id": "200", "prompt_message_id": "900",
+    }]
+
+    asyncio.run(cog.publish_waiting_personal_free_plays())
+
+    cog.publish_free_play.assert_not_awaited()
+    cog.publisher.staff_alert.assert_awaited_once()
 
 
 def test_units_request_button_is_authorized_and_opens_modal(monkeypatch):

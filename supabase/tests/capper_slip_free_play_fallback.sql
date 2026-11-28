@@ -95,9 +95,15 @@ begin
       state = 'rejected',
       decision = '{"outcome":"rejected"}'::jsonb
   where capper_ballots.message_id = v_message_id;
-  if public.claim_capper_slip_free_play(v_message_id, '1513186440278704178', 'missing units') then
-    raise exception 'A Free Play without capper-supplied units was claimed';
+  if not public.claim_capper_slip_free_play(v_message_id, '1513186440278704178', 'missing units') then
+    raise exception 'A Free Play without capper-supplied units could not be claimed';
   end if;
+  if public.claim_capper_slip_free_play(v_message_id, '1513186440278704178', 'duplicate') then
+    raise exception 'A second Free Play claim without units was allowed';
+  end if;
+  -- Exercise the legacy prompt recovery path with a ballot created before automatic claiming.
+  update public.capper_ballots set review = review - 'personal_free_play'
+  where capper_ballots.message_id = v_message_id;
   if not public.claim_capper_slip_units_request(v_message_id, '1513186440278704178', 'missing units') then
     raise exception 'An unqualified ballot without units could not request them';
   end if;
@@ -207,11 +213,8 @@ begin
       state = 'rejected',
       decision = '{"outcome":"rejected"}'::jsonb
   where capper_ballots.message_id = v_message_id;
-  if public.claim_capper_slip_free_play(v_message_id, '1513186440278704178', 'units exceed maximum') then
-    raise exception 'A stake over 3u was posted as a regular Free Play';
-  end if;
-  if not public.claim_capper_slip_units_request(v_message_id, '1513186440278704178', 'units exceed maximum') then
-    raise exception 'An invalid stake could not request author-selected units';
+  if not public.claim_capper_slip_free_play(v_message_id, '1513186440278704178', 'units exceed maximum') then
+    raise exception 'A Free Play with an invalid stake could not be claimed';
   end if;
 
   v_message_id := '91000000000000000006';

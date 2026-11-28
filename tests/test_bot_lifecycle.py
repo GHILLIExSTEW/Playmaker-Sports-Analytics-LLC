@@ -10,6 +10,37 @@ import src.bot as module
 from src.data_sync import DataSync
 
 
+def test_staff_alert_routes_each_alert_to_error_router(monkeypatch):
+    router = Mock(spec=module.ErrorAlerts)
+    router.send = AsyncMock()
+    monkeypatch.setattr(module, "bot", Mock(get_cog=Mock(return_value=router)))
+
+    async def check():
+        await module.send_staff_alert("sports", "Sync failed")
+        await module.send_staff_alert("sports", "Sync failed again")
+
+    asyncio.run(check())
+
+    assert router.send.await_count == 2
+    router.send.assert_any_await("Sync failed")
+    router.send.assert_any_await("Sync failed again")
+
+
+def test_failed_staff_alert_can_retry_without_confirmation_channel_fallback(monkeypatch, caplog):
+    router = Mock(spec=module.ErrorAlerts)
+    router.send = AsyncMock(side_effect=[RuntimeError("unavailable"), None])
+    monkeypatch.setattr(module, "bot", Mock(get_cog=Mock(return_value=router)))
+
+    async def check():
+        await module.send_staff_alert("sports", "Sync failed")
+        await module.send_staff_alert("sports", "Sync failed")
+
+    asyncio.run(check())
+
+    assert router.send.await_count == 2
+    assert "staff_alert_failed key=sports" in caplog.text
+
+
 def test_close_cancels_and_awaits_component_jobs_without_touching_other_bots(monkeypatch):
     async def check():
         bot = module.OfficialBot(command_prefix="!", intents=discord.Intents.none())
