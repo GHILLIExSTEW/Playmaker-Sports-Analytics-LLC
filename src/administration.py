@@ -14,6 +14,10 @@ from src.services.diagnostic_service import DiagnosticService, diagnostic_servic
 from src.services.image_play_service import ImagePlayService, image_play_service
 from src.services.play_service import PlayService
 from src.services.team_api_service import TEAM_SPORTS, TeamApiService, TeamRefreshFailed, team_api_service
+from src.services.capper_tracking_settings_service import (
+    CapperTrackingSettingsService,
+    capper_tracking_settings,
+)
 from src.services.website_capper_service import WEBSITE_OWNER_ROLE_ID
 
 logger = logging.getLogger("official_play_bot")
@@ -195,6 +199,7 @@ class Administration(commands.Cog):
         set_testing: Callable[[bool], None],
         get_tracker_start: Callable[[], date | None],
         set_tracker_start: Callable[[date | None], None],
+        capper_tracking: CapperTrackingSettingsService | None = None,
         api_service: TeamApiService | None = None,
         image_service: ImagePlayService | None = None,
         diagnostics: DiagnosticService | None = None,
@@ -202,6 +207,7 @@ class Administration(commands.Cog):
         self.set_testing = set_testing
         self.get_tracker_start = get_tracker_start
         self.set_tracker_start = set_tracker_start
+        self.capper_tracking = capper_tracking or capper_tracking_settings
         self.api_service = api_service if api_service is not None else team_api_service
         self.image_service = image_service if image_service is not None else image_play_service
         self.diagnostics = diagnostics if diagnostics is not None else diagnostic_service
@@ -352,3 +358,66 @@ class Administration(commands.Cog):
             ephemeral=True,
         )
         logger.info("tracker_start_date_set value=%s user=%s", parsed.isoformat(), interaction.user.id)
+
+    @app_commands.command(name="capper_start", description="Set the first date included in a capper's stats")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        capper="Capper whose stats should use this start date",
+        date_value="YYYY-MM-DD, 'clear' to use the standard tracking era, or 'show'",
+    )
+    async def capper_start_command(
+        self, interaction: discord.Interaction, capper: discord.Member, date_value: str,
+    ) -> None:
+        if not can_change_settings(interaction):
+            await interaction.response.send_message(
+                "Only operators or server managers can change capper tracking start dates.",
+                ephemeral=True,
+            )
+            return
+        requested = date_value.strip().lower()
+        parsed = None
+        if requested not in {"show", "clear", "none", "off"}:
+            try:
+                parsed = date.fromisoformat(requested)
+                if parsed.isoformat() != requested:
+                    raise ValueError
+            except ValueError:
+                await interaction.response.send_message(
+                    "Use the format YYYY-MM-DD, or 'clear' / 'show'.",
+                    ephemeral=True,
+                )
+                return
+        try:
+            if requested == "show":
+                cutoff = await asyncio.to_thread(self.capper_tracking.get_start, capper.id)
+                current = cutoff.isoformat() if cutoff else "standard tracking era"
+                await interaction.response.send_message(
+                    f"{capper.mention}'s stats start date: **{current}**.",
+                    ephemeral=True,
+                )
+                return
+            if parsed is None:
+                await asyncio.to_thread(self.capper_tracking.set_start, capper.id, None)
+                await interaction.response.send_message(
+                    f"{capper.mention}'s custom stats start date was cleared. The standard tracking era applies.",
+                    ephemeral=True,
+                )
+                logger.info("capper_tracking_start_cleared capper=%s user=%s", capper.id, interaction.user.id)
+                return
+            await asyncio.to_thread(self.capper_tracking.set_start, capper.id, parsed)
+        except Exception as exc:
+            logger.exception("capper_tracking_start_failed capper=%s", capper.id)
+            await interaction.response.send_message(
+                f"Could not access or save the capper start date: {exc}",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"{capper.mention}'s custom stats start date is **{parsed.isoformat()}** (Eastern). "
+            "The shared tracking-era cutoff still applies.",
+            ephemeral=True,
+        )
+        logger.info(
+            "capper_tracking_start_set capper=%s value=%s user=%s",
+            capper.id, parsed.isoformat(), interaction.user.id,
+        )

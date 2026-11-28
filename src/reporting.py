@@ -29,6 +29,10 @@ from src.services.play_features_service import (
     settled_time,
     unique_published,
 )
+from src.services.capper_tracking_settings_service import (
+    CapperTrackingSettingsService,
+    capper_tracking_settings,
+)
 from src.services.team_ranking_service import TeamRankingService
 
 logger = logging.getLogger("official_play_bot")
@@ -37,6 +41,26 @@ TRACKER_UPDATE_TIMES = [time(hour=hour, tzinfo=TRACKER_TIMEZONE) for hour in ran
 RECAP_TIME = time(hour=10, tzinfo=TRACKER_TIMEZONE)
 WEEKLY_RECAP_DAYS = {0, 2, 4}
 MEDALS = ["🥇", "🥈", "🥉"]
+
+
+def apply_capper_tracking_starts(
+    plays: list[dict], users: list[dict], starts: dict[str, date],
+) -> list[dict]:
+    user_discord_ids = {
+        str(user["id"]): str(user["discord_user_id"])
+        for user in users
+        if user.get("id") is not None and user.get("discord_user_id") is not None
+    }
+    filtered = []
+    for play in plays:
+        discord_user_id = str(
+            play.get("_capper_discord_user_id")
+            or user_discord_ids.get(str(play.get("user_id")), "")
+        )
+        cutoff = starts.get(discord_user_id)
+        if cutoff is None or parse_tracker_time(play["created_at"], TRACKER_TIMEZONE.key).date() >= cutoff:
+            filtered.append(play)
+    return filtered
 
 
 class TrackerMessageStore:
@@ -312,6 +336,7 @@ class Reporting(commands.Cog):
         can_manage_plays: Callable[[discord.abc.User, discord.Guild | None], bool],
         staff_alert: Callable[[str, str], Awaitable[None]],
         tracker_message_store: TrackerMessageStore | None = None,
+        capper_tracking: CapperTrackingSettingsService | None = None,
     ) -> None:
         self.bot = bot
         self.features = features
@@ -324,6 +349,7 @@ class Reporting(commands.Cog):
         self.can_manage_plays = can_manage_plays
         self.staff_alert = staff_alert
         self.tracker_message_store = tracker_message_store or TrackerMessageStore()
+        self.capper_tracking = capper_tracking or capper_tracking_settings
         self._tracker_update_lock = asyncio.Lock()
 
     def tracker_rows(self) -> tuple[list[dict], list[dict]]:
@@ -605,6 +631,8 @@ class Reporting(commands.Cog):
             plays = operator_plays(
                 individual_capper_plays(unique_published(plays), users), users, operators,
             )
+            starts = await asyncio.to_thread(self.capper_tracking.get_all_starts)
+            plays = apply_capper_tracking_starts(plays, users, starts)
             if capper:
                 author_ids = {str(user["id"]) for user in users if str(user.get("discord_user_id")) == str(capper.id)}
                 plays = [

@@ -156,6 +156,13 @@ def settled_time(play: dict) -> datetime:
     return parsed.astimezone(EASTERN)
 
 
+def created_time(play: dict) -> datetime:
+    parsed = parse_iso_datetime(str(play["created_at"]))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(EASTERN)
+
+
 def record_summary(plays: list[dict]) -> dict:
     counts = {result: 0 for result in SETTLED_RESULTS}
     net = risked = 0.0
@@ -383,7 +390,10 @@ class PlayFeaturesService:
         rows = self.db.select("users", "id", {"discord_user_id": str(discord_user_id)}).data
         return int(rows[0]["id"]) if rows else None
 
-    def personal_stats(self, discord_user_id: int, now: datetime | None = None, *, is_capper: bool = False) -> dict:
+    def personal_stats(
+        self, discord_user_id: int, now: datetime | None = None, *,
+        is_capper: bool = False, capper_start_date: date | None = None,
+    ) -> dict:
         now = (now or datetime.now(EASTERN)).astimezone(EASTERN)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         plays, users, sports = self.personal_history(discord_user_id)
@@ -396,6 +406,11 @@ class PlayFeaturesService:
             if str(play.get("_capper_discord_user_id")) == str(discord_user_id)
             or user_id is not None and str(play["user_id"]) == user_id
         ]
+        if capper_start_date is not None:
+            mine = [
+                play for play in mine
+                if created_time(play).date() >= capper_start_date
+            ]
         if mine:
             by_sport = {}
             for play in mine:

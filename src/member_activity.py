@@ -13,6 +13,10 @@ from src.config import FREE_CHAT_CHANNEL_ID, HIGHROLLER_ROLE_ID, ROOKIE_ROLE_ID,
 from src.reporting import MEDALS, TRACKER_TIMEZONE, clip_lines, record_line
 from src.services.membership_service import MembershipService
 from src.services.play_features_service import PlayFeaturesService, vault_leaderboard
+from src.services.capper_tracking_settings_service import (
+    CapperTrackingSettingsService,
+    capper_tracking_settings,
+)
 
 logger = logging.getLogger("official_play_bot")
 SHARE_CHANNELS = {
@@ -118,11 +122,13 @@ class MemberActivity(commands.Cog):
         features: PlayFeaturesService,
         resolve_channel: Callable[..., Awaitable],
         membership: MembershipService | None = None,
+        capper_tracking: CapperTrackingSettingsService | None = None,
     ) -> None:
         self.bot = bot
         self.features = features
         self.resolve_channel = resolve_channel
         self.membership = membership if membership is not None else MembershipService()
+        self.capper_tracking = capper_tracking or capper_tracking_settings
         self.share_webhooks: dict[int, discord.Webhook] = {}
 
     async def has_vip_chat_access(self, member) -> bool:
@@ -172,8 +178,14 @@ class MemberActivity(commands.Cog):
     async def mystats_command(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            is_capper = member_is_capper(interaction.user)
+            tracking_start = (
+                await asyncio.to_thread(self.capper_tracking.get_start, interaction.user.id)
+                if is_capper else None
+            )
             stats = await asyncio.to_thread(
-                self.features.personal_stats, interaction.user.id, is_capper=member_is_capper(interaction.user),
+                self.features.personal_stats, interaction.user.id,
+                is_capper=is_capper, capper_start_date=tracking_start,
             )
             embed = build_mystats_embed(interaction.user, stats)
         except Exception as exc:

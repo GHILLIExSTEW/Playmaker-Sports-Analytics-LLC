@@ -2,7 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -11,7 +11,7 @@ import pytest
 
 import src.bot as bot_module
 import src.reporting as reporting_module
-from src.reporting import Reporting, TRACKER_TIMEZONE, build_recap_embed
+from src.reporting import Reporting, TRACKER_TIMEZONE, apply_capper_tracking_starts, build_recap_embed
 from src.services.team_ranking_service import TeamRankingService
 
 
@@ -41,6 +41,7 @@ def make_reporting():
         resolve_channel=AsyncMock(return_value=SimpleNamespace(send=AsyncMock())),
         can_manage_plays=Mock(return_value=True),
         staff_alert=AsyncMock(),
+        capper_tracking=Mock(get_all_starts=Mock(return_value={})),
     )
     cog.refresh_tracker = AsyncMock(return_value=2)
     cog.tracker_rows = Mock(return_value=([], []))
@@ -116,6 +117,25 @@ def test_reporting_registers_commands_before_bot_sync(monkeypatch):
             await bot.close()
 
     asyncio.run(check())
+
+
+def test_capper_tracking_start_filters_only_the_target_cappers_plays_by_eastern_created_date():
+    plays = [
+        {"user_id": "1", "created_at": "2026-10-10T03:30:00+00:00"},
+        {"user_id": "1", "created_at": "2026-10-10T04:00:00+00:00"},
+        {"user_id": "2", "created_at": "2026-10-01T12:00:00+00:00"},
+        {"user_id": "1", "_capper_discord_user_id": "200", "created_at": "2026-10-01T12:00:00+00:00"},
+    ]
+    users = [
+        {"id": 1, "discord_user_id": "100"},
+        {"id": 2, "discord_user_id": "200"},
+    ]
+
+    filtered = apply_capper_tracking_starts(
+        plays, users, {"100": date(2026, 10, 10)},
+    )
+
+    assert filtered == [plays[1], plays[2], plays[3]]
 
 
 def test_reporting_jobs_start_once_on_reconnect_and_cancel_on_unload():
@@ -277,16 +297,16 @@ def test_capper_tracker_is_requested_only_and_excludes_official_and_test_plays(m
     monkeypatch.setattr(reporting_module, "GUILD_ID", 123)
     cog = make_reporting()
     plays = [
-        {"id": 1, "user_id": 1, "tracking_scope": "capper"},
-        {"id": 2, "user_id": 1, "tracking_scope": "official"},
-        {"id": 3, "user_id": 1, "tracking_scope": "test"},
+        {"id": 1, "user_id": 1, "tracking_scope": "capper", "message_id": "p1"},
+        {"id": 2, "user_id": 1, "tracking_scope": "official", "message_id": "p2"},
+        {"id": 3, "user_id": 1, "tracking_scope": "test", "message_id": "p3"},
     ]
     users = [{"id": 1, "discord_user_id": "42"}]
     cog.tracker_rows.return_value = (plays, users)
     request = interaction()
     request.guild = SimpleNamespace(id=123)
     asyncio.run(cog.capper_tracker_command.callback(cog, request))
-    cog.tracker_embed.assert_called_once_with([plays[0]], users)
+    cog.tracker_embed.assert_called_once_with([{**plays[0], "_capper_record": True}], users)
     assert request.followup.send.call_args.kwargs["ephemeral"] is True
     assert request.followup.send.call_args.kwargs["embed"].title == "Individual Capper | Unit Summary"
     cog.resolve_channel.assert_not_awaited()

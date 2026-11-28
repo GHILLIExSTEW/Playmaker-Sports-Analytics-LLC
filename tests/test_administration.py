@@ -10,9 +10,10 @@ import src.bot as bot_module
 from src.administration import Administration, TestFlowView as ImageTestFlowView
 
 
-def administration():
+def administration(capper_tracking=None):
     return Administration(
         set_testing=Mock(), get_tracker_start=Mock(return_value=None), set_tracker_start=Mock(),
+        capper_tracking=capper_tracking,
         api_service=Mock(), image_service=Mock(), diagnostics=Mock(),
     )
 
@@ -155,6 +156,38 @@ def test_tracker_mutation_denied_without_permission(monkeypatch):
     cog = administration()
     asyncio.run(cog.tracker_start_command.callback(cog, interaction(), "clear"))
     cog.set_tracker_start.assert_not_called()
+
+
+def test_capper_start_sets_shows_and_clears_date():
+    settings = Mock()
+    settings.get_start.return_value = date(2026, 10, 20)
+    cog = administration(settings)
+    capper = SimpleNamespace(id=456, mention="<@456>")
+
+    asyncio.run(cog.capper_start_command.callback(cog, interaction(manager=True), capper, "2026-10-21"))
+    settings.set_start.assert_called_once_with(456, date(2026, 10, 21))
+
+    show_request = interaction(manager=True)
+    asyncio.run(cog.capper_start_command.callback(cog, show_request, capper, "show"))
+    settings.get_start.assert_called_once_with(456)
+    assert "2026-10-20" in show_request.response.send_message.call_args.args[0]
+
+    asyncio.run(cog.capper_start_command.callback(cog, interaction(manager=True), capper, "clear"))
+    settings.set_start.assert_called_with(456, None)
+
+
+def test_capper_start_rejects_bad_date_and_unauthorized_mutation():
+    settings = Mock()
+    cog = administration(settings)
+    capper = SimpleNamespace(id=456, mention="<@456>")
+
+    bad_request = interaction(manager=True)
+    asyncio.run(cog.capper_start_command.callback(cog, bad_request, capper, "2026-02-30"))
+    settings.set_start.assert_not_called()
+    assert "YYYY-MM-DD" in bad_request.response.send_message.call_args.args[0]
+
+    asyncio.run(cog.capper_start_command.callback(cog, interaction(), capper, "2026-10-21"))
+    settings.set_start.assert_not_called()
 
 
 def test_admin_state_callbacks_update_existing_bot_routing_and_cutoff(monkeypatch):

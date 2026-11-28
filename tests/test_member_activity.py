@@ -24,6 +24,7 @@ def activity():
         features=Mock(personal_stats=Mock(return_value=empty_stats()), vault_bets=Mock(return_value=[])),
         resolve_channel=AsyncMock(),
         membership=Mock(has_paid_access=Mock(return_value=False)),
+        capper_tracking=Mock(get_start=Mock(return_value=None)),
     )
 
 
@@ -44,7 +45,7 @@ def test_mystats_retains_private_response_and_share_destination(vip, tier):
     cog.membership.has_paid_access.return_value = vip
     interaction = request()
     asyncio.run(cog.mystats_command.callback(cog, interaction))
-    cog.features.personal_stats.assert_called_once_with(42, is_capper=False)
+    cog.features.personal_stats.assert_called_once_with(42, is_capper=False, capper_start_date=None)
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
     kwargs = interaction.followup.send.call_args.kwargs
     assert kwargs["ephemeral"] is True
@@ -58,7 +59,10 @@ def test_mystats_caps_tail_records_for_capper_role_holders():
     interaction = request()
     interaction.user.roles = [SimpleNamespace(id=activity_module.TRACKER_ROLE_ID)]
     asyncio.run(cog.mystats_command.callback(cog, interaction))
-    cog.features.personal_stats.assert_called_once_with(42, is_capper=True)
+    cog.features.personal_stats.assert_called_once_with(
+        42, is_capper=True, capper_start_date=None,
+    )
+    cog.capper_tracking.get_start.assert_called_once_with(42)
 
 
 def test_mystats_membership_failure_keeps_stats_private_without_public_share(caplog):

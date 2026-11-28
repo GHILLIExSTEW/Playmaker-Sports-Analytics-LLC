@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -216,10 +216,28 @@ def test_personal_stats_credits_a_supporting_voter_at_a_1u_capped_stake():
     assert author["capper"]["all_time"]["net"] == -2
 
 
+def test_personal_capper_stats_obey_their_created_date_cutoff():
+    before = play(1, 1, "loss", settled="2026-10-10T12:00:00+00:00")
+    before["created_at"] = "2026-10-09T23:30:00+00:00"
+    after = play(2, 1, "win", settled="2026-10-10T12:00:00+00:00")
+    after["created_at"] = "2026-10-10T04:00:00+00:00"
+    service = PlayFeaturesService(database=Mock())
+    service.personal_history = Mock(return_value=(
+        [before, after], [{"id": 1, "discord_user_id": "111"}], {},
+    ))
+    service.vault_bets = Mock(return_value=[])
+    service.db.select.return_value = SimpleNamespace(data=[])
+
+    stats = service.personal_stats(111, capper_start_date=date(2026, 10, 10))
+
+    assert stats["capper"]["all_time"]["wins"] == 1
+    assert stats["capper"]["all_time"]["losses"] == 0
+
+
 def test_capper_tail_stats_cap_each_tailed_play_at_1u():
     tailed = play(9, 1, "win", units=3, odds=100)
     service = PlayFeaturesService(database=Mock())
-    service.history = Mock(return_value=([tailed], [], {}))
+    service.personal_history = Mock(return_value=([tailed], [], {}))
     service.vault_bets = Mock(return_value=[])
     service.db.select.return_value = SimpleNamespace(data=[{"play_id": 9}])
 

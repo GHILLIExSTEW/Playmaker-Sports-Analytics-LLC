@@ -19,6 +19,7 @@ from src.data_sync import DataSync
 from src.error_alerts import ErrorAlerts
 from src.model_projections import ModelProjections
 from src.services.model_projection_service import model_projection_service
+from src.services.capper_tracking_settings_service import capper_tracking_settings
 from src.play_submission import PlaySubmission
 from src.capper_slip_reviews import CapperSlipReviews
 from src.bang_notifications import BangNotifications
@@ -101,11 +102,13 @@ class OfficialBot(commands.Bot):
         await self.add_cog(MemberOnboarding())
         await self.add_cog(MemberActivity(
             self, features=play_features_service, resolve_channel=resolve_channel,
+            capper_tracking=capper_tracking_settings,
         ))
         await self.add_cog(Administration(
             set_testing=set_testing_enabled,
             get_tracker_start=get_tracker_start_date,
             set_tracker_start=set_tracker_start_date,
+            capper_tracking=capper_tracking_settings,
         ))
         await self.add_cog(WebsiteSync(
             self,
@@ -150,6 +153,7 @@ class OfficialBot(commands.Bot):
             resolve_channel=resolve_channel,
             can_manage_plays=can_manage_plays,
             staff_alert=send_staff_alert,
+            capper_tracking=capper_tracking_settings,
         ))
         await self.add_cog(PlaySettlement(
             self, official=official_play_service, features=play_features_service,
